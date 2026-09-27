@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from typing import Optional, Sequence
 
 
@@ -194,6 +195,140 @@ def grab_full():
         return ImageGrab.grab(all_screens=True)
     except Exception:
         return None
+
+
+# --------------------------------------------------------------------------
+# 只抓指定区域（GDI BitBlt）
+# Pillow 的 ImageGrab.grab(bbox=...) 实际上是"先抓整个屏幕，再在 Python 里裁剪"：
+# 2560×1440 的屏每帧要多拷 14MB。这里直接 BitBlt 目标矩形，省掉这部分固定开销。
+# 为了安全，调用方会先拿它和 Pillow 的结果比对一次，不一致就自动回退。
+# --------------------------------------------------------------------------
+def _grab_region_gdi(box):
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        from PIL import Image
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        # 64 位下必须声明原型，否则句柄会被截断成 32 位（经典坑）
+        user32.GetDC.restype = wintypes.HDC
+        user32.GetDC.argtypes = [wintypes.HWND]
+        user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+        gdi32.CreateCompatibleDC.restype = wintypes.HDC
+        gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+        gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+        gdi32.SelectObject.restype = wintypes.HGDIOBJ
+        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi32.BitBlt.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                 ctypes.c_int, wintypes.HDC, ctypes.c_int, ctypes.c_int,
+                                 wintypes.DWORD]
+        gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT,
+                                    wintypes.UINT, ctypes.c_void_p, ctypes.c_void_p,
+                                    wintypes.UINT]
+        gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi32.DeleteDC.argtypes = [wintypes.HDC]
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD),
+            ]
+
+        left, top, right, bottom = (int(v) for v in box)
+        width, height = right - left, bottom - top
+        if width <= 0 or height <= 0:
+            return None
+
+        screen_dc = user32.GetDC(None)
+        if not screen_dc:
+            return None
+        mem_dc = gdi32.CreateCompatibleDC(screen_dc)
+        bitmap = gdi32.CreateCompatibleBitmap(screen_dc, width, height)
+        if not mem_dc or not bitmap:
+            return None
+        old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+        try:
+            gdi32.BitBlt(mem_dc, 0, 0, width, height, screen_dc, left, top, 0x00CC0020)
+            info = BITMAPINFOHEADER()
+            info.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            info.biWidth = width
+            info.biHeight = -height          # 负数 = 自上而下，省得再翻转
+            info.biPlanes = 1
+            info.biBitCount = 32
+            info.biCompression = 0           # BI_RGB
+            buffer = ctypes.create_string_buffer(width * height * 4)
+            if not gdi32.GetDIBits(mem_dc, bitmap, 0, height, buffer,
+                                   ctypes.byref(info), 0):
+                return None
+            image = Image.frombuffer("RGB", (width, height), buffer,
+                                     "raw", "BGRX", 0, 1)
+            return image.copy()              # 拷一份，缓冲区释放后仍可用
+        finally:
+            try:
+                gdi32.SelectObject(mem_dc, old_bitmap)
+            except Exception:
+                pass
+            try:
+                gdi32.DeleteObject(bitmap)
+            except Exception:
+                pass
+            try:
+                gdi32.DeleteDC(mem_dc)
+            except Exception:
+                pass
+            try:
+                user32.ReleaseDC(None, screen_dc)
+            except Exception:
+                pass
+    except Exception:
+        return None
+
+
+def grab_fast(region, tk_screen: Optional[Sequence[int]] = None):
+    """快速抓图：只抓指定区域（失败返回 None，调用方回退到 grab()）。"""
+    if not region:
+        return None
+    try:
+        box = convert_region(region, tk_screen)
+    except Exception:
+        return None
+    image = _grab_region_gdi(box)
+    if image is None:
+        return None
+    expected = (box[2] - box[0], box[3] - box[1])
+    if image.size != expected:
+        return None
+    return image
+
+
+def images_similar(first, second, size: int = 64, tolerance: float = 12.0) -> bool:
+    """判断两张截图是否"看起来一样"（缩成 64×64 灰度后比较平均灰度差）。
+
+    用来校验"快速抓图"的结果是否和系统截图一致；不一致就回退，不会带着错图跑。
+    """
+    if first is None or second is None:
+        return False
+    try:
+        from PIL import Image
+
+        resample = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
+        left = first.convert("L").resize((size, size), resample).tobytes()
+        right = second.convert("L").resize((size, size), resample).tobytes()
+        if len(left) != len(right) or not left:
+            return False
+        total = sum(abs(a - b) for a, b in zip(left, right))
+        return (total / float(len(left))) <= tolerance
+    except Exception:
+        return False
 
 
 def signature(image) -> str:

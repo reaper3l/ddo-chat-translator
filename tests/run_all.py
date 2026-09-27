@@ -25,6 +25,7 @@ MODULES = [
     "test_style",
     "test_capture",
     "test_frame",
+    "test_capture_similar",
 ]
 
 

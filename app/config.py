@@ -22,6 +22,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "idle_backoff": True,        # 一直没新消息时自动放慢截图频率
     "band_ocr": True,            # 只识别"变化的那几行"，其余沿用上一帧结果
     "low_priority": True,        # 把程序优先级降到低于正常，让游戏优先用 CPU
+    # 截图方式：auto=优先"只抓区域"的快速方式（会自动校验，不一致就回退）；pillow=始终用 Pillow
+    "capture_backend": "auto",
     # 系统消息（组队/死亡/断线/战利品）默认也显示 —— 和游戏聊天框保持一致
     "show_system": True,
     "show_notes": False,         # 是否在译文后面标注"记忆命中/缓存"等来源

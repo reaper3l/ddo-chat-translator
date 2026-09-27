@@ -84,6 +84,7 @@ class Pipeline:
         self._idle_frames = 0
         self._last_lines: List[Tuple[float, float, str]] = []
         self._frames_since_full = 0
+        self._fast_capture_ok = None      # None=还没校验, True/False=已确定
         self._history: Deque[Tuple[str, str]] = deque(maxlen=12)
         self._system_events: Deque[str] = deque(maxlen=6)
         self._cache: Dict[str, str] = {}
@@ -198,6 +199,39 @@ class Pipeline:
             return True
         return self.ocr.load(self._ocr_threads())
 
+    def _capture_frame(self, region):
+        """抓一帧画面。
+
+        默认走"只抓指定区域"的快速方式（GDI BitBlt），比 Pillow 先抓整屏再裁剪省得多。
+        第一次会拿它和系统截图比对：不一致就永久回退 —— 宁可不快，也不能抓到错图。
+        """
+        if str(self.config.get("capture_backend", "auto")).lower() == "pillow" \
+                or self._fast_capture_ok is False:
+            return capture.grab(region, self.screen_size)
+
+        fast = capture.grab_fast(region, self.screen_size)
+        if fast is None:
+            self._fast_capture_ok = False
+            self._emit_status("快速截图不可用，已回退到系统截图", "warn")
+            return capture.grab(region, self.screen_size)
+
+        if self._fast_capture_ok is None:
+            # 校验快速截图是否和系统截图一致。比对多次：游戏画面在动的时候
+            # 单次比对可能刚好不巧（两边差一点），所以只要有一次对得上就采用。
+            for _attempt in range(3):
+                reference = capture.grab(region, self.screen_size)
+                if reference is None:
+                    continue
+                if capture.images_similar(fast, reference):
+                    self._fast_capture_ok = True
+                    self._emit_status("已启用快速截图（只抓区域，更省 CPU）", "info")
+                    return fast
+                fast = capture.grab_fast(region, self.screen_size) or fast
+            self._fast_capture_ok = False
+            self._emit_status("快速截图与系统截图不一致，已回退到系统截图", "warn")
+            return capture.grab(region, self.screen_size) or fast
+        return fast
+
     def _current_interval(self, idle: bool = False) -> float:
         """两次截图之间的间隔；一直没新内容时自动放慢（省 CPU）。"""
         try:
@@ -232,7 +266,7 @@ class Pipeline:
             return None, []
         if self.screen_size:
             capture.measure_scale(self.screen_size, force=True)
-        image = capture.grab(region, self.screen_size)
+        image = self._capture_frame(region)
         if image is None:
             return None, []
         self._ensure_ocr()
@@ -294,7 +328,7 @@ class Pipeline:
                 self._stop.wait(0.5)
                 continue
 
-            image = capture.grab(region, self.screen_size)
+            image = self._capture_frame(region)
             if image is None:
                 self._notice("截图失败（区域是否在屏幕内？）", "error", min_gap=10.0)
                 self._stop.wait(1.0)
@@ -341,7 +375,7 @@ class Pipeline:
                 y_start, _y_end = frame.band_pixels((first_row, last_row), image.height)
                 offset = self._pixel_offset_to_tk(region, image, y_start)
                 band_region = [region[0], int(region[1] + offset), region[2], region[3]]
-                band = capture.grab(band_region, self.screen_size)
+                band = self._capture_frame(band_region)
                 if band is not None and band.height > 4:
                     band_image = band
                 else:
