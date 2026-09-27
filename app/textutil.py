@@ -143,6 +143,21 @@ def strip_leftover_marks(text: str) -> str:
     return LEFT_MARK_RE.sub("", text or "")
 
 
+def similar(first: str, second: str) -> float:
+    """字符集合相似度（0~1）。用于识别"OCR 每次略有差异的同一行"。
+
+    比 difflib 快得多，对"同一行被识别成七八种写法"这种情况足够有效。
+    """
+    a, b = (first or "").strip(), (second or "").strip()
+    if not a or not b:
+        return 0.0
+    set_a, set_b = set(a), set(b)
+    union = set_a | set_b
+    if not union:
+        return 0.0
+    return len(set_a & set_b) / float(len(union))
+
+
 # --------------------------------------------------------------------------
 # 译文润色：让中文读起来像中文（模型被占位符切开后常留下多余空格）
 # --------------------------------------------------------------------------

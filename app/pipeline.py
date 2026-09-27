@@ -52,6 +52,11 @@ class DisplayItem:
 
 
 class Pipeline:
+    # 系统消息里的"噪音"关键词：战利品/宝箱信息面板会被反复 OCR 成
+    # 各种错字版本，全部拦掉（这些对理解聊天没有帮助）。
+    NOISE_KEYWORDS = ("宝箱信息", "被拾取次数", "掠夺重置", "任务名称", "战利品信息",
+                      "宝箱已禁用", "从宝箱中取出")
+
     def __init__(self, config: dict, memory, glossary: Glossary,
                  ui_queue: "queue.Queue[dict]") -> None:
         self.config = config
@@ -85,6 +90,7 @@ class Pipeline:
         self._last_lines: List[Tuple[float, float, str]] = []
         self._frames_since_full = 0
         self._fast_capture_ok = None      # None=还没校验, True/False=已确定
+        self._recent_system: List[str] = []    # 最近几条系统消息，用于模糊去重
         self._history: Deque[Tuple[str, str]] = deque(maxlen=12)
         self._system_events: Deque[str] = deque(maxlen=6)
         self._cache: Dict[str, str] = {}
@@ -433,18 +439,28 @@ class Pipeline:
         for event in events:
             if event.kind == KIND_SYSTEM:
                 if event.text:
+                    text = event.text
+                    # 1) 战利品/宝箱信息面板：对理解聊天没帮助，而且会被反复识别成错字版本
+                    if any(keyword in text for keyword in self.NOISE_KEYWORDS):
+                        continue
+                    # 2) 模糊去重：OCR 每次都会有细微差异，精确指纹拦不住
+                    if any(textutil.similar(text, old) >= 0.82
+                           for old in self._recent_system):
+                        continue
+                    self._recent_system.insert(0, text)
+                    del self._recent_system[12:]
                     # 系统消息也要去重：它会在聊天框里停留很久，每帧重新识别一遍
                     # 就会把同一条消息无限重复地打到屏幕上（也会灌满上下文）。
-                    system_fp = textutil.fingerprint(event.text)
+                    system_fp = textutil.fingerprint(text)
                     if system_fp and self.deduper.check(system_fp):
                         continue
                     # 系统消息照样进上下文（翻译时有用），但是否显示听用户的
-                    self._system_events_queue.put(event.text)
+                    self._system_events_queue.put(text)
                     if self.config.get("show_system", True) and (
                             not event.channel or enabled.get(event.channel, True)):
                         self._ready_queue.put(DisplayItem(
                             seq=self._next_seq(), kind="system", channel=event.channel,
-                            speaker="", source=event.text, translated=event.text,
+                            speaker="", source=text, translated=text,
                             note="", prefix=event.prefix_text))
                 continue
 
