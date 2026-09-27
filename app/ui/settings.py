@@ -282,7 +282,13 @@ class SettingsDialog:
                               ("1.25", "1.25"), ("1.5", "1.5"), ("2", "2（最准最费 CPU）")])
         self._check(tab, "merge_same_row", "同一行被切开时自动拼接")
         self._spin(tab, "dedup_ttl_seconds", "同一句多久内不重复翻译（秒）", 0, 600)
-        self._check(tab, "show_system", "把系统消息也显示到主界面", False)
+        self._check(tab, "show_system", "把系统消息也显示到主界面")
+        self._check(tab, "system_whitelist",
+                    "系统消息只显示有用的（组队/生死/队长提示；战利品、宝箱、任务面板不显示）",
+                    True)
+        theme.label(tab, "关掉上面这项会把战利品/宝箱面板也显示出来（OCR 错字版本会刷屏）。",
+                    muted=True, anchor="w", wraplength=520, justify="left").pack(
+            fill="x", pady=(0, 4))
 
         theme.label(tab, "要翻译的频道：", muted=True, anchor="w").pack(
             fill="x", pady=(8, 0))

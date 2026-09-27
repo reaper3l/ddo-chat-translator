@@ -47,6 +47,21 @@ class FailEngine(BaseEngine):
         return TranslationResult(text, False, self.name, "接口挂了")
 
 
+class RefusalEngine(BaseEngine):
+    """模拟"模型插话"：不给译文，回一句"（看不清楚）"。"""
+
+    name = "refusal"
+
+    def available(self) -> bool:
+        return True
+
+    def describe(self) -> str:
+        return "refusal"
+
+    def translate(self, text, messages=None, timeout: float = 20.0):
+        return TranslationResult("（看不清楚）", True, self.name)
+
+
 def make_pipeline(engine) -> Pipeline:
     config = dict(DEFAULT_CONFIG)
     config["engine"] = "offline"
@@ -239,3 +254,106 @@ def test_system_message_is_not_repeated_every_frame():
     assert list(pipeline._system_events).count("你加入了Longdd的队伍") == 0  # 还没进上下文
     pipeline._drain_system_events()
     assert list(pipeline._system_events).count("你加入了Longdd的队伍") == 1
+
+
+# ---------------------------------------------------------------------------
+# 用户实测日志回归（2026-09-27）：战利品/宝箱面板必须一条都不显示，
+# 而 OCR 读花的玩家发言必须照样显示 —— 这两条要同时成立才算修好。
+# ---------------------------------------------------------------------------
+
+REAL_FRAME = [
+    "(聊天): 战利品:vyarzar舟",
+    "(聊天): (战利品:你舟iron1Key从玉相取正",
+    "(聊天): 或利品:你付7金以玉相取山。 (战利品):你将JeweledKey从宝箱取出",
+    "(聊天): (战利丽:imoke舟ialesorvaior从玉相中取正",
+    "(利a):im1oke付+4vatcn PhysicalResistance5从宝箱",
+    "(聊天): 玉相你寸里且时间:0天19时2刀5/秒",
+    "(聊天): 废",
+    "(小队):[小 (小队):[小 1.tor 2.投入3.同人4.偷人5",
+    "(小队):[小队]Sinoke: 鬼火,你进红门",
+    "(小队):[小队] Guihuo: 走神了",
+    "(小队):小队]V Warzar:petforthedoor?",
+    "(小队)):[小队]Sinoke:yes",
+    "(小队):[小队]S Sinoke:guihuo,nikyireddoor (小队)",
+    "(小队):[小队]Sinoke: 位面监狱位面监狱",
+]
+
+
+def _drain_jobs(pipeline):
+    jobs = []
+    while not pipeline._jobs.empty():
+        jobs.append(pipeline._jobs.get_nowait())
+    return jobs
+
+
+def _drain_display(pipeline):
+    pipeline._collect_ready()
+    pipeline._flush_display(force=True)
+    items = []
+    while not pipeline.ui_queue.empty():
+        event = pipeline.ui_queue.get_nowait()
+        if event.get("type") == "message":
+            items.append(event["item"])
+    return items
+
+
+def test_real_frame_shows_only_real_chat():
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(REAL_FRAME)
+
+    chats = _drain_jobs(pipeline)
+    assert [(job.speaker, job.source) for job in chats] == [
+        ("Sinoke", "鬼火,你进红门"),
+        ("Guihuo", "走神了"),
+        ("Warzar", "petforthedoor?"),
+        ("Sinoke", "yes"),
+        ("Sinoke", "guihuo,nikyireddoor"),
+        ("Sinoke", "位面监狱"),
+    ]
+    # 系统消息里只允许"对话有用"的提示，面板文字一条都不能漏出来
+    for item in _drain_display(pipeline):
+        assert not Pipeline.is_panel_text(item.source), item.source
+    # 过滤器确实在干活（过滤掉的行数 > 0）
+    assert pipeline.stats["filtered"] > 0
+
+
+def test_loot_line_never_reaches_the_translator():
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(["(聊天): 战利品:你舟5unsone从玉相取正"])
+    assert _drain_jobs(pipeline) == []
+    while not pipeline._jobs.empty():
+        pipeline._jobs.get_nowait()
+    pipeline._collect_ready()
+    pipeline._flush_display(force=True)
+    assert pipeline.ui_queue.empty()
+    assert engine.calls == 0
+
+
+def test_panel_text_glued_to_chat_body_is_dropped():
+    """面板文字被 OCR 粘到玩家正文后面时不显示（翻出来一定是垃圾）。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines(["(小队):[小队]Sinoke: 宝箱掠夺重置时间:1周"])
+    assert _drain_jobs(pipeline) == []
+
+
+def test_system_whitelist_can_be_turned_off():
+    pipeline = make_pipeline(EchoEngine())
+    pipeline.config["channels_enabled"] = {"小队": True, "战利品": True}
+    pipeline.config["system_whitelist"] = False
+    # 关掉白名单后，非面板的系统提示会显示出来
+    pipeline._handle_lines(["(小队): 某某某开始了新手教程"])
+    shown = _drain_display(pipeline)
+    assert [item.kind for item in shown] == ["system"]
+    # 但面板特征文字永远不显示
+    pipeline._handle_lines(["(战利品): Dorqeth 将 Jeweled Key 从 宝箱 中取出。"])
+    assert _drain_display(pipeline) == []
+
+
+def test_model_refusal_falls_back_to_original():
+    pipeline = make_pipeline(RefusalEngine())
+    pipeline._handle_lines(["(小队):[小队] Sckham: onuina gribble"])
+    item = pipeline._process(pipeline._jobs.get_nowait())
+    assert item.translated == "onuina gribble"
+    assert "原文" in item.note

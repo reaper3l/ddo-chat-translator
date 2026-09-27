@@ -55,3 +55,24 @@ def test_polish_converts_ascii_punctuation_after_chinese():
 def test_polish_keeps_emoticon_and_latin_spacing():
     assert textutil.polish_translation("祝好运 :)") == "祝好运 :)"
     assert textutil.polish_translation("我从没死过 haha") == "我从没死过 haha"
+
+
+def test_collapse_doubled():
+    assert textutil.collapse_doubled("位面监狱位面监狱") == "位面监狱"
+    # 正常口语不能被误伤
+    assert textutil.collapse_doubled("ok ok") == "ok ok"
+    assert textutil.collapse_doubled("hahaha") == "hahaha"
+    assert textutil.collapse_doubled("hi") == "hi"
+
+
+def test_is_refusal_only_catches_model_meta_talk():
+    # 模型插话（说明看不懂），要当"没翻出来"处理
+    assert textutil.is_refusal("（看不清楚）")
+    assert textutil.is_refusal("[看不清]")
+    assert textutil.is_refusal("抱歉，我无法翻译这句。")
+    assert textutil.is_refusal("原文是乱码，无法识别")
+    # 正常译文不能被误判
+    assert not textutil.is_refusal("看不清楚")          # can't see clearly 的正常译法
+    assert not textutil.is_refusal("抱歉")              # sorry 的正常译法
+    assert not textutil.is_refusal("我不懂")
+    assert not textutil.is_refusal("马上到")

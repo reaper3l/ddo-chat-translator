@@ -284,6 +284,23 @@ class MainWindow:
             self.frameless.set_enabled(enabled)
         except Exception:
             pass
+        self._apply_frameless_buttons(enabled)
+
+    def _apply_frameless_buttons(self, enabled: bool) -> None:
+        """无边框时才需要"最小化"按钮和右下角缩放角（标准窗口有系统标题栏）。
+
+        注意这段以前被写在 _apply_transparency 里、用的还是没定义过的变量，
+        被 `except Exception: pass` 吞掉之后，最小化按钮就再也没出现过。
+        """
+        try:
+            if enabled:
+                self.min_button.pack(side="right", before=self.quit_button)
+                self.grip.pack(side="right", before=self.stats_label)
+            else:
+                self.min_button.pack_forget()
+                self.grip.pack_forget()
+        except Exception as exc:               # 不能让界面悄悄失灵
+            self.set_status("切换无边框按钮失败：%s" % exc, "warn")
 
     # ---------------------------------------------------- 工具条折叠 / 透明
     def _toggle_toolbar(self) -> None:
@@ -414,15 +431,6 @@ class MainWindow:
         else:
             self._set_surface_color(None)
         self._configure_tags()
-        try:
-            if enabled:
-                self.min_button.pack(side="right", before=self.quit_button)
-                self.grip.pack(side="right", before=self.stats_label)
-            else:
-                self.min_button.pack_forget()
-                self.grip.pack_forget()
-        except Exception:
-            pass
 
     def _minimize(self) -> None:
         self.frameless.minimize()
@@ -502,9 +510,10 @@ class MainWindow:
         except Exception:
             pass
         self.stats_var.set(
-            "待译 %d · 缓存 %d · 调用 %d · 记忆 %d · 跳过 %d · 错误 %d"
+            "待译 %d · 缓存 %d · 调用 %d · 记忆 %d · 过滤 %d · 跳过 %d · 错误 %d"
             % (status["pending"], status["cache_size"], stats.get("api_calls", 0),
-               stats.get("memory_hits", 0), stats.get("skipped_frame", 0),
+               stats.get("memory_hits", 0), stats.get("filtered", 0),
+               stats.get("skipped_frame", 0),
                stats.get("api_errors", 0))
         )
 

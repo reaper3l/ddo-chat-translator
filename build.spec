@@ -8,7 +8,7 @@
 """
 from PyInstaller.utils.hooks import collect_all
 
-APP_NAME = "DDO翻译助手_v3.0.5"      # 改版本时改这里（EXE/COLLECT/瘦身都用它）
+APP_NAME = "DDO翻译助手_v3.0.6"      # 改版本时改这里（EXE/COLLECT/瘦身都用它）
 
 datas = []
 binaries = []
@@ -33,7 +33,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # pandas/matplotlib/scipy 没有被用到，但是会被间接分析进来（pandas 一个就 13MB，
+    # 而发行版附件上限 100MB，必须让位给 OCR 模型）。
+    excludes=["pandas", "matplotlib", "scipy", "IPython", "notebook", "pytest"],
     noarchive=False,
     optimize=0,
 )
@@ -71,8 +73,14 @@ coll = COLLECT(
 
 # --------------------------------------------------------------------------
 # 瘦身：删掉运行时用不到的文件。
-# 我们只做图像识别（不走视频），模型也只用 PP-OCRv5，所以下面这些可以安全移除；
+# 我们只做图像识别（不走视频），所以下面这些可以安全移除；
 # 这么做能把发布包压到 Gitee 发行版 100MB 的附件限制以内。
+#
+# 【不要删 OCR 模型】rapidocr_onnxruntime 里必须留着
+#   models/ch_PP-OCRv4_det_infer.onnx 和 models/ch_PP-OCRv4_rec_infer.onnx
+# —— 1.4.x 的默认 config.yaml 就是指向这两个文件的（代码里写的 "PP-OCRv5_xxx"
+# 只是快速识别库不认识的名字，会回落到默认模型）。删掉它们，exe 启动后 OCR
+# 直接加载失败，程序等于废掉（v3.0.0~v3.0.5 的 exe 就是这么打坏的）。
 # --------------------------------------------------------------------------
 import glob
 import os
@@ -81,7 +89,6 @@ import shutil
 _internal = os.path.join(DISTPATH, APP_NAME, "_internal")
 _patterns = [
     "cv2/*ffmpeg*.dll",                    # OpenCV 的视频解码库（约 29MB）
-    "rapidocr_onnxruntime/models/ch_PP-OCRv4_*.onnx",   # 只用 v5，v4 用不到（约 15MB）
     "PIL/_avif*.pyd",                      # AVIF 图片支持（用不到，约 7MB）
 ]
 for _pattern in _patterns:
@@ -100,3 +107,4 @@ for _name in ("lxml",):                    # rapidocr 不会 import lxml
             print("removed dir:", _name)
         except Exception as _exc:
             print("skip dir:", _name, _exc)
+

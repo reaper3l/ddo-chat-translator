@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import queue
+import re
 import threading
 import time
 from collections import deque
@@ -52,15 +53,43 @@ class DisplayItem:
 
 
 class Pipeline:
-    # 系统消息里的"噪音"关键词：战利品/宝箱信息面板会被反复 OCR 成
-    # 各种错字版本，全部拦掉（这些对理解聊天没有帮助）。
-    NOISE_KEYWORDS = ("宝箱信息", "被拾取次数", "掠夺重置", "任务名称", "战利品信息",
-                      "宝箱已禁用", "从宝箱中取出")
-    # 只显示"对聊天有用"的系统提示；其余（战利品、宝箱、拾取、各种 OCR 错字版本）
-    # 一律不显示。用白名单是因为 OCR 会把"宝箱"认成"玉相"、"战利品"认成"或利品"，
-    # 黑名单永远列不全。
-    NOTICE_KEYWORDS = ("你加入了", "已加入", "加入了你的队伍", "离开了你的队伍",
-                       "已死亡", "已断线", "现在是队长", "移出了小队", "复活")
+    # ------------------------------------------------------------------
+    # 显示过滤：只显示"可信的聊天行 / 有用的系统提示"。
+    #
+    # 为什么不是关键词黑名单：战利品/宝箱/任务面板会被 OCR 反复读成各种错字
+    # （"宝箱"→"玉相"、"战利品"→"或利品/战利丽"），黑名单永远列不全；而
+    # 关键词白名单又会把 OCR 读花的玩家发言一起丢掉（实测丢过
+    # "(小队):[小队]S Sinoke:guihuo,nikyireddoor"）。所以这里按"结构"判断：
+    #
+    #   玩家发言 = 频道前缀 + 拉丁名字 + 冒号 + 正文（名字允许前面有几个杂质字符）
+    #   系统提示 = 频道前缀 + 中文提示，且提示里含"组队/生死/队长"这类关键动作
+    #   其它      = 面板文字、OCR 碎片，一律不显示
+    # ------------------------------------------------------------------
+
+    # 面板特征：命中任意一条就认为不是聊天内容（数字+天/时、拾取次数、重置时间…）。
+    # 这些是"面板长得什么样"，所以对错字有免疫力 —— 不管 OCR 把"宝箱"读成什么，
+    # "被拾取次数 / 重置时间 / X天Y时" 这些结构都还在。
+    PANEL_PATTERNS = (
+        re.compile(r"\d+\s*天\s*\d+\s*[时小]"),            # 0天19时2分57秒
+        re.compile(r"拾取次数"),
+        re.compile(r"重置时间"),
+        re.compile(r"掠夺"),
+        re.compile(r"任务名称"),
+        re.compile(r"宝箱信息"),
+        re.compile(r"战利品信息"),
+        re.compile(r"宝箱已禁用"),
+        re.compile(r"从.{0,4}(宝|玉|箱|相).{0,4}取"),      # 从宝箱中取出 / 从玉相取正
+    )
+
+    # 有用的系统提示里的"动作词"。命中任意一个就显示，其余系统消息不显示。
+    # 只用短词（不用整句）是为了容忍 OCR 错字："已断线"读成"己断线"也能命中"断线"。
+    # 注意：**不要**放"队伍/小队/公会"这种频道名 —— 面板碎片里也常有这几个字，
+    # 放了会把 "(小队):[小 1.tor 2.投入…" 这种乱码当成有用提示显示出来。
+    NOTICE_TOKENS = (
+        "加入", "已加入", "离开", "退出", "移出", "踢出", "解散", "邀请",
+        "死亡", "阵亡", "断线", "掉线", "离线", "上线", "复活", "重连",
+        "队长", "锁定", "难度", "组队",
+    )
 
     def __init__(self, config: dict, memory, glossary: Glossary,
                  ui_queue: "queue.Queue[dict]") -> None:
@@ -113,6 +142,7 @@ class Pipeline:
             "api_calls": 0,
             "api_errors": 0,
             "dropped": 0,
+            "filtered": 0,
             "untranslated": 0,
             "skipped_frame": 0,
             "band_ocr": 0,
@@ -446,13 +476,15 @@ class Pipeline:
                 if event.text:
                     text = event.text
                     # 1) 战利品/宝箱信息面板：对理解聊天没帮助，而且会被反复识别成错字版本
-                    if any(keyword in text for keyword in self.NOISE_KEYWORDS):
+                    if self.is_panel_text(text):
+                        self._count_filtered()
                         continue
-                    # 1.5) 白名单：只显示与队伍/生死/队长相关的提示，其余系统消息不显示
-                    if self.config.get("system_whitelist", True) and not any(
-                            keyword in text for keyword in self.NOTICE_KEYWORDS):
+                    # 2) 只显示与队伍/生死/队长相关的提示，其余系统消息不显示
+                    if self.config.get("system_whitelist", True) and \
+                            not self.is_useful_notice(text):
+                        self._count_filtered()
                         continue
-                    # 2) 模糊去重：OCR 每次都会有细微差异，精确指纹拦不住
+                    # 3) 模糊去重：OCR 每次都会有细微差异，精确指纹拦不住
                     if any(textutil.similar(text, old) >= 0.82
                            for old in self._recent_system):
                         continue
@@ -476,6 +508,11 @@ class Pipeline:
             if event.kind != KIND_CHAT:
                 continue
             if event.channel and not enabled.get(event.channel, True):
+                continue
+            # OCR 有时把面板文字粘在玩家正文后面（"堡垒? 错误):你的队友已经…"），
+            # 这种正文翻出来一定是垃圾，直接不显示。
+            if self.is_panel_text(event.text):
+                self._count_filtered()
                 continue
             fingerprint = textutil.fingerprint(event.text)
             if not fingerprint or self.deduper.check(fingerprint):
@@ -503,6 +540,20 @@ class Pipeline:
     def _next_seq(self) -> int:
         self._seq += 1
         return self._seq
+
+    def _count_filtered(self) -> None:
+        """记一笔"被过滤掉的噪音行"，界面上能看到过滤器确实在干活。"""
+        self.stats["filtered"] = self.stats.get("filtered", 0) + 1
+
+    @classmethod
+    def is_panel_text(cls, text: str) -> bool:
+        """是不是战利品/宝箱/任务面板那种"面板文字"（对理解聊天没帮助）。"""
+        return any(pattern.search(text or "") for pattern in cls.PANEL_PATTERNS)
+
+    @classmethod
+    def is_useful_notice(cls, text: str) -> bool:
+        """是不是值得显示的系统提示（组队/生死/队长…）。"""
+        return any(token in (text or "") for token in cls.NOTICE_TOKENS)
 
     def _upscale_for(self, image) -> float:
         """聊天框很小时先把图放大再 OCR，识别质量更好。"""
@@ -655,6 +706,11 @@ class Pipeline:
         translated = self._post_process(translated)
         if not translated:
             translated = source
+        # 模型偶尔把"看不清/无法识别"这种说明当成译文回给我们（原文太乱时）。
+        # 这时显示原文更有用 —— 至少知道玩家屏幕上打的是什么。
+        if not error and textutil.is_refusal(translated) and textutil.has_latin(source):
+            translated = source
+            note = "模型没看懂（显示原文）"
 
         if not error:
             self._history.append((source, translated))

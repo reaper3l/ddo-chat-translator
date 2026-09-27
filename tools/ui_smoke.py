@@ -76,6 +76,27 @@ def assert_inside(window, widget, label: str) -> None:
                              % (label, top, bottom, win_top, win_bottom))
 
 
+def is_shown(widget) -> bool:
+    """这个控件会不会显示出来。
+
+    注意不能只看 winfo_ismapped()：本自检为了避免在你屏幕上闪窗口，一开始就
+    `root.withdraw()` 了，主窗口没映射时**它里面所有子控件都报告未映射**，
+    于是"折叠/展开工具条"这类检查会假失败。所以这里改用"有没有被 pack 管理"
+    来判断（pack_forget 之后 winfo_manager() 会变成空串）。
+    """
+    if widget is None:
+        return False
+    try:
+        if widget.winfo_ismapped():
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(widget.winfo_manager())
+    except Exception:
+        return False
+
+
 def is_dark_color(color) -> bool:
     """判断一个颜色是否偏暗（比精确匹配十六进制更耐 Tk 的规范化）。"""
     text = str(color).strip().lstrip("#")
@@ -233,9 +254,9 @@ def main() -> int:
         app.root.update_idletasks()
         if not app.root.overrideredirect():
             raise AssertionError("开了无边框，但 overrideredirect 没有生效")
-        if not app.min_button.winfo_ismapped():
+        if not is_shown(app.min_button):
             raise AssertionError("无边框模式下看不到最小化按钮")
-        if not app.grip.winfo_ismapped():
+        if not is_shown(app.grip):
             raise AssertionError("无边框模式下看不到右下角缩放角")
         texts = [str(child.cget("text")) for child in app.actions.winfo_children()]
         if not texts:
@@ -249,7 +270,7 @@ def main() -> int:
         app.root.update_idletasks()
         if app.root.overrideredirect():
             raise AssertionError("关掉无边框没生效")
-        if app.min_button.winfo_ismapped():
+        if is_shown(app.min_button):
             raise AssertionError("关掉无边框后最小化按钮还在")
 
         app.config["frameless"] = original_frameless
@@ -267,7 +288,7 @@ def main() -> int:
         app.config["toolbar_collapsed"] = True
         app.apply_settings()
         app.root.update_idletasks()
-        if app.actions.winfo_ismapped():
+        if is_shown(app.actions):
             raise AssertionError("折叠后工具按钮还在显示")
         if "▸" not in str(app.brand.cget("text")):
             raise AssertionError("折叠后标题没有提示可展开：%r" % app.brand.cget("text"))
@@ -275,18 +296,18 @@ def main() -> int:
         app.config["toolbar_collapsed"] = False
         app.apply_settings()
         app.root.update_idletasks()
-        if not app.actions.winfo_ismapped():
+        if not is_shown(app.actions):
             raise AssertionError("展开后工具按钮没有显示")
 
         app.config["show_status_bar"] = False
         app.apply_settings()
         app.root.update_idletasks()
-        if app.status_bar.winfo_ismapped():
+        if is_shown(app.status_bar):
             raise AssertionError("关掉状态栏后它还在")
         app.config["show_status_bar"] = True
         app.apply_settings()
         app.root.update_idletasks()
-        if not app.status_bar.winfo_ismapped():
+        if not is_shown(app.status_bar):
             raise AssertionError("打开状态栏没生效")
 
         app.config["transparency_mode"] = "alpha"
@@ -323,11 +344,11 @@ def main() -> int:
         app.config["toolbar_collapsed"] = True
         app.apply_settings()
         app.root.update_idletasks()
-        if app.actions.winfo_ismapped():
+        if is_shown(app.actions):
             raise AssertionError("折叠状态下工具按钮不该显示")
         app._toggle_toolbar()            # 模拟点标题/▸
         app.root.update_idletasks()
-        if not app.actions.winfo_ismapped():
+        if not is_shown(app.actions):
             raise AssertionError("点了标题，工具条没有展开")
         if "▸" in str(app.brand.cget("text")):
             raise AssertionError("展开后标题还带着折叠箭头：%r" % app.brand.cget("text"))
@@ -343,7 +364,7 @@ def main() -> int:
                                  % monitor_width)
         app._toggle_toolbar()
         app.root.update_idletasks()
-        if app.actions.winfo_ismapped():
+        if is_shown(app.actions):
             raise AssertionError("再点一次没有收起")
         if "▸" not in str(app.brand.cget("text")):
             raise AssertionError("折叠后标题没有提示可以展开：%r" % app.brand.cget("text"))

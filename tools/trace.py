@@ -5,8 +5,9 @@
     python tools\trace.py --text "(小队): [小队] Dorqeth: elite right?"
     python tools\trace.py --no-translate      # 只看到解析结果，不调用接口
 
-打印内容依次是：引擎状态 → OCR 原始行 → 解析结果（聊天/系统）→ 送翻译的文本 →
-接口返回 → 最终在窗口里显示的样子。把输出整段发出来就能定位问题。
+打印内容依次是：引擎状态 → OCR 原始行 → 解析结果（聊天/系统）→ **这条会不会显示**
+（战利品/宝箱面板、无用的系统消息会被标成"不显示"）→ 送翻译的文本 → 接口返回 →
+最终在窗口里显示的样子。把输出整段发出来就能定位问题。
 """
 from __future__ import annotations
 
@@ -23,6 +24,27 @@ from app.config import load_config            # noqa: E402
 from app.glossary import build_glossary       # noqa: E402
 from app.pipeline import Job, Pipeline        # noqa: E402
 from app.store import MemoryStore             # noqa: E402
+
+
+def _verdict(event, config) -> str:
+    """这条内容最终会不会显示在主界面（和 Pipeline._handle_lines 同一套判断）。"""
+    enabled = config.get("channels_enabled", {}) or {}
+    if Pipeline.is_panel_text(event.text):
+        return "不显示（战利品/宝箱/任务面板特征）"
+    if event.kind == "chat":
+        if event.channel and not enabled.get(event.channel, True):
+            return "不显示（频道已关闭）"
+        return "★显示（玩家发言，会被翻译）"
+    if event.kind == "system":
+        if config.get("system_whitelist", True) and \
+                not Pipeline.is_useful_notice(event.text):
+            return "不显示（不是「组队/生死/队长」这类有用提示）"
+        if not config.get("show_system", True):
+            return "不显示（设置里关了「系统消息」）"
+        if event.channel and not enabled.get(event.channel, True):
+            return "不显示（频道已关闭）"
+        return "★显示（系统提示，原样显示不翻译）"
+    return "不显示（OCR 碎片）"
 
 
 def main() -> int:
@@ -94,13 +116,17 @@ def main() -> int:
         print("   %-7s 频道=%-4s 玩家=%-12s 前缀=%r" %
               (event.kind, event.channel or "-", event.speaker or "-", event.prefix_text))
         print("           正文=%r" % event.text)
+        print("           窗口显示：%s" % _verdict(event, config))
 
     print("\n---- 逐条翻译流程 ----")
     for event in events:
         if not event.is_chat:
-            print("   [系统/其它] %s%s"
-                  % (event.prefix_text, event.text))
+            print("   [系统/其它] %s%s   → %s"
+                  % (event.prefix_text, event.text, _verdict(event, config)))
             continue
+        print("\n   [玩家] %s%s   → %s"
+              % (event.prefix_text, event.speaker and (event.speaker + ": ") or "",
+                 _verdict(event, config)))
         job = Job(seq=1, channel=event.channel, speaker=event.speaker,
                   source=event.text, prefix=event.prefix_text)
         protected, urls = textutil.protect_urls(event.text)

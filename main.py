@@ -139,6 +139,11 @@ def main() -> int:
     _setup_logging()
     logging.info("程序启动，DPI 模式：%s", dpi_state)
     print("DPI 模式：%s" % dpi_state)
+    # 自检开关：不打开主界面，把每一环走一遍并写报告（打包版出问题时用它定位）
+    if "--self-check" in sys.argv or "--selfcheck" in sys.argv:
+        from app.selfcheck import run as run_selfcheck
+
+        return run_selfcheck()
     try:
         from app.ui.main_window import MainWindow
 

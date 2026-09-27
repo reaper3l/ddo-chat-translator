@@ -173,3 +173,61 @@ def test_ocr_channel_variants():
                           ("水队", "小队"), ("公会", "公会"), ("常规", "常规")):
         events = ChatParser().parse(["( %s )Alice: this is a test line" % raw])
         assert events[0].channel == expected, (raw, events[0].channel)
+
+
+# ---------------------------------------------------------------------------
+# 下面这些样例全部来自用户实测贴回来的日志（2026-09-27 那一批）。
+# 它们曾经被"系统消息关键词白名单"整条丢掉，玩家真正的发言就这么没了。
+# ---------------------------------------------------------------------------
+
+def test_icon_noise_before_name_still_counts_as_chat():
+    """OCR 把等级/图标读进名字前面（"S Sinoke:" / "9 Guihuo:" / "V Warzar:"）。"""
+    cases = [
+        ("(小队):[小队]S Sinoke:guihuo,nikyireddoor (小队)", "Sinoke",
+         "guihuo,nikyireddoor"),
+        ("(小队):[小队]9 Guihuo:in", "Guihuo", "in"),
+        ("(小队):小队]V Warzar:petforthedoor?", "Warzar", "petforthedoor?"),
+    ]
+    for line, speaker, body in cases:
+        chats = _chats([line])
+        assert len(chats) == 1, line
+        assert chats[0].speaker == speaker, line
+        assert chats[0].text == body, (line, chats[0].text)
+
+
+def test_doubled_close_bracket_is_repaired():
+    """OCR 把右括号读成 "))"，不修的话整条玩家发言会变成系统消息被丢掉。"""
+    chats = _chats(["(小队)):[小队]Sinoke:yes"])
+    assert len(chats) == 1
+    assert chats[0].speaker == "Sinoke"
+    assert chats[0].text == "yes"
+
+
+def test_missing_open_bracket_on_second_prefix_splits_line():
+    """第二条消息丢了左括号（"(…错误):你的队友…"），要拆出来别粘在正文后面。"""
+    events = ChatParser().parse(
+        ["(小队):[小队]Guihuo: 堡垒? 错误):你的队友已经锁定了冒险难度"])
+    chats = [event for event in events if event.is_chat]
+    systems = [event for event in events if event.kind == "system"]
+    assert [event.text for event in chats] == ["堡垒?"]
+    assert len(systems) == 1
+    assert "锁定了冒险难度" in systems[0].text
+
+
+def test_body_repeated_twice_is_collapsed():
+    """OCR 会把同一条贴两遍（实测 "位面监狱位面监狱"）。"""
+    chats = _chats(["(小队):[小队]Sinoke: 位面监狱位面监狱"])
+    assert chats[0].text == "位面监狱"
+
+
+def test_loot_panel_lines_are_not_player_chat():
+    """战利品/宝箱面板（含各种 OCR 错字版本）不能被当成玩家发言。"""
+    lines = [
+        "(聊天): 战利品:vyarzar舟",
+        "(聊天): (战利品:你舟iron1Key从玉相取正",
+        "(聊天): (战利丽:imoke舟ialesorvaior从玉相中取正",
+        "(利a):im1oke付+4vatcn PhysicalResistance5从宝箱",
+        "(聊天): 玉相你寸里且时间:0天19时2刀5/秒",
+    ]
+    for line in lines:
+        assert _chats([line]) == [], line

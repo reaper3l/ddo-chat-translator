@@ -35,6 +35,10 @@ PREFIX_RE = re.compile(
     r"\s*[\(（\[\【]\s*([^\)）\]\】【\n]{1,12}?)\s*[\)）\]\】]\s*[:：;；]?\s*")
 CLOSERS = "）)]】]"
 
+# OCR 把右括号读重："(小队)):" → "(小队):"。只在冒号紧跟在重复括号后面时才折叠，
+# 免得动到正文里的 "))"（比如玩家打的"哈哈))"）。
+_DOUBLE_CLOSER_RE = re.compile(r"([\)）\]\】])\1+\s*(?=[:：;；])")
+
 # OCR 认错的频道名 → 标准频道名（精确匹配优先）
 DEFAULT_ALIASES: Dict[str, str] = {
     "小队": "小队", "小": "小队", "小际": "小队", "小阴": "小队", "小对": "小队",
@@ -73,6 +77,27 @@ SPEAKER_RE = re.compile(
     r"^(?P<name>[A-Za-z][A-Za-z0-9_'\-\.]{0,23})\s*[:：]\s*(?P<body>.*)$"
 )
 
+# "宽容版"找名字：OCR 经常把等级/图标一起读进来（实测见过
+# "(小队):[小队]S Sinoke:..."、"[小队]9 Guihuo:..."、"[小队]V Warzar:..."）。
+# 锚定写法会因为前面那个杂质字符直接失败，整条玩家发言就被当成系统消息丢掉了，
+# 所以名字允许不在行首 —— 但前面的杂质必须极短（见 _is_junk_prefix）。
+SPEAKER_LOOSE_RE = re.compile(
+    r"(?<![A-Za-z0-9_'\-\.])(?P<name>[A-Za-z][A-Za-z0-9_'\-\.]{1,23})\s*[:：]\s*(?P<body>.*)$"
+)
+NAME_JUNK_LIMIT = 3          # 名字前面最多容忍几个字符的 OCR 杂质
+NAME_SEARCH_WINDOW = 40      # 只在行首这一段里找名字，避免正文里的 "xx:" 被误认
+
+# 杂质里如果混进了"频道标签"（OCR 把 (小队) 多读了一遍，或丢左括号后标签粘在正文上），
+# 先把标签整块去掉再判断，否则 "小队]V " 会因为这 5 个字符被判成正文。
+JUNK_LABEL_WORDS = ("小队", "队伍", "团队", "公会", "工会", "常规", "普通", "公共",
+                    "世界", "综合", "悄悄话", "密语", "战利品")
+JUNK_TRIM_CHARS = " \t]）)】>:：<([【"
+
+# "新消息开头"的第二种形态：OCR 把左括号丢了，只剩 "错误):" 这样的尾巴。
+# 只认"标签里有中文"或"能归一化成频道名"的情况，避免把正文里的英文括号当分隔。
+LABEL_SPLIT_RE = re.compile(
+    r"(?P<label>[^()\[\]（）【】\s]{1,8}?)(?P<close>[\)）\]\】>》])\s*[:：]\s*")
+
 # 链接行：游戏里常把长链接换到下一行。它长得像 "https:" + "//..."，
 # 会被 SPEAKER_RE 误当成"玩家名: 正文"，所以要先识别出来当续行处理。
 URL_START_RE = re.compile(r"^\s*(?:https?|ftp|www)\b", re.IGNORECASE)
@@ -110,7 +135,16 @@ def normalize_channel(raw: str, aliases: Optional[Dict[str, str]] = None) -> str
 
 
 def _repair_missing_open_bracket(line: str) -> str:
-    """OCR 丢掉左括号的情况：'小队）Sckham: hi' → '(小队）Sckham: hi'。"""
+    """修补行首的前缀：OCR 会丢左括号，也会把右括号读重。
+
+    实测样例：
+        小队）Sckham: hi          → (小队）Sckham: hi      （丢了左括号）
+        (小队)):[小队]Sinoke:yes  → (小队):[小队]Sinoke:yes（多了一个右括号，
+                                    不修的话整条玩家发言会被当成系统消息丢掉）
+    """
+    head = line[:14]
+    fixed = _DOUBLE_CLOSER_RE.sub(r"\1", head) + line[14:]
+    line = fixed
     head = line[:6]
     if line[:1] not in "(（[【":
         index = min((head.index(ch) for ch in CLOSERS if ch in head), default=-1)
@@ -133,10 +167,40 @@ def _leading_prefixes(line: str) -> List[Tuple[int, int, str]]:
 
 
 def _split_speaker(rest: str) -> Tuple[str, str]:
+    """从"频道前缀之后"的文本里找玩家名，返回 (名字, 正文)。找不到返回 ("", 原文)。"""
     match = SPEAKER_RE.match(rest)
-    if not match:
-        return "", rest
-    return match.group("name"), match.group("body")
+    if match:
+        return match.group("name"), match.group("body")
+    loose = SPEAKER_LOOSE_RE.search(rest[:NAME_SEARCH_WINDOW])
+    if loose and _is_junk_prefix(rest[:loose.start()]):
+        return loose.group("name"), loose.group("body")
+    return "", rest
+
+
+def _clean_chat_body(body: str) -> str:
+    """清理玩家正文（去掉首尾垃圾，并还原"整条被贴两遍"的重复）。"""
+    return textutil.collapse_doubled(textutil.clean_body(body))
+
+
+def _is_junk_prefix(junk: str) -> bool:
+    """名字前面那点东西是不是 OCR 杂质（等级数字、图标被认成字母等）。
+
+    允许："" / "9 " / "V " / "(< " / "8 "。
+    不允许："hello "（那是正文，不是杂质），所以限制长度和字母数量。
+
+    注意只数**拉丁**字母：中文的 isalpha() 也是 True，"小队]" 这种
+    "频道标签被 OCR 多读了一遍"的杂质必须仍算杂质。
+    """
+    junk = (junk or "").strip()
+    for word in JUNK_LABEL_WORDS:
+        junk = junk.replace(word, "")
+    junk = junk.strip(JUNK_TRIM_CHARS)
+    if not junk:
+        return True
+    if len(junk) > NAME_JUNK_LIMIT:
+        return False
+    latin = sum(1 for ch in junk if "a" <= ch.lower() <= "z")
+    return latin <= 1
 
 
 def _strip_leading_prefixes(line: str, aliases) -> str:
@@ -149,35 +213,33 @@ def split_merged_line(line: str, aliases=None) -> List[str]:
 
     真实遇到的样子（文字全挤在一起、空格丢失）：
         (小队):[小队]Dorqeth:gi(小队):[小队]Dorqeth:eliteright?
+        (小队):[小队]Guihuo:堡垒? 错误):你的队友已经锁定了冒险难度
     判断依据：行内出现新的"频道前缀"，且它前面那一段已经是一条完整消息
     （含 `玩家名:` 或者是有中文的系统消息），就认为是下一条消息的开头。
     """
-    matches = list(PREFIX_RE.finditer(line))
-    if len(matches) < 2:
+    cuts = []
+    for match in PREFIX_RE.finditer(line):
+        if normalize_channel(match.group(1), aliases):
+            cuts.append(match.start())
+    for match in LABEL_SPLIT_RE.finditer(line):
+        label = match.group("label")
+        if textutil.has_cjk(label) or normalize_channel(label, aliases):
+            cuts.append(match.start())
+    if not cuts:
         return [line]
 
     segments: List[str] = []
     cursor = 0
-    scan_from = 0
-    while True:
-        cut = None
-        for match in PREFIX_RE.finditer(line, scan_from):
-            if match.start() <= cursor:
-                continue
-            if not normalize_channel(match.group(1), aliases):
-                continue                      # 括号里的不是频道名（可能是正文里的括号）
-            head = _strip_leading_prefixes(line[cursor:match.start()], aliases)
-            if not head:
-                continue                      # 前面只有前缀，说明这是同一条消息的第二个前缀
-            name, _body = _split_speaker(head)
-            if name or textutil.has_cjk(head):
-                cut = match.start()
-                break
-        if cut is None:
-            break
-        segments.append(line[cursor:cut].strip())
-        cursor = cut
-        scan_from = cut
+    for cut in sorted(set(cuts)):
+        if cut <= cursor:
+            continue                          # 行首那个前缀属于本段，不算分隔
+        head = _strip_leading_prefixes(line[cursor:cut], aliases)
+        if not head:
+            continue                          # 前面只有前缀，说明这是同一条消息的第二个前缀
+        name, _body = _split_speaker(head)
+        if name or textutil.has_cjk(head):
+            segments.append(line[cursor:cut].strip())
+            cursor = cut
     segments.append(line[cursor:].strip())
     return [segment for segment in segments if segment]
 
@@ -221,7 +283,7 @@ class ChatParser:
 
             # 有 "玩家名:" → 玩家发言（正文可能为空，等下一行的续行接上）
             if name:
-                event = Event(KIND_CHAT, textutil.clean_body(body), channel, name,
+                event = Event(KIND_CHAT, _clean_chat_body(body), channel, name,
                               raw_line, [s[2] for s in spans], prefix_text)
                 events.append(event)
                 return event
@@ -254,7 +316,7 @@ class ChatParser:
         # "Name: text" 但前缀丢了 → 按聊天行处理，频道沿用上一条
         name, body = _split_speaker(line)
         if name and last_chat is not None:
-            body = textutil.clean_body(body)
+            body = _clean_chat_body(body)
             if textutil.is_noise(body):
                 return last_chat
             event = Event(KIND_CHAT, body,

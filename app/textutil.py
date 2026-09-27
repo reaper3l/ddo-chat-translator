@@ -96,6 +96,44 @@ def truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: max(0, limit - 1)] + "…"
 
 
+def collapse_doubled(text: str) -> str:
+    """去掉"整条被贴了两遍"的重复（实测 OCR 会给出"位面监狱位面监狱"）。
+
+    只处理"前后两半一字不差"的情况，所以 "ok ok"（有空格）、"hahaha" 这类
+    正常口语不会被误伤。
+    """
+    stripped = (text or "").strip()
+    size = len(stripped)
+    if size >= 4 and size % 2 == 0:
+        half = stripped[: size // 2]
+        if half == stripped[size // 2:] and len(half.strip()) >= 2:
+            return half.strip()
+    return text
+
+
+# --------------------------------------------------------------------------
+# 模型"没看懂"的兜底：它有时会把说明当译文回给我们（"（看不清楚）"）。
+# 光看"看不清楚"会误伤正常译文（"can't see clearly" 本来就可以翻成"看不清楚"），
+# 所以必须再加一个强信号：要么带括号（模型在插话），要么明说"无法翻译/乱码"。
+# --------------------------------------------------------------------------
+# 注意别把正常译文误判成"插话"："sorry"确实该翻成"抱歉"、"I don't understand"
+# 该翻成"我不懂"，所以强信号只认"无法翻译/乱码"这种模型才说得出来的话。
+_REFUSAL_CORE = re.compile(r"(看\s*不\s*清|看不到|无法(?:识别|翻译|确定|理解|看清)|乱码)")
+_REFUSAL_STRONG = re.compile(
+    r"(无法(?:识别|翻译|确定|理解|看清)|乱码|原文不清|看不清原文|不是(?:文字|文本))")
+_WRAPPED_RE = re.compile(r"^\s*[（(\[【]\s*.{0,18}?\s*[）)\]】]\s*[。.!！~～]*$")
+
+
+def is_refusal(text: str) -> bool:
+    """模型是不是在"插话"（说明看不懂），而不是给出译文。"""
+    stripped = (text or "").strip()
+    if not stripped or len(stripped) > 24:
+        return False
+    if _REFUSAL_STRONG.search(stripped):
+        return True
+    return bool(_WRAPPED_RE.match(stripped) and _REFUSAL_CORE.search(stripped))
+
+
 # --------------------------------------------------------------------------
 # URL 保护：OCR 常把 https:// 识别成 "https: //" 或 "https//"
 # --------------------------------------------------------------------------
