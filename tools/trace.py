@@ -56,11 +56,17 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config()
+    # 和主程序一样先声明 DPI 感知：否则 Windows 会把坐标/截图按缩放虚拟化，
+    # 抓到的图比实际小一圈，OCR 认不出字，诊断结果就是假的（实测踩过）。
+    from app import dpi as dpi_module
+
+    dpi_state = dpi_module.enable(config.get("dpi_mode", "auto"))
     memory = MemoryStore()
     glossary = build_glossary(config, memory)
     pipeline = Pipeline(config, memory, glossary, queue.Queue())
 
     print("=" * 70)
+    print("DPI：%s" % dpi_state)
     print("引擎：%s  可用=%s  备注=%s"
           % (pipeline.engine.describe(), pipeline.engine.available(),
              pipeline.engine_note or "无"))

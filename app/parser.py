@@ -182,6 +182,34 @@ def _clean_chat_body(body: str) -> str:
     return textutil.collapse_doubled(textutil.clean_body(body))
 
 
+def _split_trailing_notice(body: str) -> Tuple[str, str]:
+    """把"被 OCR 粘在玩家正文后面的系统提示"切出来。
+
+    实测（用户日志）：
+        "笑死 Imao的队友Guihuo已死亡"  → 正文 "笑死 Imao" + 提示 "你的队友Guihuo已死亡"
+
+    这里只用**很具体的句式**（名字+已死亡/已断线/加入/离开），免得把玩家正常聊到的
+    "我的队友"当成系统提示切走。
+    """
+    for pattern in _TRAILING_NOTICE_RES:
+        match = pattern.search(body or "")
+        if match and match.start() > 0:
+            notice = body[match.start():].strip()
+            if notice.startswith("的队友"):
+                notice = "你" + notice          # OCR 常把"你"吃掉
+            return body[: match.start()].strip(), notice
+    return body, ""
+
+
+_NAME = r"[A-Za-z0-9_'\-\.]{2,24}"
+_TRAILING_NOTICE_RES = (
+    re.compile(r"(?:你)?的队友\s*%s\s*(?:已死亡|已断线|已复活|已经离线)" % _NAME),
+    re.compile(r"%s\s*(?:已死亡|已断线|已复活|加入了你的队伍|离开了你的队伍|已加入小队)" % _NAME),
+    re.compile(r"(?:你)?现在是队长"),
+    re.compile(r"你已将?\s*%s\s*(?:移出了小队|移出队伍)" % _NAME),
+)
+
+
 def _is_junk_prefix(junk: str) -> bool:
     """名字前面那点东西是不是 OCR 杂质（等级数字、图标被认成字母等）。
 
@@ -283,9 +311,14 @@ class ChatParser:
 
             # 有 "玩家名:" → 玩家发言（正文可能为空，等下一行的续行接上）
             if name:
-                event = Event(KIND_CHAT, _clean_chat_body(body), channel, name,
+                clean, notice = _split_trailing_notice(_clean_chat_body(body))
+                event = Event(KIND_CHAT, clean, channel, name,
                               raw_line, [s[2] for s in spans], prefix_text)
                 events.append(event)
+                # 提示被切出来的话，照样当成系统消息显示（本来就是要看的组队/生死信息）
+                if notice:
+                    events.append(Event(KIND_SYSTEM, notice, channel, "", raw_line,
+                                        [s[2] for s in spans], prefix_text))
                 return event
 
             # 没有 "玩家名:" → 系统消息（组队/死亡/断线/战利品），原样显示不翻译

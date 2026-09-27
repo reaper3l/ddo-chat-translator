@@ -231,3 +231,24 @@ def test_loot_panel_lines_are_not_player_chat():
     ]
     for line in lines:
         assert _chats([line]) == [], line
+
+
+def test_system_notice_glued_to_chat_body_is_split_out():
+    """OCR 把系统提示粘在玩家正文后面时：正文归正文，提示归提示。
+
+    实测："笑死 Imao的队友Guihuo已死亡" —— 以前整条会被当成玩家发言翻掉。
+    """
+    events = ChatParser().parse(["(小队):[小队]Guihuo: 笑死 Imao的队友Guihuo已死亡"])
+    chats = [event for event in events if event.is_chat]
+    systems = [event for event in events if event.kind == "system"]
+    assert [event.text for event in chats] == ["笑死 Imao"]
+    assert len(systems) == 1
+    assert "你的队友Guihuo已死亡" in systems[0].text
+
+
+def test_normal_mention_of_teammate_is_not_split():
+    """玩家正常聊到"队友"不能被当成系统提示切走。"""
+    chats = _chats(["(小队):[小队]Guihuo: my teanmate is afk, lets wait"])
+    assert [event.text for event in chats] == ["my teanmate is afk, lets wait"]
+    chats = _chats(["(小队):[小队]Guihuo: 我的队友在挂机"])
+    assert [event.text for event in chats] == ["我的队友在挂机"]

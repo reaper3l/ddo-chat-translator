@@ -8,7 +8,7 @@
 """
 from PyInstaller.utils.hooks import collect_all
 
-APP_NAME = "DDO翻译助手_v3.0.6"      # 改版本时改这里（EXE/COLLECT/瘦身都用它）
+APP_NAME = "DDO翻译助手_v3.0.7"      # 改版本时改这里（EXE/COLLECT/瘦身都用它）
 
 datas = []
 binaries = []

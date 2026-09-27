@@ -41,7 +41,8 @@ class CnToEnDialog:
         self.window.attributes("-topmost", True)
         self.window.transient(app.root)
         theme.prepare_window(self.window, app.config)
-        theme.frameless_dialog(self.window, "中译英 —— 说给外国玩家听")
+        # autofocus：这个窗口打开就是为了打字，所以显示后直接把焦点给输入框
+        theme.frameless_dialog(self.window, "中译英 —— 说给外国玩家听", autofocus=True)
         self._build()
         self._poll()
 
@@ -52,6 +53,8 @@ class CnToEnDialog:
                                        font=(self.app.config.get("font_family",
                                                                  "Microsoft YaHei"), 11))
         self.input.pack(fill="x", padx=12)
+        # 告诉主题"输入框是这一个"，它会在窗口显示后把焦点放上来
+        theme.set_dialog_input(self.window, self.input)
         self.input.focus_set()
         self.input.bind("<Control-Return>", self._on_enter)
         self.input.bind("<Return>", self._on_enter)

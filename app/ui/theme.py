@@ -348,8 +348,123 @@ def apply_dark_titlebar(window: tk.Misc) -> None:
         pass
 
 
+def find_first_input(root: tk.Misc):
+    """找一个对话框里最像"输入框"的控件（自动聚焦用）。
+
+    优先真正的输入框（Entry/Text），实在没有才退回下拉框 —— 免得一打开设置
+    就把焦点放在下拉框上，用户按空格/方向键会误改选项。
+    """
+
+    def scan(widget, kinds):
+        for child in widget.winfo_children():
+            if isinstance(child, kinds):
+                return child
+            found = scan(child, kinds)
+            if found is not None:
+                return found
+        return None
+
+    return scan(root, (tk.Text, tk.Entry, ttk.Entry)) or scan(root, (ttk.Combobox,))
+
+
+def find_dialog_input(window: tk.Misc):
+    """这个对话框的"输入框"：优先用调用方显式指定的那个，否则猜第一个。"""
+    target = getattr(window, "_dialog_input", None)
+    if target is not None:
+        try:
+            if target.winfo_exists():
+                return target
+        except Exception:
+            pass
+    return find_first_input(window)
+
+
+def set_dialog_input(window: tk.Misc, widget: tk.Misc) -> None:
+    """告诉主题"这个窗口的输入框是哪个控件"。
+
+    必须由对话框**在创建完控件之后**调用：像"纠错窗口"这种，窗口里第一个
+    Text 是只读的原文框，光靠"猜第一个"会猜错，所以让调用方说清楚。
+    """
+    try:
+        window._dialog_input = widget
+    except Exception:
+        return
+    if getattr(window, "_dialog_autofocus", False):
+        try:
+            widget.focus_force()
+        except Exception:
+            pass
+
+
+def _focus_is_outside(window: tk.Misc) -> bool:
+    """本对话框现在没有键盘焦点（焦点在别的窗口或别的程序里）？"""
+    try:
+        current = window.focus_get()
+    except Exception:
+        current = None
+    if current is None:
+        return True
+    return not str(current).startswith(str(window))
+
+
+def install_dialog_focus(window: tk.Misc, autofocus: bool = False) -> None:
+    """让无边框对话框"点一下就能打字"。
+
+    背景（用户实测反馈）：中译英窗口有时候点回去打不了字。
+    原因是两层：
+      1. `focus_set()` 在窗口还没映射（还没显示出来）时是**静默无效**的，
+         所以"打开时自动聚焦输入框"这行代码经常根本没生效；
+      2. 对话框是 overrideredirect（无边框）窗口，Windows 不保证点它就给它键盘焦点。
+    所以这里几处一起兜：
+      * 点对话框里任何地方时，用 focus_force 把窗口激活，并把焦点给到点的地方
+        （点输出框就交给输出框，方便框选复制；点按钮/空白就给输入框）；
+      * autofocus=True 的对话框（中译英、纠错这种"打开就是要打字"的），
+        显示后和重新获得焦点时自动聚焦到输入框。
+    """
+
+    def focus_input(*_args) -> None:
+        widget = find_dialog_input(window) or window
+        try:
+            widget.focus_force()
+        except Exception:
+            pass
+
+    if autofocus:
+        try:
+            window._dialog_autofocus = True
+        except Exception:
+            pass
+        try:
+            window.after(80, focus_input)
+            window.after(400, focus_input)   # 映射慢的机器上再来一次
+        except Exception:
+            pass
+
+    def on_focus_in(event) -> None:
+        # 只有焦点原本不在本对话框里时才动手，免得抢走用户在输出框里选好的文字
+        if autofocus and event.widget is window and _focus_is_outside(window):
+            focus_input()
+
+    def on_click(event) -> None:
+        widget = event.widget
+        if isinstance(widget, (tk.Text, tk.Entry, ttk.Entry, ttk.Combobox)):
+            target = widget                     # 点在输入/输出框上，尊重用户的选择
+        else:
+            target = find_dialog_input(window) or window
+        try:
+            target.focus_force()                # 顺手把窗口激活（无边框窗口必须显式要焦点）
+        except Exception:
+            pass
+
+    try:
+        window.bind("<FocusIn>", on_focus_in, add="+")
+        window.bind("<Button-1>", on_click, add="+")
+    except Exception:
+        pass
+
+
 def frameless_dialog(window: tk.Misc, title: str, topmost: bool = True,
-                     on_close=None):
+                     on_close=None, autofocus: bool = False):
     """把对话框变成"无边框 + 自绘深色标题栏"。
 
     返回 (标题栏控件, FramelessWindow 实例)；标题栏本身就是拖动区域。
@@ -381,6 +496,7 @@ def frameless_dialog(window: tk.Misc, title: str, topmost: bool = True,
     helper = FramelessWindow(window, drag_handles=[header, label],
                              min_size=(360, 240))
     helper.set_enabled(True)
+    install_dialog_focus(window, autofocus=autofocus)
     return header, helper
 
 

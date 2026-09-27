@@ -79,38 +79,12 @@ def _setup_dpi(config: dict) -> str:
 
     现在默认按显示器感知 DPI（per-monitor v2）。如果某些机器上仍有问题，
     把 data/config.json 里的 "dpi_mode" 改成 "legacy" 即可退回旧行为。
+
+    实现放在 app/dpi.py，诊断工具（tools\\trace.py 等）也会调用同一份代码。
     """
-    if sys.platform != "win32":
-        return "non-windows"
+    from app import dpi
 
-    import ctypes
-
-    if _read_dpi_mode(config) == "legacy":
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(0)
-            return "legacy(unaware)"
-        except Exception:
-            return "legacy(failed)"
-
-    # 1) Win10 1703+：per-monitor v2（DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4）
-    try:
-        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
-            return "per-monitor-v2"
-    except Exception:
-        pass
-    # 2) Win8.1+：per-monitor
-    try:
-        if ctypes.windll.shcore.SetProcessDpiAwareness(2) == 0:
-            return "per-monitor"
-    except Exception:
-        pass
-    # 3) Vista+：system aware
-    try:
-        if ctypes.windll.user32.SetProcessDPIAware():
-            return "system"
-    except Exception:
-        pass
-    return "unknown"
+    return dpi.enable(_read_dpi_mode(config))
 
 
 def _setup_environment() -> str:

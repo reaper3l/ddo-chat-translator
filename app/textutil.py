@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from typing import List, Tuple
+import difflib
 
 CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 LATIN_RE = re.compile(r"[A-Za-z]")
@@ -185,6 +186,9 @@ def similar(first: str, second: str) -> float:
     """字符集合相似度（0~1）。用于识别"OCR 每次略有差异的同一行"。
 
     比 difflib 快得多，对"同一行被识别成七八种写法"这种情况足够有效。
+
+    注意：**只适合中文**。英文只有 26 个字母，长句子的字符集合几乎一样，
+    集合相似度会把两句完全不同的话判成同一条 —— 英文请用 ocr_similar()。
     """
     a, b = (first or "").strip(), (second or "").strip()
     if not a or not b:
@@ -194,6 +198,53 @@ def similar(first: str, second: str) -> float:
     if not union:
         return 0.0
     return len(set_a & set_b) / float(len(union))
+
+
+def ocr_similar(first: str, second: str) -> float:
+    """两段文本的相似度（0~1），按**字符顺序**比较，适合英文。
+
+    OCR 每次读同一行都会差一点（"lgotone" / "|gotone" / "Igotone"），
+    精确指纹拦不住；集合相似度又会因为英文字母太少而误判，
+    所以这里用 difflib 的序列相似度（字符串都很短，开销可以忽略）。
+    """
+    a = re.sub(r"\s+", "", (first or "").lower())
+    b = re.sub(r"\s+", "", (second or "").lower())
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+# 判成"同一条消息"的最低相似度；低于这个值还可能是同一条的条件见下
+SAME_MESSAGE_RATIO = 0.85
+SAME_MESSAGE_MIN_LENGTH = 6
+
+
+def same_ocr_message(first: str, second: str) -> bool:
+    """两段 OCR 文本是不是**同一条消息**的不同读法。
+
+    两种典型情况：
+      1. 少数几个字认花：`lgotone-shotbyittoday` / `Igotone-shotbyittoday`
+      2. 长句被读短了：`there is something like his` 是
+         `there is something like thisinArtofWar` 的开头部分
+    """
+    a = re.sub(r"\s+", "", (first or "").lower())
+    b = re.sub(r"\s+", "", (second or "").lower())
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if min(len(a), len(b)) < SAME_MESSAGE_MIN_LENGTH:
+        return False
+    if ocr_similar(a, b) >= SAME_MESSAGE_RATIO:
+        return True
+    # 被读短的那一版应该和长的那版开头几乎一致（差 6 个字符以上才算，避免
+    # 把"need heals"和"need heals fast"这种真·追加内容当成重复）
+    short, long_text = (a, b) if len(a) < len(b) else (b, a)
+    if len(long_text) - len(short) >= 6:
+        return ocr_similar(short, long_text[: len(short)]) >= 0.9
+    return False
 
 
 # --------------------------------------------------------------------------

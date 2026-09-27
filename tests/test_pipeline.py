@@ -9,7 +9,7 @@ from pathlib import Path
 from app.config import DEFAULT_CONFIG
 from app.engines import BaseEngine, TranslationResult
 from app.glossary import Glossary
-from app.pipeline import Pipeline
+from app.pipeline import DisplayItem, Pipeline
 from app.store import MemoryStore
 
 
@@ -153,6 +153,7 @@ def test_cache_avoids_second_api_call():
     assert engine.calls == 1
     # 同一句在去重时间窗内会被直接拦掉，这里模拟"过了时间窗又出现一次"
     pipeline.deduper.clear()
+    pipeline.forget_recent()
     pipeline._handle_lines(["(队伍)Bob: a fresh sentence here"])
     item = pipeline._process(pipeline._jobs.get_nowait())
     assert engine.calls == 1          # 命中缓存
@@ -357,3 +358,56 @@ def test_model_refusal_falls_back_to_original():
     item = pipeline._process(pipeline._jobs.get_nowait())
     assert item.translated == "onuina gribble"
     assert "原文" in item.note
+
+
+# ---------------------------------------------------------------------------
+# 用户实测（第二轮反馈）："还是有重复刷屏"
+# 根因是同一句每帧被 OCR 读得略有不同，精确指纹拦不住。
+# ---------------------------------------------------------------------------
+
+def test_ocr_variants_of_same_line_are_shown_once():
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines([
+        "(小队):[小队]Guihuo:lgotone-shotbyittoday",
+        "(小队):[小队]Guihuo:|gotone-shotbyittoday",
+        "(小队):[小队]Guihuo:Igotone-shotbyittoday",
+    ])
+    jobs = _drain_jobs(pipeline)
+    assert [job.source for job in jobs] == ["lgotone-shotbyittoday"]
+
+
+def test_long_line_read_short_is_not_shown_twice():
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines(["(小队):[小队] Beruthiell:there is something like thisinArtofWar"])
+    pipeline._handle_lines(["[小队]Beruthiell: there is something like his"])
+    assert len(_drain_jobs(pipeline)) == 1
+
+
+def test_different_short_messages_are_all_shown():
+    """短消息（yes / in / omw / ty）不能被模糊去重吃掉。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines(["(小队):[小队] Sinoke: yes",
+                            "(小队):[小队] Sinoke: in",
+                            "(小队):[小队] Guihuo: omw",
+                            "(小队):[小队] Guihuo: ty"])
+    assert len(_drain_jobs(pipeline)) == 4
+
+
+def test_our_own_translation_read_back_is_ignored():
+    """主窗口贴着游戏时，OCR 可能把我们自己显示的译文读回来 —— 不能再显示一遍。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._push_display(DisplayItem(1, "chat", "小队", "Guihuo",
+                                       "lgotone-shotbyittoday", "我今天被它一下秒了"))
+    # 假设 OCR 把自己窗口里的这一行读回来了（前缀/名字都在）
+    pipeline._handle_lines(["(小队):[小队] Guihuo: 我今天被它一下秒了"])
+    assert _drain_jobs(pipeline) == []
+    assert pipeline.stats["filtered"] >= 1
+
+
+def test_repeated_system_notice_is_shown_once():
+    """系统提示也会被每帧读到，错字版本同样只能显示一次。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines(["(小队):你的队友Beruthiell已死亡"])
+    pipeline._handle_lines(["(小队): 你的队友 Beruthiell 己死亡"])
+    shown = _drain_display(pipeline)
+    assert [item.kind for item in shown] == ["system"]

@@ -30,7 +30,7 @@ class CorrectionDialog:
         self.window.transient(app.root)
         self.window.attributes("-topmost", True)
         theme.prepare_window(self.window, app.config)
-        theme.frameless_dialog(self.window, "纠正这条翻译")
+        theme.frameless_dialog(self.window, "纠正这条翻译", autofocus=True)
         self._build()
 
     def _build(self) -> None:
@@ -49,6 +49,8 @@ class CorrectionDialog:
             font=(self.app.config.get("font_family", "Microsoft YaHei"), 12))
         self.edit.pack(fill="x", padx=12)
         self.edit.insert("1.0", self.before)
+        # 明确指定输入框：本窗口第一个 Text 是只读的原文框，不能让焦点落到它上面
+        theme.set_dialog_input(self.window, self.edit)
         self.edit.focus_set()
         self.edit.bind("<Control-Return>", self._save)
 

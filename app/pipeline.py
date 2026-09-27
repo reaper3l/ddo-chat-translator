@@ -91,6 +91,7 @@ class Pipeline:
         "队长", "锁定", "难度", "组队",
     )
 
+
     def __init__(self, config: dict, memory, glossary: Glossary,
                  ui_queue: "queue.Queue[dict]") -> None:
         self.config = config
@@ -124,7 +125,11 @@ class Pipeline:
         self._last_lines: List[Tuple[float, float, str]] = []
         self._frames_since_full = 0
         self._fast_capture_ok = None      # None=还没校验, True/False=已确定
-        self._recent_system: List[str] = []    # 最近几条系统消息，用于模糊去重
+        # 最近显示过的内容（原文 + 译文），用于"模糊去重"和"别把自己显示的内容又识别一遍"。
+        # OCR 每帧会把同一句读得略有不同（lgotone / |gotone / Igotone），精确指纹拦不住；
+        # 而主窗口又贴在游戏上，被 OCR 读回来的自己的译文也要挡住，否则会自我循环。
+        self._recent: Deque[Tuple[float, str]] = deque(maxlen=80)
+        self._recent_lock = threading.Lock()
         self._history: Deque[Tuple[str, str]] = deque(maxlen=12)
         self._system_events: Deque[str] = deque(maxlen=6)
         self._cache: Dict[str, str] = {}
@@ -167,6 +172,7 @@ class Pipeline:
         # 显示队列接着上一个序号继续，避免重启监听后卡在等一个永远不来的序号
         with self._skip_lock:
             self._skipped_seqs.clear()
+        self.forget_recent()          # 重新开始监听后，旧内容允许重新显示
         self._pending_display.clear()
         self._next_display_seq = self._seq + 1
         self._capture_thread = threading.Thread(
@@ -484,17 +490,14 @@ class Pipeline:
                             not self.is_useful_notice(text):
                         self._count_filtered()
                         continue
-                    # 3) 模糊去重：OCR 每次都会有细微差异，精确指纹拦不住
-                    if any(textutil.similar(text, old) >= 0.82
-                           for old in self._recent_system):
-                        continue
-                    self._recent_system.insert(0, text)
-                    del self._recent_system[12:]
-                    # 系统消息也要去重：它会在聊天框里停留很久，每帧重新识别一遍
-                    # 就会把同一条消息无限重复地打到屏幕上（也会灌满上下文）。
+                    # 3) 系统消息也要去重：它会在聊天框里停留很久，每帧重新识别一遍
+                    #    就会把同一条消息无限重复地打到屏幕上（也会灌满上下文）。
                     system_fp = textutil.fingerprint(text)
-                    if system_fp and self.deduper.check(system_fp):
+                    if not system_fp or self.deduper.check(system_fp):
                         continue
+                    if self._seen_recently(text):
+                        continue
+                    self._remember(text)      # 立刻记下，后面几帧的错字版本就能被拦住
                     # 系统消息照样进上下文（翻译时有用），但是否显示听用户的
                     self._system_events_queue.put(text)
                     if self.config.get("show_system", True) and (
@@ -517,6 +520,13 @@ class Pipeline:
             fingerprint = textutil.fingerprint(event.text)
             if not fingerprint or self.deduper.check(fingerprint):
                 continue
+            # 文字没变但 OCR 每帧读得略有不同时，精确指纹拦不住，用模糊比对补一刀
+            # （实测：同一句 "I got one-shot by it today" 被读成三种写法，窗口里显示三遍）
+            if self._seen_recently(event.text):
+                self._count_filtered()
+                continue
+            # 立刻记下来（不等翻译完）：同一句在翻译这一两秒里还会被 OCR 读到好几次
+            self._remember(event.text)
 
             self.stats["messages"] += 1
             job = Job(seq=self._next_seq(), channel=event.channel,
@@ -544,6 +554,44 @@ class Pipeline:
     def _count_filtered(self) -> None:
         """记一笔"被过滤掉的噪音行"，界面上能看到过滤器确实在干活。"""
         self.stats["filtered"] = self.stats.get("filtered", 0) + 1
+
+    def _seen_recently(self, text: str) -> bool:
+        """这条内容最近是不是已经出现过（允许 OCR 读花几个字）。
+
+        比较对象包括**已经显示出去的原文和译文** —— 主窗口就贴在游戏上，
+        万一被框选区域盖住，OCR 会把我们自己的译文读回来，那就是无限循环了。
+        时间窗跟"同一句多久内不重复翻译"（dedup_ttl_seconds，默认 90 秒）一致。
+        """
+        if not text or len(text.strip()) < 2:
+            return False
+        now = time.time()
+        window = self._dedup_window()
+        with self._recent_lock:
+            while self._recent and now - self._recent[0][0] > window:
+                self._recent.popleft()
+            for _stamp, old in self._recent:
+                if textutil.same_ocr_message(text, old):
+                    return True
+        return False
+
+    def _dedup_window(self) -> float:
+        try:
+            return max(5.0, float(self.config.get("dedup_ttl_seconds", 90)))
+        except Exception:
+            return 90.0
+
+    def forget_recent(self) -> None:
+        """忘掉"最近显示过什么"（重新开始监听、或测试时用）。"""
+        with self._recent_lock:
+            self._recent.clear()
+
+    def _remember(self, *texts: str) -> None:
+        """把"已经显示出去的内容"记下来，供 _seen_recently 比对。"""
+        now = time.time()
+        with self._recent_lock:
+            for text in texts:
+                if text and len(text.strip()) >= 2:
+                    self._recent.append((now, text))
 
     @classmethod
     def is_panel_text(cls, text: str) -> bool:
@@ -740,6 +788,8 @@ class Pipeline:
 
     # ------------------------------------------------------------ 界面通信
     def _push_display(self, item: DisplayItem) -> None:
+        # 记住显示过的原文和译文：既用于模糊去重，也防止"自己的窗口被 OCR 读回来"
+        self._remember(item.source, item.translated)
         self.ui_queue.put({"type": "message", "item": item})
 
     def _emit_status(self, text: str, level: str = "info") -> None:
