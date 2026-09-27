@@ -271,6 +271,8 @@ class SettingsDialog:
         self._spin(tab, "interval_ms", "截图间隔（毫秒）", 300, 5000)
         self._check(tab, "skip_identical_frame",
                     "画面没变化时跳过 OCR（省 CPU，强烈建议开）")
+        self._check(tab, "band_ocr", "只识别变化的那几行（更省 CPU，推荐开）")
+        self._check(tab, "low_priority", "程序用低于游戏的 CPU 优先级（推荐开，游戏更流畅）")
         self._check(tab, "idle_backoff", "长时间没新消息时自动放慢截图频率")
         self._choice_labeled(tab, "ocr_threads", "OCR 线程数（越小越不卡游戏）",
                              [("1", "1（最省 CPU）"), ("2", "2（推荐）"),

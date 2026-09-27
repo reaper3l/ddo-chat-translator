@@ -19,11 +19,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
 
-from . import capture, paths, textutil
+from . import capture, frame, paths, textutil
 from .dedup import Deduper
 from .engines import BaseEngine, OfflineEngine, create_engine
 from .glossary import Glossary
-from .ocr import OcrEngine, group_rows
+from .ocr import OcrEngine, group_rows, rows_to_lines as ocr_rows_to_lines
 from .parser import KIND_CHAT, KIND_SYSTEM, ChatParser
 from .prompt import build_messages, build_system_prompt
 
@@ -82,6 +82,8 @@ class Pipeline:
         self._seq = 0
         self._last_frame_signature = ""
         self._idle_frames = 0
+        self._last_lines: List[Tuple[float, float, str]] = []
+        self._frames_since_full = 0
         self._history: Deque[Tuple[str, str]] = deque(maxlen=12)
         self._system_events: Deque[str] = deque(maxlen=6)
         self._cache: Dict[str, str] = {}
@@ -101,6 +103,7 @@ class Pipeline:
             "dropped": 0,
             "untranslated": 0,
             "skipped_frame": 0,
+            "band_ocr": 0,
         }
         self._load_cache()
 
@@ -117,6 +120,8 @@ class Pipeline:
         self._stop.clear()
         self._running = True
         self._last_frame_signature = ""
+        self._last_lines = []
+        self._frames_since_full = 0
         # 显示队列接着上一个序号继续，避免重启监听后卡在等一个永远不来的序号
         with self._skip_lock:
             self._skipped_seqs.clear()
@@ -128,8 +133,27 @@ class Pipeline:
             target=self._translate_loop, name="translate", daemon=True)
         self._capture_thread.start()
         self._translate_thread.start()
+        self._lower_thread_priority(self._capture_thread)
         note = "（%s）" % self.engine_note if self.engine_note else ""
         self._emit_status("已开始监听 · 引擎 %s%s" % (self.engine.describe(), note), "info")
+
+    @staticmethod
+    def _lower_thread_priority(thread) -> None:
+        """把后台线程也降到低于正常（Windows），进一步给游戏让路。"""
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.OpenThread.restype = ctypes.c_void_p
+            kernel32.OpenThread.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+            kernel32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            handle = kernel32.OpenThread(
+                0x0040 | 0x0200, False, thread.ident)     # QUERY | SET_INFORMATION
+            if handle:
+                kernel32.SetThreadPriority(handle, -1)                 # BELOW_NORMAL
+                kernel32.CloseHandle(handle)
+        except Exception:
+            pass
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
@@ -196,6 +220,8 @@ class Pipeline:
         """配置改变后调用（阈值、术语、引擎等）。"""
         self.deduper.ttl = float(self.config.get("dedup_ttl_seconds", 90))
         self.parser = ChatParser(self.config.get("prefix_aliases"))
+        self._last_lines = []          # 区域/参数变了，缓存的行作废
+        self._frames_since_full = 0
         self.reload_engine()
 
     # ------------------------------------------------------------ 对外接口
@@ -277,9 +303,9 @@ class Pipeline:
             # 先用"缩略图比对"判断画面有没有变化：聊天框多数时间是静止的，
             # 没变就整帧跳过 OCR（这是监听时最省 CPU 的一招）。
             frame_signature = capture.frame_signature(image)
-            if self.config.get("skip_identical_frame", True) and frame_signature \
-                    and not capture.frames_differ(frame_signature,
-                                                 self._last_frame_signature):
+            changed, first_row, last_row = frame.analyse_frame(
+                frame_signature, self._last_frame_signature)
+            if self.config.get("skip_identical_frame", True) and not changed:
                 self._idle_frames += 1
                 self.stats["skipped_frame"] = self.stats.get("skipped_frame", 0) + 1
                 self._stop.wait(self._current_interval(idle=True))
@@ -298,16 +324,59 @@ class Pipeline:
                 self._emit_status("OCR 模型已就绪", "info")
 
             self.stats["frames"] += 1
-            items = self.ocr.recognize(image, self._upscale_for(image))
+            scale = self._upscale_for(image)
+
+            # 默认只重新识别"变了的那几行"：上面没变的部分直接沿用上一帧的识别结果。
+            # 前提是变化发生在中下部、且不是整屏大改；每隔若干帧或变化太大时
+            # 做一次整帧识别来校准，避免滚动/淡出导致的偏差累积。
+            use_band = bool(
+                self.config.get("band_ocr", True)
+                and self._last_lines
+                and first_row >= 6
+                and (last_row - first_row + 1) <= 30
+                and self._frames_since_full < 20
+            )
+            band_image, offset = image, 0.0
+            if use_band:
+                y_start, _y_end = frame.band_pixels((first_row, last_row), image.height)
+                offset = self._pixel_offset_to_tk(region, image, y_start)
+                band_region = [region[0], int(region[1] + offset), region[2], region[3]]
+                band = capture.grab(band_region, self.screen_size)
+                if band is not None and band.height > 4:
+                    band_image = band
+                else:
+                    use_band, offset = False, 0.0
+
+            items = self.ocr.recognize(band_image, scale)
             if self.config.get("merge_same_row", True):
                 items = group_rows(items)
-            lines = [text for text, _box in items]
+            fresh_lines = ocr_rows_to_lines(items, scale, offset)
+            if use_band:
+                all_lines = frame.merge_lines(self._last_lines, fresh_lines, offset)
+                self._frames_since_full += 1
+                self.stats["band_ocr"] = self.stats.get("band_ocr", 0) + 1
+            else:
+                all_lines = fresh_lines
+                self._frames_since_full = 0
+            self._last_lines = all_lines
+            lines = [text for _top, _bottom, text in all_lines]
             self.stats["ocr_lines"] = len(lines)
             if lines:
                 self._handle_lines(lines)
 
             elapsed = time.time() - started
             self._stop.wait(max(0.2, interval - elapsed))
+
+    @staticmethod
+    def _pixel_offset_to_tk(region, image, y_pixels: float) -> float:
+        """把"截图像素里的 y 偏移"换算成 Tk 坐标偏移（两者可能因 DPI 差一个比例）。"""
+        try:
+            tk_height = float(region[3]) - float(region[1])
+            if image.height <= 0 or tk_height <= 0:
+                return float(y_pixels)
+            return float(y_pixels) * tk_height / float(image.height)
+        except Exception:
+            return float(y_pixels)
 
     def _calibrate_once(self) -> None:
         """启动时实测一次"截图空间 / Tk 空间"的比例，不一致就自动校正并提示。"""

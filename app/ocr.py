@@ -58,6 +58,28 @@ def sort_by_position(items: Sequence[BoxItem]) -> List[BoxItem]:
     return sorted(items, key=lambda item: (_center_y(item[1]), _left_x(item[1])))
 
 
+def rows_to_lines(items: Sequence[BoxItem], scale: float = 1.0,
+                  offset: float = 0.0) -> List[Tuple[float, float, str]]:
+    """把 OCR 结果转成 [(y_top, y_bottom, text), ...]（坐标换算回"区域坐标"）。
+
+    items 里的框坐标是"放大后"的坐标，所以要除以 scale；offset 是这条带子
+    在原始区域里的起始 y（只识别了下面一条时用得到）。
+    """
+    result: List[Tuple[float, float, str]] = []
+    factor = scale if scale and scale > 0 else 1.0
+    for text, box in items:
+        if not text:
+            continue
+        center = _center_y(box) / factor
+        height = _height(box) / factor
+        if height <= 0:
+            height = 16.0
+        top = center - height / 2.0 + offset
+        result.append((top, top + height, text))
+    result.sort(key=lambda item: item[0])
+    return result
+
+
 def group_rows(items: Sequence[BoxItem], tol_ratio: float = 0.6) -> List[BoxItem]:
     """把同一视觉行的碎片拼成一行。
 

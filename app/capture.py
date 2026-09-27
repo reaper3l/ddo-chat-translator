@@ -226,15 +226,11 @@ def frames_differ(current: bytes, previous: bytes,
     这样能忽略光标闪烁、轻微抖动这类"没意义的变化"，但只要有新聊天行
     （大片像素变化）就会判定为"变了"。
     """
-    if not current or not previous or len(current) != len(previous):
-        return True
-    diff = 0
-    for now, before in zip(current, previous):
-        if abs(now - before) > tolerance:
-            diff += 1
-            if diff > threshold:
-                return True
-    return False
+    from . import frame as frame_module
+
+    changed, _first, _last = frame_module.analyse_frame(
+        current, previous, tolerance=tolerance, threshold=threshold)
+    return changed
     try:
         return hashlib.sha1(image.convert("RGB").tobytes()).hexdigest()
     except Exception:

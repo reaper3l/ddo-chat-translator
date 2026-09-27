@@ -42,6 +42,34 @@ def _setup_thread_env(config: dict) -> None:
     os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 
 
+def _lower_process_priority(config: dict) -> str:
+    """把程序降到"低于正常"优先级。
+
+    监听是后台任务，慢一点没关系，但游戏被抢 CPU 就会卡。
+    降优先级后，游戏需要 CPU 时永远先拿到，OCR 自己慢下来。
+    """
+    if sys.platform != "win32":
+        return "non-windows"
+    if not config.get("low_priority", True):
+        return "disabled"
+    try:
+        import ctypes
+
+        below_normal = 0x00004000
+        kernel32 = ctypes.windll.kernel32
+        # 必须声明返回类型：GetCurrentProcess() 返回的是伪句柄（64 位全 1），
+        # 不声明会被截成 32 位，导致后面 SetPriorityClass 拿到错误句柄而失败。
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        kernel32.SetPriorityClass.restype = ctypes.c_int
+        handle = kernel32.GetCurrentProcess()
+        if kernel32.SetPriorityClass(handle, below_normal):
+            return "below-normal"
+        return "failed"
+    except Exception as exc:
+        return "failed: %s" % exc
+
+
 def _setup_dpi(config: dict) -> str:
     """让进程感知 DPI，使"框选坐标"和"截图坐标"落在同一个物理像素空间里。
 
@@ -89,8 +117,9 @@ def _setup_environment() -> str:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     config = _read_early_config()
     _setup_thread_env(config)
+    priority = _lower_process_priority(config)
     # DPI 必须在导入/创建 tkinter 窗口之前设好，所以放在最前面
-    return _setup_dpi(config)
+    return "%s / 优先级 %s" % (_setup_dpi(config), priority)
 
 
 def _setup_logging() -> None:

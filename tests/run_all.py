@@ -24,6 +24,7 @@ MODULES = [
     "test_pipeline",
     "test_style",
     "test_capture",
+    "test_frame",
 ]
 
 
