@@ -1,0 +1,8 @@
+# DDO 聊天翻译助手依赖
+# 安装：pip install -r requirements.txt
+
+Pillow>=9.0            # 截图与图像处理（ImageGrab / ImageTk）
+numpy>=1.21            # RapidOCR 需要
+requests>=2.25         # 调用翻译接口
+rapidocr_onnxruntime>=1.3   # 离线 OCR（自带 PP-OCRv5 模型）
+onnxruntime>=1.16      # OCR 推理引擎

@@ -1,0 +1,464 @@
+"""界面自检：把每个窗口真实创建一遍再关掉，专门抓 UI 接线错误。
+
+用法（需要有图形界面的机器）：
+    python tools/ui_smoke.py
+
+它会顺序做这些事，每一步打印 ok / FAIL：
+    1. 创建主窗口、渲染一条假消息
+    2. 打开并关闭：纠错窗口 / 中译英 / 设置 / 学习中心 / 词典 / 框选预览 / 区域选择器
+    3. 重建术语表、应用设置、更新状态栏
+
+不会联网、不会截图、不会动你的真实配置（会临时备份 config.json 的路径，
+整个流程只读写 data/ 里的文件，和平时使用一样）。
+"""
+from __future__ import annotations
+
+import sys
+import traceback
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+import tkinter as tk                          # noqa: E402
+from tkinter import filedialog, messagebox, simpledialog, ttk   # noqa: E402
+
+RESULTS = []
+
+
+def step(name, function):
+    try:
+        function()
+        RESULTS.append((name, None))
+        print("  ok    %s" % name)
+    except Exception as exc:
+        RESULTS.append((name, exc))
+        print("  FAIL  %s" % name)
+        print("        %s: %s" % (type(exc).__name__, exc))
+        print("        " + traceback.format_exc(limit=3).replace("\n", "\n        "))
+
+
+def silence_dialogs() -> None:
+    """把会弹出来卡住的对话框换成自动返回。"""
+    messagebox.showinfo = lambda *a, **k: "ok"
+    messagebox.showwarning = lambda *a, **k: "ok"
+    messagebox.showerror = lambda *a, **k: "ok"
+    messagebox.askyesno = lambda *a, **k: True
+    filedialog.askopenfilename = lambda *a, **k: ""
+    filedialog.asksaveasfilename = lambda *a, **k: ""
+    simpledialog.askstring = lambda *a, **k: ""
+
+
+def find_widget(root, kind, text=None):
+    """在控件树里找一个控件（用于检查按钮是否真的可见）。"""
+    for child in root.winfo_children():
+        if isinstance(child, kind) and (text is None or str(child.cget("text")) == text):
+            return child
+        found = find_widget(child, kind, text)
+        if found is not None:
+            return found
+    return None
+
+
+def assert_inside(window, widget, label: str) -> None:
+    """确认控件真的在窗口可视范围内（防止被内容挤出窗口）。"""
+    window.update_idletasks()
+    if widget is None:
+        raise AssertionError("找不到「%s」" % label)
+    if not widget.winfo_ismapped():
+        raise AssertionError("「%s」没有显示出来" % label)
+    top = widget.winfo_rooty()
+    bottom = top + widget.winfo_height()
+    win_top = window.winfo_rooty()
+    win_bottom = win_top + window.winfo_height()
+    if bottom > win_bottom + 2 or top < win_top - 2:
+        raise AssertionError("「%s」被挤出窗口：控件 y=%d..%d，窗口 y=%d..%d"
+                             % (label, top, bottom, win_top, win_bottom))
+
+
+def is_dark_color(color) -> bool:
+    """判断一个颜色是否偏暗（比精确匹配十六进制更耐 Tk 的规范化）。"""
+    text = str(color).strip().lstrip("#")
+    if len(text) != 6:
+        return False
+    try:
+        red, green, blue = (int(text[index:index + 2], 16) for index in (0, 2, 4))
+    except Exception:
+        return False
+    return (red + green + blue) / 3.0 < 110
+
+
+def main() -> int:
+    print("=" * 62)
+    print("DDO 聊天翻译助手 · 界面自检")
+    print("=" * 62)
+    silence_dialogs()
+
+    from app.pipeline import DisplayItem
+    from app.ui.cn2en import CnToEnDialog
+    from app.ui.learn import CorrectionDialog, DictionaryDialog, LearningCenterDialog
+    from app.ui.main_window import MainWindow
+    from app.ui.region import RegionPicker, show_preview
+    from app.ui.settings import SettingsDialog
+
+    print("\n[1] 主窗口")
+    holder = {}
+
+    def create_main():
+        app = MainWindow()
+        app.root.withdraw()
+        app.root.update_idletasks()
+        holder["app"] = app
+
+    step("创建主窗口", create_main)
+    app = holder.get("app")
+    if app is None:
+        print("\n主窗口都建不起来，后面的检查没法继续。")
+        return 1
+
+    def pump(times: int = 3) -> None:
+        for _ in range(times):
+            app.root.update()
+            app.root.update_idletasks()
+
+    step("事件循环（轮询/首次提示）", lambda: pump(3))
+
+    def render_chat():
+        app._render(DisplayItem(1, "chat", "小队", "Sckham",
+                                "need heals for shroud on elite",
+                                "需要治疗，幽影堡，精英难度", note="演示"))
+        app._render(DisplayItem(2, "chat", "常规", "Alice",
+                                "omw", "马上到", note="记忆命中"))
+        app._render(DisplayItem(3, "chat", "小队", "Bob",
+                                "test error", "test error", error="接口超时（演示）"))
+        app._render(DisplayItem(4, "system", "小队", "", "Grelik加入了你的队伍",
+                                "Grelik加入了你的队伍", note="系统"))
+        pump(2)
+
+    step("渲染聊天/系统/报错三种消息", render_chat)
+
+    def trim_and_clear():
+        old = app.config.get("max_lines")
+        app.config["max_lines"] = 2
+        app._render(DisplayItem(9, "chat", "小队", "X", "a b c", "甲乙丙"))
+        app.config["max_lines"] = old
+        app.copy_selection()
+        app.clear_display()
+        pump(2)
+
+    step("显示区裁剪 / 复制 / 清空", trim_and_clear)
+
+    step("更新状态栏与统计", lambda: (app.set_status("自检", "ok"), app._update_stats()))
+    step("重建术语表", app.rebuild_glossary)
+    step("应用设置", app.apply_settings)
+    step("切换显示英文原文", app.toggle_original)
+
+    print("\n[2] 各个窗口")
+
+    def open_and_close(factory):
+        window = factory()
+        target = getattr(window, "window", None) or getattr(window, "dialog", None)
+        app.root.update_idletasks()
+        if target is not None:
+            target.destroy()
+        app.root.update_idletasks()
+        return window
+
+    step("纠错窗口", lambda: open_and_close(
+        lambda: CorrectionDialog(app, "need heals", "需要治疗")))
+    step("中译英窗口", lambda: open_and_close(lambda: CnToEnDialog(app)))
+    step("设置窗口", lambda: open_and_close(lambda: SettingsDialog(app)))
+
+    def settings_buttons_visible():
+        dialog = SettingsDialog(app)
+        dialog.window.update_idletasks()
+        # 设置窗口也不该有那个白标题栏（改成自绘深色标题栏）
+        if not dialog.window.overrideredirect():
+            raise AssertionError("设置窗口还是系统标题栏（应为无边框 + 自绘标题栏）")
+        if find_widget(dialog.window, ttk.Button, "✕") is None:
+            raise AssertionError("设置窗口没有自绘的关闭按钮")
+        # 每个分类单独开一个窗口，逐个确认底部按钮在窗口里
+        for title, _desc in SettingsDialog.CATEGORIES:
+            page = dialog.open_category(title)
+            page.update_idletasks()
+            if not page.overrideredirect():
+                raise AssertionError("「%s」页还是系统标题栏" % title)
+            if find_widget(page, ttk.Button, "✕") is None:
+                raise AssertionError("「%s」页没有自绘的关闭按钮" % title)
+            if title == "关于":
+                assert_inside(page, find_widget(page, ttk.Button, "关闭"), "关闭按钮")
+            else:
+                assert_inside(page, find_widget(page, ttk.Button, "保存并关闭"),
+                              "保存并关闭按钮（%s）" % title)
+                assert_inside(page, find_widget(page, ttk.Button, "应用"),
+                              "应用按钮（%s）" % title)
+            page.destroy()
+        dialog.window.destroy()
+
+    step("设置分类各自独立窗口且按钮可见", settings_buttons_visible)
+
+    def appearance_preview_follows_channel_color():
+        """改频道颜色时，外观页的预览必须立刻跟着变。"""
+        dialog = SettingsDialog(app)
+        page = dialog.open_category("外观")
+        page.update_idletasks()
+        tab = dialog.appearance
+        if tab is None:
+            raise AssertionError("外观页没有创建出来")
+        original = tab.channel_vars["小队"].get()      # 记下来，测完还原
+        tab.channel_vars["小队"].set("#ff00ff")
+        page.update_idletasks()
+        actual = str(tab.preview.tag_cget("channel_小队", "foreground")).lower()
+        if actual != "#ff00ff":
+            raise AssertionError("预览里的频道颜色没跟着变（当前 %r）" % actual)
+        dialog.save()
+        page.update_idletasks()
+        actual = str(tab.preview.tag_cget("channel_小队", "foreground")).lower()
+        if actual != "#ff00ff":
+            raise AssertionError("保存后预览颜色又变回去了（当前 %r）" % actual)
+        tab.channel_vars["小队"].set(original)
+        dialog.save()                                   # 把你的原颜色存回去
+        dialog.window.destroy()      # 子窗口会跟着主窗口一起销毁
+
+    step("外观预览跟随频道颜色变化", appearance_preview_follows_channel_color)
+
+    def frameless_and_icon_toolbar():
+        """无边框窗口开关 + 图标按钮开关都要真的生效。"""
+        original_frameless = bool(app.config.get("frameless", False))
+        original_icons = bool(app.config.get("toolbar_icons_only", False))
+
+        app.config["frameless"] = True
+        app.config["toolbar_icons_only"] = True
+        app.apply_settings()
+        app.root.update_idletasks()
+        if not app.root.overrideredirect():
+            raise AssertionError("开了无边框，但 overrideredirect 没有生效")
+        if not app.min_button.winfo_ismapped():
+            raise AssertionError("无边框模式下看不到最小化按钮")
+        if not app.grip.winfo_ismapped():
+            raise AssertionError("无边框模式下看不到右下角缩放角")
+        texts = [str(child.cget("text")) for child in app.actions.winfo_children()]
+        if not texts:
+            raise AssertionError("工具栏按钮没了")
+        if any(len(text.strip()) > 2 for text in texts):
+            raise AssertionError("只显示图标时按钮不该有长文字：%s" % texts)
+
+        app.config["frameless"] = False
+        app.config["toolbar_icons_only"] = original_icons
+        app.apply_settings()
+        app.root.update_idletasks()
+        if app.root.overrideredirect():
+            raise AssertionError("关掉无边框没生效")
+        if app.min_button.winfo_ismapped():
+            raise AssertionError("关掉无边框后最小化按钮还在")
+
+        app.config["frameless"] = original_frameless
+        app.apply_settings()
+
+    step("无边框窗口 + 图标工具栏切换", frameless_and_icon_toolbar)
+
+    def toolbar_and_transparency():
+        """工具条折叠、状态栏开关、两种背景透明模式都要真的生效。"""
+        from app.ui import theme as theme_module
+
+        keys = ("toolbar_collapsed", "show_status_bar", "transparency_mode", "alpha")
+        original = {key: app.config.get(key) for key in keys}
+
+        app.config["toolbar_collapsed"] = True
+        app.apply_settings()
+        app.root.update_idletasks()
+        if app.actions.winfo_ismapped():
+            raise AssertionError("折叠后工具按钮还在显示")
+        if "▸" not in str(app.brand.cget("text")):
+            raise AssertionError("折叠后标题没有提示可展开：%r" % app.brand.cget("text"))
+
+        app.config["toolbar_collapsed"] = False
+        app.apply_settings()
+        app.root.update_idletasks()
+        if not app.actions.winfo_ismapped():
+            raise AssertionError("展开后工具按钮没有显示")
+
+        app.config["show_status_bar"] = False
+        app.apply_settings()
+        app.root.update_idletasks()
+        if app.status_bar.winfo_ismapped():
+            raise AssertionError("关掉状态栏后它还在")
+        app.config["show_status_bar"] = True
+        app.apply_settings()
+        app.root.update_idletasks()
+        if not app.status_bar.winfo_ismapped():
+            raise AssertionError("打开状态栏没生效")
+
+        app.config["transparency_mode"] = "alpha"
+        app.config["alpha"] = "0.8"
+        app.apply_settings()
+        app.root.update_idletasks()
+        if abs(float(app.root.attributes("-alpha")) - 0.8) > 0.03:
+            raise AssertionError("整窗透明度没生效：%s" % app.root.attributes("-alpha"))
+
+        app.config["transparency_mode"] = "key"
+        app.apply_settings()
+        app.root.update_idletasks()
+        key = str(app.root.attributes("-transparentcolor")).lower()
+        if "010203" not in key:
+            raise AssertionError("「只透明背景」没生效（transparentcolor=%r）" % key)
+        if abs(float(app.root.attributes("-alpha")) - 1.0) > 0.03:
+            raise AssertionError("只透明背景时不该还是整窗半透明")
+        if theme_module.KEY_COLOR.lower() not in key:
+            raise AssertionError("颜色键和代码里的常量不一致：%r" % key)
+
+        for key_name, value in original.items():
+            app.config[key_name] = value
+        app.apply_settings()
+
+    step("工具条折叠 / 状态栏 / 背景透明", toolbar_and_transparency)
+
+    def theme_and_toolbar_click():
+        """点折叠按钮要能真的把工具条显示出来；主题要真的被应用（默认暗色）。"""
+        from tkinter import ttk as ttk_module
+
+        from app.ui import theme as theme_module
+
+        original = app.config.get("toolbar_collapsed")
+        app.config["toolbar_collapsed"] = True
+        app.apply_settings()
+        app.root.update_idletasks()
+        if app.actions.winfo_ismapped():
+            raise AssertionError("折叠状态下工具按钮不该显示")
+        app._toggle_toolbar()            # 模拟点标题/▸
+        app.root.update_idletasks()
+        if not app.actions.winfo_ismapped():
+            raise AssertionError("点了标题，工具条没有展开")
+        if "▸" in str(app.brand.cget("text")):
+            raise AssertionError("展开后标题还带着折叠箭头：%r" % app.brand.cget("text"))
+        expanded_width = app.top_frame.winfo_reqwidth()
+        # 图标模式下展开也应该很窄；文字模式（图标+文字）天然更宽，用宽松阈值
+        limit = 420 if app.config.get("toolbar_icons_only", False) else 720
+        if expanded_width > limit:
+            raise AssertionError("展开后工具条太宽（%d px > %d），会限制窗口能缩多小"
+                                 % (expanded_width, limit))
+        monitor_width = app.monitor_button.winfo_reqwidth()
+        if monitor_width > 60:
+            raise AssertionError("监听按钮太宽（%d px），挤占了图标按钮的位置"
+                                 % monitor_width)
+        app._toggle_toolbar()
+        app.root.update_idletasks()
+        if app.actions.winfo_ismapped():
+            raise AssertionError("再点一次没有收起")
+        if "▸" not in str(app.brand.cget("text")):
+            raise AssertionError("折叠后标题没有提示可以展开：%r" % app.brand.cget("text"))
+        collapsed_width = app.top_frame.winfo_reqwidth()
+        if collapsed_width > 260:
+            raise AssertionError("折叠后工具条还是太宽（%d px）" % collapsed_width)
+        if app.frameless.min_w > 240:
+            raise AssertionError("折叠后最小宽度没放宽（%d），窗口还是收不小"
+                                 % app.frameless.min_w)
+        app._toggle_toolbar()            # 再展开，确认最小宽度恢复
+        app.root.update_idletasks()
+        if app.frameless.min_w < 320:
+            raise AssertionError("展开后最小宽度没恢复（%d）" % app.frameless.min_w)
+
+        style = ttk_module.Style(app.root)
+        if style.theme_use() != "clam":
+            raise AssertionError("主题不是 clam（当前 %s），颜色会跟着系统走" % style.theme_use())
+        background = str(style.lookup("TFrame", "background")).lower()
+        if not is_dark_color(background):
+            raise AssertionError("暗色主题没生效：TFrame background=%r" % background)
+
+        # 设置页的可滚动容器是个 tk.Canvas，必须也是暗色，否则看起来"半亮半暗"
+        dialog = SettingsDialog(app)
+        page = dialog.open_category("外观")
+        page.update_idletasks()
+        canvas = find_widget(page, tk.Canvas)
+        if canvas is None:
+            raise AssertionError("设置页里没找到滚动容器")
+        canvas_bg = str(canvas.cget("bg")).lower()
+        if not is_dark_color(canvas_bg):
+            raise AssertionError("设置页滚动区底色不是暗色：%r" % canvas_bg)
+        page.destroy()
+        dialog.window.destroy()
+
+        # 提示窗必须置顶，否则会被置顶的主窗口挡住
+        tooltip = theme_module.Tooltip(app.monitor_button, "提示测试")
+        tooltip._show()
+        app.root.update_idletasks()
+        if tooltip._tip is None:
+            raise AssertionError("提示窗没有弹出来")
+        try:
+            topmost = int(tooltip._tip.attributes("-topmost"))
+        except Exception as exc:
+            raise AssertionError("读不到提示窗的置顶属性：%s" % exc)
+        if topmost != 1:
+            raise AssertionError("提示窗没有置顶（-topmost=%r），会被主窗口挡住" % topmost)
+        tooltip._hide()
+
+        app.config["toolbar_collapsed"] = original
+        app.apply_settings()
+
+    step("主题生效 + 工具栏点开收起", theme_and_toolbar_click)
+
+    def body_color_follows_channel():
+        """正文颜色要跟随频道色：小队的绿、常规的黄，各是各的。"""
+        from app.ui import style as style_module
+
+        if not style_module.element_spec(app.config, "body").get("follow_channel"):
+            raise AssertionError("正文默认应该是「跟随频道颜色」")
+        app._configure_tags()
+        app.root.update_idletasks()
+        colors = app.config.get("channel_colors") or {}
+        squad = str(app.text.tag_cget("body_小队", "foreground")).lower()
+        normal = str(app.text.tag_cget("body_常规", "foreground")).lower()
+        expected_squad = str(colors.get("小队", "")).lower()
+        expected_normal = str(colors.get("常规", "")).lower()
+        if squad != expected_squad:
+            raise AssertionError("小队正文色（%s）没跟上频道色（%s）"
+                                 % (squad, expected_squad))
+        if normal != expected_normal:
+            raise AssertionError("常规正文色（%s）没跟上频道色（%s）"
+                                 % (normal, expected_normal))
+        if squad == normal:
+            raise AssertionError("不同频道的正文色应该不同（都是 %s）" % squad)
+
+    step("正文颜色跟随频道颜色", body_color_follows_channel)
+    step("学习中心", lambda: open_and_close(lambda: LearningCenterDialog(app)))
+    step("词典窗口", lambda: open_and_close(lambda: DictionaryDialog(app)))
+
+    def preview():
+        region = app.config.get("region") or [0, 0, 100, 50]
+        show_preview(app.root, region, None, ["(小队)Alice: hello there", "系统消息"])
+        app.root.update_idletasks()
+        for child in app.root.winfo_children():
+            if isinstance(child, tk.Toplevel):
+                child.destroy()
+
+    step("框选预览窗口", preview)
+
+    def picker():
+        instance = RegionPicker(app.root, None)
+        instance.start()          # 这一步曾经因为属性覆盖方法而报 not callable
+        app.root.update_idletasks()
+        instance._finish(None)
+
+    step("区域选择器（含 start 调用）", picker)
+
+    print("\n[3] 后台流水线状态")
+    step("读取流水线状态", lambda: app.pipeline.status())
+    step("写入缓存与学习库", lambda: (app.pipeline.flush_cache(),
+                                      app.memory.flush(force=True)))
+
+    step("关闭主窗口", app.quit_app)
+
+    failed = [(name, exc) for name, exc in RESULTS if exc is not None]
+    print("\n" + "=" * 62)
+    if failed:
+        print("界面自检：%d/%d 步失败" % (len(failed), len(RESULTS)))
+        for name, exc in failed:
+            print("  - %s: %s" % (name, exc))
+    else:
+        print("界面自检：%d 步全部通过" % len(RESULTS))
+    print("=" * 62)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,174 @@
+"""文本工具：归一化、指纹、URL 保护、脏行判断。全部是纯函数，方便单测。"""
+from __future__ import annotations
+
+import re
+import unicodedata
+from typing import List, Tuple
+
+CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+LATIN_RE = re.compile(r"[A-Za-z]")
+WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'\-]*")
+
+# 常见英文功能词：不进"待学习"候选，避免噪音
+STOPWORDS = {
+    "the", "and", "you", "for", "are", "was", "were", "but", "not", "with", "this",
+    "that", "have", "has", "had", "from", "they", "them", "will", "would", "what",
+    "your", "yours", "just", "can", "cant", "cannot", "get", "got", "all", "out",
+    "one", "two", "now", "how", "why", "when", "where", "there", "here", "who",
+    "dont", "does", "did", "im", "ive", "its", "it's", "youre", "you're", "your",
+    "about", "into", "than", "then", "some", "any", "more", "most", "much", "very",
+    "also", "been", "because", "before", "after", "again", "still", "only", "even",
+    "like", "want", "need", "know", "think", "make", "made", "take", "took", "come",
+    "coming", "going", "gone", "give", "back", "good", "well", "sure", "yeah", "yes",
+    "okay", "ok", "nah", "thanks", "thank", "please", "sorry", "hey", "hello", "hi",
+    "guys", "guy", "man", "dude", "bro", "let", "lets", "let's", "our", "our's",
+    "their", "his", "her", "she", "him", "himself", "myself", "yourself", "me",
+    "my", "we", "us", "he", "as", "at", "be", "by", "do", "go", "if", "in", "is",
+    "it", "of", "on", "or", "so", "to", "up", "no", "an", "am", "new", "old",
+}
+
+
+def normalize(text: str) -> str:
+    """全角转半角 + 去掉控制字符 + 合并空白。"""
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(ch for ch in text if ord(ch) >= 32 or ch in "\n\t")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def fingerprint(text: str) -> str:
+    """去重指纹：只保留字母/数字/汉字，去掉标点、空格、大小写差异。
+
+    注意要保留汉字：玩家有时会打中文，如果指纹把汉字全过滤掉，
+    这些消息会被当成空指纹直接丢弃（旧逻辑就踩过这个坑）。
+    """
+    return re.sub(r"[\W_]+", "", (text or "").lower(), flags=re.UNICODE)
+
+
+def cjk_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    hits = len(CJK_RE.findall(text))
+    return hits / max(len(text.strip()), 1)
+
+
+def has_cjk(text: str) -> bool:
+    return bool(CJK_RE.search(text or ""))
+
+
+def has_latin(text: str) -> bool:
+    return bool(LATIN_RE.search(text or ""))
+
+
+def has_latin_outside_marks(text: str) -> bool:
+    """判断"去掉占位符之后"还剩不剩英文字母。
+
+    {{TERM_0}} 里本身有 TERM 这几个字母，直接用 has_latin 会误判，
+    导致"整句都命中术语表"的情况还是要白跑一次接口。
+    """
+    return bool(LATIN_RE.search(strip_leftover_marks(text or "")))
+
+
+def words(text: str) -> List[str]:
+    return WORD_RE.findall(text or "")
+
+
+def is_noise(text: str) -> bool:
+    """OCR 碎片：没有字母也没有汉字，或者只剩 1 个字符。"""
+    stripped = (text or "").strip()
+    if len(stripped) <= 1:
+        return True
+    return not has_latin(stripped) and not has_cjk(stripped)
+
+
+def clean_body(text: str) -> str:
+    """清理正文：去掉首尾多余标点/包裹符号，但保留内部标点。"""
+    text = normalize(text)
+    text = text.strip(" \t:：-—·.,;，。")
+    text = text.rstrip("([{（【<")
+    return text.strip()
+
+
+def truncate(text: str, limit: int) -> str:
+    if text is None:
+        return ""
+    return text if len(text) <= limit else text[: max(0, limit - 1)] + "…"
+
+
+# --------------------------------------------------------------------------
+# URL 保护：OCR 常把 https:// 识别成 "https: //" 或 "https//"
+# --------------------------------------------------------------------------
+URL_RE = re.compile(r"(?:https?|ftp)\s*:?\s*//\s*\S+|www\s*\.\s*\S+\.\S+", re.IGNORECASE)
+
+
+def protect_urls(text: str, start_index: int = 0) -> Tuple[str, List[str]]:
+    """把 URL 换成 {{URL_n}} 记号，返回 (新文本, url 列表)。"""
+    urls: List[str] = []
+
+    def repl(match: "re.Match[str]") -> str:
+        raw = match.group(0)
+        cleaned = re.sub(r"\s+", "", raw)
+        cleaned = cleaned.replace("://", "://")
+        if cleaned.lower().startswith("www") and "://" not in cleaned:
+            cleaned = "https://" + cleaned
+        urls.append(cleaned)
+        return "{{URL_%d}}" % (start_index + len(urls) - 1)
+
+    return URL_RE.sub(repl, text), urls
+
+
+LEFT_MARK_RE = re.compile(r"\{\{\s*(?:URL|TERM)\s*_?\s*(\d+)\s*\}\}|\[\s*(?:URL|TERM)\s*_?\s*(\d+)\s*\]", re.I)
+URL_MARK_RE = re.compile(r"\{\{\s*URL\s*_?\s*(\d+)\s*\}\}", re.I)
+
+
+def restore_urls(text: str, urls: List[str]) -> str:
+    """把 {{URL_n}} 换回真实链接。"""
+    if not text or not urls:
+        return text or ""
+
+    def repl(match: "re.Match[str]") -> str:
+        index = int(match.group(1))
+        return urls[index] if 0 <= index < len(urls) else ""
+
+    return URL_MARK_RE.sub(repl, text)
+
+
+def find_leftover_marks(text: str) -> List[str]:
+    """找出模型输出里还没被还原、或者多余的记号（用于日志/自检）。"""
+    return [m.group(0) for m in LEFT_MARK_RE.finditer(text or "")]
+
+
+def strip_leftover_marks(text: str) -> str:
+    return LEFT_MARK_RE.sub("", text or "")
+
+
+# --------------------------------------------------------------------------
+# 译文润色：让中文读起来像中文（模型被占位符切开后常留下多余空格）
+# --------------------------------------------------------------------------
+_CJK = r"\u3400-\u4dbf\u4e00-\u9fff"
+_CJK_PUNCT = r"\u3000-\u303f\uff00-\uffef"
+
+
+def polish_translation(text: str) -> str:
+    """润色译文：去汉字间空格、标点全角、清理零碎空格。"""
+    if not text:
+        return ""
+    result = normalize(text)
+
+    # 1) 汉字/中文标点之间的空格全部去掉（中文不用空格分词）
+    result = re.sub(r"(?<=[%s%s])\s+(?=[%s%s])" % (_CJK, _CJK_PUNCT, _CJK, _CJK_PUNCT),
+                    "", result)
+    # 2) 中文标点两侧的空格去掉
+    result = re.sub(r"\s+([，。！？：；、）】》])", r"\1", result)
+    result = re.sub(r"([（【《])\s+", r"\1", result)
+    # 3) 跟在汉字后面的半角标点改成全角（不动 :) 这类表情和网址）
+    result = re.sub(r"(?<=[%s]),(?=\s|[%s]|$)" % (_CJK, _CJK), "，", result)
+    result = re.sub(r"(?<=[%s])\.(?=\s|[%s]|$)" % (_CJK, _CJK), "。", result)
+    result = re.sub(r"(?<=[%s])\?(?=\s|[%s]|$)" % (_CJK, _CJK), "？", result)
+    result = re.sub(r"(?<=[%s])!(?=\s|[%s]|$)" % (_CJK, _CJK), "！", result)
+    result = re.sub(r"(?<=[%s]):(?=\s|[%s]|$)" % (_CJK, _CJK), "：", result)
+    result = re.sub(r"(?<=[%s]);(?=\s|[%s]|$)" % (_CJK, _CJK), "；", result)
+    # 4) 收尾：合并多余空格
+    result = re.sub(r"[ \t]{2,}", " ", result)
+    return result.strip()

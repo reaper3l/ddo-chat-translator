@@ -1,0 +1,77 @@
+"""学习库测试。"""
+import json
+import tempfile
+from pathlib import Path
+
+from app.store import MemoryStore
+
+
+def _store() -> MemoryStore:
+    folder = Path(tempfile.mkdtemp(prefix="ddo_test_"))
+    return MemoryStore(folder / "memory.json")
+
+
+def test_correction_becomes_phrase_rule():
+    store = _store()
+    assert store.phrase("I need heals") is None
+    result = store.learn_correction("I need heals", "我需要治疗", "帮我治疗")
+    assert result["count"] == 1
+    assert store.phrase("i need HEALS!!") == "帮我治疗"
+    assert store.stats["corrections"] == 1
+
+
+def test_repeated_correction_becomes_stable():
+    store = _store()
+    store.learn_correction("gg wp", "打得好", "干得漂亮", min_count=2)
+    assert store.prompt_phrases() == []
+    store.learn_correction("gg wp", "打得好", "干得漂亮", min_count=2)
+    stable = store.prompt_phrases()
+    assert stable and stable[0]["zh"] == "干得漂亮"
+
+
+def test_candidates_and_ignore():
+    store = _store()
+    for _ in range(3):
+        store.observe(["raider", "camp"], "a raider in the camp")
+    candidates = store.candidates(min_count=3)
+    tokens = [item["token"] for item in candidates]
+    assert "raider" in tokens and "camp" in tokens
+    store.ignore_candidate("raider")
+    tokens = [item["token"] for item in store.candidates(min_count=3)]
+    assert "raider" not in tokens
+    assert "camp" in tokens
+
+
+def test_terms_persist_to_disk():
+    folder = Path(tempfile.mkdtemp(prefix="ddo_test_"))
+    path = folder / "memory.json"
+    first = MemoryStore(path)
+    first.set_term("shroud", "幽影堡")
+    assert first.flush(force=True)
+    second = MemoryStore(path)
+    terms = second.term_list()
+    assert terms and terms[0]["text"] == "shroud"
+    assert terms[0]["zh"] == "幽影堡"
+
+
+def test_export_import_roundtrip():
+    source = _store()
+    source.set_term("reaper", "死神难度")
+    source.learn_correction("omw", "马上到", "在路上，马上到")
+    export_path = Path(tempfile.mkdtemp(prefix="ddo_test_")) / "export.json"
+    assert source.export_to(export_path)
+    assert json.loads(export_path.read_text(encoding="utf-8"))["terms"]
+
+    target = _store()
+    added = target.import_from(export_path)
+    assert added["terms"] == 1
+    assert target.term_list()[0]["text"] == "reaper"
+    assert target.phrase("omw") == "在路上，马上到"
+
+
+def test_summary_counts():
+    store = _store()
+    store.set_term("tr", "真轮回")
+    summary = store.summary()
+    assert summary["术语记忆"] == 1
+    assert summary["句子记忆"] == 0

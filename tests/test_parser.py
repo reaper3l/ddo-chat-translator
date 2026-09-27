@@ -1,0 +1,175 @@
+"""聊天行解析测试，用的都是这个项目真实遇到过的 OCR 样例。"""
+from app.parser import ChatParser
+
+
+def _chats(lines):
+    return [event for event in ChatParser().parse(lines) if event.is_chat]
+
+
+def test_single_prefix_chat():
+    events = ChatParser().parse(["(常规)Alice: OMW, running to the quest now"])
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "chat"
+    assert event.channel == "常规"
+    assert event.speaker == "Alice"
+    assert event.text == "OMW, running to the quest now"
+
+
+def test_double_prefix_chat():
+    events = ChatParser().parse(["(小队):[小队] Sckham: Guys, do you play other"])
+    assert events[0].kind == "chat"
+    assert events[0].channel == "小队"
+    assert events[0].speaker == "Sckham"
+    assert events[0].text == "Guys, do you play other"
+
+
+def test_continuation_line_merges():
+    lines = ["(小队):[小队] Sckham: Guys, do you play other", "games on Steam?"]
+    events = ChatParser().parse(lines)
+    assert len(events) == 1
+    assert events[0].text == "Guys, do you play other games on Steam?"
+
+
+def test_two_players_split_into_two_messages():
+    lines = [
+        "(小队):[小队] Favortank: wow",
+        "(小队):[小队] Sckham: If you can add it to wishlist",
+    ]
+    chats = _chats(lines)
+    assert len(chats) == 2
+    assert chats[0].speaker == "Favortank"
+    assert chats[1].speaker == "Sckham"
+    assert chats[1].text == "If you can add it to wishlist"
+
+
+def test_system_message_without_prefix():
+    events = ChatParser().parse(["Grelik加入了你的队伍"])
+    assert events[0].kind == "system"
+    assert events[0].text == "Grelik加入了你的队伍"
+
+
+def test_system_message_with_channel_prefix():
+    events = ChatParser().parse(["(小队) Grelik加入了你的队伍"])
+    assert events[0].kind == "system"
+    assert events[0].channel == "小队"
+
+
+def test_loot_line_is_dropped():
+    events = ChatParser().parse(["[战利品] 你获得了 100 金币"])
+    # 战利品行现在按游戏原样显示（系统消息），不再丢弃
+    assert events[0].kind == "system"
+    assert events[0].channel == "战利品"
+
+
+def test_real_game_line_with_space_between_prefixes():
+    """真实截图里的格式：(小队): [小队] 名字: 正文（两个前缀中间有空格）。"""
+    events = ChatParser().parse(
+        ["(小队): [小队] Sckham: Guys, do you play other games on Steam?"])
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "chat"
+    assert event.channel == "小队"
+    assert event.speaker == "Sckham"
+    assert event.text == "Guys, do you play other games on Steam?"
+    assert event.prefix_text == "(小队): [小队] "
+
+
+def test_real_party_join_line_is_system():
+    events = ChatParser().parse(["(小队): [小队]    Kendra Estleton 加入了你的队伍。"])
+    assert events[0].kind == "system"
+    assert events[0].channel == "小队"
+    assert "加入了你的队伍" in events[0].text
+
+
+def test_real_disconnect_line_is_system():
+    events = ChatParser().parse(["(小队): [小队] Dorqeth 已断线。"])
+    assert events[0].kind == "system"
+    assert events[0].channel == "小队"
+
+
+def test_real_teammate_death_line_is_system():
+    events = ChatParser().parse(["(小队):   你的队友Kendra Estleton已死亡。"])
+    assert events[0].kind == "system"
+    assert events[0].channel == "小队"
+    assert events[0].prefix_text == "(小队): "
+
+
+def test_real_loot_line_is_system_with_channel():
+    events = ChatParser().parse(["(战利品): Dorqeth 将 Jeweled Key 从 宝箱 中取出。"])
+    assert events[0].kind == "system"
+    assert events[0].channel == "战利品"
+
+
+def test_url_on_next_line_merges_into_chat():
+    lines = ["(小队): [小队] Sckham:",
+             "https://store.steampowered.com/app/3615640/Reborn_by_Fire/"]
+    events = ChatParser().parse(lines)
+    assert len(events) == 1
+    assert events[0].kind == "chat"
+    assert events[0].speaker == "Sckham"
+    assert "store.steampowered.com" in events[0].text
+
+
+def test_wrapped_player_line_keeps_prefix_of_first_line():
+    lines = ["(小队): [小队] Sckham: I'm a game programmer developing a game",
+             "that's a mix of DDO and a Souls-like, but single-player."]
+    events = ChatParser().parse(lines)
+    assert len(events) == 1
+    assert events[0].prefix_text == "(小队): [小队] "
+    assert events[0].text.startswith("I'm a game programmer")
+    assert events[0].text.endswith("but single-player")   # 句末标点会被清掉
+
+
+def test_merged_line_is_split_into_messages():
+    """OCR 把两条聊天挤进同一个框（空格还丢了）时要能拆回两条。"""
+    events = ChatParser().parse(
+        ["(小队):[小队]Dorqeth:gi(小队):[小队]Dorqeth:eliteright?"])
+    chats = [event for event in events if event.is_chat]
+    assert len(chats) == 2
+    assert chats[0].text == "gi"
+    assert chats[1].text == "eliteright?"
+    assert chats[0].prefix_text == "(小队):[小队]"
+
+
+def test_merged_system_line_is_split_too():
+    events = ChatParser().parse(["(小队):你现在是队长。   (小队):Dorqeth已断线。"])
+    systems = [event for event in events if event.kind == "system"]
+    assert len(systems) == 2
+    assert systems[0].text.startswith("你现在是队长")
+    assert systems[1].text.startswith("Dorqeth已断线")
+
+
+def test_semicolon_after_channel_is_tolerated():
+    """OCR 有时把 (小队): 读成 (小队);"""
+    events = ChatParser().parse(["(小队);[小队]Dorqeth:gi"])
+    assert events[0].kind == "chat"
+    assert events[0].speaker == "Dorqeth"
+    assert events[0].channel == "小队"
+
+
+def test_missing_open_bracket_is_repaired():
+    chats = _chats(["小队）Sckham: hello there"])
+    assert len(chats) == 1
+    assert chats[0].channel == "小队"
+    assert chats[0].speaker == "Sckham"
+    assert chats[0].text == "hello there"
+
+
+def test_noise_lines_are_dropped():
+    events = ChatParser().parse(["...", "·", "-"])
+    assert events and all(event.kind == "drop" for event in events)
+
+
+def test_speaker_without_prefix_inherits_channel():
+    chats = _chats(["(常规)Alice: hello there", "Bob: hi there"])
+    assert len(chats) == 2
+    assert chats[1].speaker == "Bob"
+    assert chats[1].channel == "常规"
+
+
+def test_ocr_channel_variants():
+    for raw, expected in (("小", "小队"), ("寸队", "小队"), ("①队", "小队"),
+                          ("水队", "小队"), ("公会", "公会"), ("常规", "常规")):
+        events = ChatParser().parse(["( %s )Alice: this is a test line" % raw])
+        assert events[0].channel == expected, (raw, events[0].channel)

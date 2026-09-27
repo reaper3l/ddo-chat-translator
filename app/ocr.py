@@ -1,0 +1,169 @@
+"""OCR 封装：RapidOCR + PP-OCRv5 模型。
+
+图像预处理严格保持"只做 1.2 倍对比度增强"——旧版试过 2 倍对比度 + 2 倍锐化，
+会导致文字块 y 坐标错位、短消息跑到第一行，所以这里不动这个参数。
+"""
+from __future__ import annotations
+
+import statistics
+import threading
+from typing import List, Sequence, Tuple
+
+BoxItem = Tuple[str, list]
+
+
+def _points(box) -> list:
+    if not box:
+        return []
+    if isinstance(box[0], (list, tuple)):
+        return [p for p in box[0] if isinstance(p, (list, tuple)) and len(p) >= 2]
+    if len(box) >= 2:
+        return [box]
+    return []
+
+
+def _center_y(box) -> float:
+    points = _points(box)
+    if not points:
+        return 0.0
+    try:
+        return sum(float(p[1]) for p in points) / len(points)
+    except Exception:
+        return 0.0
+
+
+def _height(box) -> float:
+    points = _points(box)
+    if not points:
+        return 0.0
+    try:
+        ys = [float(p[1]) for p in points]
+        return max(ys) - min(ys)
+    except Exception:
+        return 0.0
+
+
+def _left_x(box) -> float:
+    points = _points(box)
+    if not points:
+        return 0.0
+    try:
+        return min(float(p[0]) for p in points)
+    except Exception:
+        return 0.0
+
+
+def sort_by_position(items: Sequence[BoxItem]) -> List[BoxItem]:
+    """按 y 从上到下、同一行按 x 从左到右排序。"""
+    return sorted(items, key=lambda item: (_center_y(item[1]), _left_x(item[1])))
+
+
+def group_rows(items: Sequence[BoxItem], tol_ratio: float = 0.6) -> List[BoxItem]:
+    """把同一视觉行的碎片拼成一行。
+
+    OCR 有时会把 "(小队):[小队]" 和后面的正文拆成两个框；这里按"中心 y 差在
+    0.6 倍字高以内"归为同一行，再按 x 顺序用空格拼起来。
+    """
+    if not items:
+        return []
+    ordered = sort_by_position(items)
+    heights = [h for h in (_height(item[1]) for item in ordered) if h > 0]
+    tolerance = (statistics.median(heights) if heights else 16.0) * tol_ratio
+
+    rows: List[List[BoxItem]] = []
+    row_centers: List[float] = []
+    for item in ordered:
+        center = _center_y(item[1])
+        for index in range(len(rows) - 1, -1, -1):
+            if abs(center - row_centers[index]) <= tolerance:
+                rows[index].append(item)
+                row_centers[index] = (center + row_centers[index]) / 2
+                break
+        else:
+            rows.append([item])
+            row_centers.append(center)
+
+    result: List[BoxItem] = []
+    for row in rows:
+        row.sort(key=lambda item: _left_x(item[1]))
+        text = " ".join(part for part, _box in row if part).strip()
+        text = text.replace("  ", " ").strip()
+        if text:
+            result.append((text, row[0][1]))
+    return result
+
+
+class OcrEngine:
+    """懒加载 + 可释放的 RapidOCR 包装。"""
+
+    def __init__(self) -> None:
+        self._engine = None
+        self._error = ""
+        self._lock = threading.Lock()
+
+    @property
+    def error(self) -> str:
+        return self._error
+
+    def available(self) -> bool:
+        return self._engine is not None
+
+    def load(self) -> bool:
+        with self._lock:
+            if self._engine is not None:
+                return True
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+            except Exception as exc:
+                self._error = "没装 rapidocr_onnxruntime：%s" % exc
+                return False
+            try:
+                self._engine = RapidOCR(
+                    det_model_name="PP-OCRv5_mobile_det",
+                    rec_model_name="PP-OCRv5_mobile_rec",
+                    cls_model_name="mobile_cls",
+                )
+            except Exception:
+                try:
+                    self._engine = RapidOCR()
+                except Exception as exc:
+                    self._error = "OCR 模型加载失败：%s" % exc
+                    return False
+            self._error = ""
+            return True
+
+    def recognize(self, image, upscale: float = 1.0) -> List[BoxItem]:
+        """返回 [(文本, 框), ...]，已按屏幕位置排好序。
+
+        upscale>1 时先把图放大再识别：聊天框通常只有几百像素宽，字很小，
+        放大后识别质量（尤其是空格、相邻行是否被合并）会明显改善。
+        框坐标会一起放大，但这里只用来排序/分行，不受影响。
+        """
+        if self._engine is None and not self.load():
+            return []
+        try:
+            from PIL import Image, ImageEnhance
+
+            rgb = image.convert("RGB")
+            rgb = ImageEnhance.Contrast(rgb).enhance(1.2)
+            if upscale and abs(upscale - 1.0) > 0.01:
+                rgb = rgb.resize((max(1, int(rgb.width * upscale)),
+                                  max(1, int(rgb.height * upscale))), Image.LANCZOS)
+            result, _elapsed = self._engine(rgb)
+        except Exception as exc:
+            self._error = "识别出错：%s" % exc
+            return []
+
+        items: List[BoxItem] = []
+        for row in result or []:
+            if len(row) < 2:
+                continue
+            text = str(row[1]).strip()
+            if not text:
+                continue
+            items.append((text, row[0]))
+        return sort_by_position(items)
+
+    def close(self) -> None:
+        with self._lock:
+            self._engine = None
