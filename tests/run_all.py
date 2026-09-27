@@ -23,6 +23,7 @@ MODULES = [
     "test_store",
     "test_pipeline",
     "test_style",
+    "test_capture",
 ]
 
 

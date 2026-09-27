@@ -10,19 +10,39 @@ import sys
 import json
 
 
-def _read_dpi_mode() -> str:
-    """在导入 tkinter 之前先读一下 DPI 模式（必须在建窗口前设置才生效）。"""
+def _read_early_config() -> dict:
+    """在导入 tkinter / onnxruntime 之前先把配置读出来（DPI 和线程数都必须早设置）。"""
     try:
         from app import paths
 
         data = json.loads(paths.CONFIG_PATH.read_text(encoding="utf-8"))
-        mode = str(data.get("dpi_mode", "auto")).lower()
-        return mode if mode in ("auto", "legacy") else "auto"
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return "auto"
+        return {}
 
 
-def _setup_dpi() -> str:
+def _read_dpi_mode(config: dict) -> str:
+    mode = str(config.get("dpi_mode", "auto")).lower()
+    return mode if mode in ("auto", "legacy") else "auto"
+
+
+def _setup_thread_env(config: dict) -> None:
+    """限制数学库/推理库的线程与自旋。
+
+    onnxruntime 默认会用满所有核心、并且线程会忙等（spin），监听时就会和游戏抢 CPU，
+    表现就是游戏变卡。这里把线程数压到配置值、并把等待策略改成被动睡眠。
+    必须在导入 onnxruntime 之前设置。
+    """
+    try:
+        threads = str(max(1, min(8, int(config.get("ocr_threads", 2) or 2))))
+    except Exception:
+        threads = "2"
+    for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ.setdefault(key, threads)
+    os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
+
+def _setup_dpi(config: dict) -> str:
     """让进程感知 DPI，使"框选坐标"和"截图坐标"落在同一个物理像素空间里。
 
     以前用 DPI Unaware：Windows 会把 Tk 报告的坐标按显示缩放虚拟化
@@ -37,7 +57,7 @@ def _setup_dpi() -> str:
 
     import ctypes
 
-    if _read_dpi_mode() == "legacy":
+    if _read_dpi_mode(config) == "legacy":
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(0)
             return "legacy(unaware)"
@@ -67,8 +87,10 @@ def _setup_dpi() -> str:
 
 def _setup_environment() -> str:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    config = _read_early_config()
+    _setup_thread_env(config)
     # DPI 必须在导入/创建 tkinter 窗口之前设好，所以放在最前面
-    return _setup_dpi()
+    return _setup_dpi(config)
 
 
 def _setup_logging() -> None:

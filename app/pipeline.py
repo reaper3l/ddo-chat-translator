@@ -81,6 +81,7 @@ class Pipeline:
         self._lock = threading.Lock()
         self._seq = 0
         self._last_frame_signature = ""
+        self._idle_frames = 0
         self._history: Deque[Tuple[str, str]] = deque(maxlen=12)
         self._system_events: Deque[str] = deque(maxlen=6)
         self._cache: Dict[str, str] = {}
@@ -99,6 +100,7 @@ class Pipeline:
             "api_errors": 0,
             "dropped": 0,
             "untranslated": 0,
+            "skipped_frame": 0,
         }
         self._load_cache()
 
@@ -160,6 +162,28 @@ class Pipeline:
         if width > 0 and height > 0:
             self.screen_size = (width, height)
 
+    def _ocr_threads(self) -> int:
+        """OCR 推理线程数（默认 2，别吃满核心，否则游戏会卡）。"""
+        try:
+            return max(0, min(8, int(self.config.get("ocr_threads", 2) or 0)))
+        except Exception:
+            return 2
+
+    def _ensure_ocr(self) -> bool:
+        if self.ocr.available():
+            return True
+        return self.ocr.load(self._ocr_threads())
+
+    def _current_interval(self, idle: bool = False) -> float:
+        """两次截图之间的间隔；一直没新内容时自动放慢（省 CPU）。"""
+        try:
+            base = max(0.3, float(self.config.get("interval_ms", 1200)) / 1000.0)
+        except Exception:
+            base = 1.2
+        if idle and self.config.get("idle_backoff", True) and self._idle_frames >= 5:
+            return min(base * 2.0, 3.0)
+        return base
+
     def reload_glossary(self, glossary: Glossary) -> None:
         self.glossary = glossary
         self.invalidate_cache()
@@ -185,6 +209,7 @@ class Pipeline:
         image = capture.grab(region, self.screen_size)
         if image is None:
             return None, []
+        self._ensure_ocr()
         items = self.ocr.recognize(image, self._upscale_for(image))
         if self.config.get("merge_same_row", True):
             items = group_rows(items)
@@ -235,10 +260,7 @@ class Pipeline:
         self._calibrate_once()
         while not self._stop.is_set():
             started = time.time()
-            try:
-                interval = max(0.3, float(self.config.get("interval_ms", 1200)) / 1000.0)
-            except Exception:
-                interval = 1.2
+            interval = self._current_interval()
 
             region = self.config.get("region")
             if not region:
@@ -252,18 +274,24 @@ class Pipeline:
                 self._stop.wait(1.0)
                 continue
 
-            frame_signature = capture.signature(image)
-            if self.config.get("skip_identical_frame", True) \
-                    and frame_signature == self._last_frame_signature:
-                self._stop.wait(interval)
+            # 先用"缩略图比对"判断画面有没有变化：聊天框多数时间是静止的，
+            # 没变就整帧跳过 OCR（这是监听时最省 CPU 的一招）。
+            frame_signature = capture.frame_signature(image)
+            if self.config.get("skip_identical_frame", True) and frame_signature \
+                    and not capture.frames_differ(frame_signature,
+                                                 self._last_frame_signature):
+                self._idle_frames += 1
+                self.stats["skipped_frame"] = self.stats.get("skipped_frame", 0) + 1
+                self._stop.wait(self._current_interval(idle=True))
                 continue
             self._last_frame_signature = frame_signature
+            self._idle_frames = 0
 
             if not self.ocr.available():
                 if not announced_ocr:
                     self._emit_status("正在加载 OCR 模型（第一次会慢几秒）…", "info")
                     announced_ocr = True
-                if not self.ocr.load():
+                if not self._ensure_ocr():
                     self._emit_status("OCR 加载失败：%s" % self.ocr.error, "error")
                     self._stop.wait(5.0)
                     continue
@@ -360,7 +388,11 @@ class Pipeline:
         except Exception:
             return 1.0
         try:
-            return 2.0 if image is not None and image.width < 700 else 1.0
+            if image is None:
+                return 1.0
+            # 1.5 倍是"识别质量"和"CPU 占用"的折中：2 倍明显更吃 CPU，
+            # 识别质量提升有限（真觉得漏字可以在设置里改回 2）。
+            return 1.5 if image.width < 900 else 1.0
         except Exception:
             return 1.0
 

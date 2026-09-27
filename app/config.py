@@ -18,6 +18,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "merge_same_row": True,        # 同一行被 OCR 切成两段时拼回去
     # OCR 前放大图片：auto=小图自动放大 2 倍（推荐）；也可以填 1 / 2 / 3
     "ocr_upscale": "auto",
+    "ocr_threads": 2,            # OCR 用几个线程（别吃满核心，否则游戏会卡）
+    "idle_backoff": True,        # 一直没新消息时自动放慢截图频率
     # 系统消息（组队/死亡/断线/战利品）默认也显示 —— 和游戏聊天框保持一致
     "show_system": True,
     "show_notes": False,         # 是否在译文后面标注"记忆命中/缓存"等来源

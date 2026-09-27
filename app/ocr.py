@@ -108,7 +108,8 @@ class OcrEngine:
     def available(self) -> bool:
         return self._engine is not None
 
-    def load(self) -> bool:
+    def load(self, threads: int = 0) -> bool:
+        """加载 OCR 模型。threads>0 时限制推理线程数（默认给游戏留出 CPU）。"""
         with self._lock:
             if self._engine is not None:
                 return True
@@ -117,18 +118,27 @@ class OcrEngine:
             except Exception as exc:
                 self._error = "没装 rapidocr_onnxruntime：%s" % exc
                 return False
-            try:
-                self._engine = RapidOCR(
-                    det_model_name="PP-OCRv5_mobile_det",
-                    rec_model_name="PP-OCRv5_mobile_rec",
-                    cls_model_name="mobile_cls",
-                )
-            except Exception:
+            options = {}
+            if threads and threads > 0:
+                options["intra_op_num_threads"] = int(threads)
+                options["inter_op_num_threads"] = 1
+            for attempt in (
+                dict(options, det_model_name="PP-OCRv5_mobile_det",
+                     rec_model_name="PP-OCRv5_mobile_rec",
+                     cls_model_name="mobile_cls"),
+                dict(det_model_name="PP-OCRv5_mobile_det",
+                     rec_model_name="PP-OCRv5_mobile_rec",
+                     cls_model_name="mobile_cls"),
+                dict(options),
+                {},
+            ):
                 try:
-                    self._engine = RapidOCR()
+                    self._engine = RapidOCR(**attempt)
+                    break
                 except Exception as exc:
                     self._error = "OCR 模型加载失败：%s" % exc
-                    return False
+            if self._engine is None:
+                return False
             self._error = ""
             return True
 

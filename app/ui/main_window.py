@@ -205,7 +205,8 @@ class MainWindow:
         theme.Tooltip(self.grip, "拖动这里可以缩放窗口")
         theme.Tooltip(self.stats_label,
                       "待译=排队中　缓存=命中本地缓存　调用=已请求接口次数\n"
-                      "记忆=命中你纠正过的句子　错误=接口失败次数")
+                      "记忆=命中你纠正过的句子　跳过=画面没变省掉的 OCR 次数\n"
+                      "错误=接口失败次数")
 
         # ---------------- 中间：聊天卡片 ----------------
         card = ttk.Frame(self.root, style="Card.TFrame")
@@ -501,9 +502,10 @@ class MainWindow:
         except Exception:
             pass
         self.stats_var.set(
-            "待译 %d · 缓存 %d · 调用 %d · 记忆 %d · 错误 %d"
+            "待译 %d · 缓存 %d · 调用 %d · 记忆 %d · 跳过 %d · 错误 %d"
             % (status["pending"], status["cache_size"], stats.get("api_calls", 0),
-               stats.get("memory_hits", 0), stats.get("api_errors", 0))
+               stats.get("memory_hits", 0), stats.get("skipped_frame", 0),
+               stats.get("api_errors", 0))
         )
 
     # ------------------------------------------------------------------ 渲染

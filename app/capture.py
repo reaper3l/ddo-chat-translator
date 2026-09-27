@@ -200,6 +200,41 @@ def signature(image) -> str:
     """画面指纹，用来跳过"像素完全没变"的帧。"""
     if image is None:
         return ""
+
+
+def frame_signature(image, size: int = 48) -> bytes:
+    """把画面缩成极小的灰度图，用来"便宜地"判断这一帧和上一帧是否一样。
+
+    聊天框大部分时间是静止的；先用这个（约 2300 字节比较）判断有没有变化，
+    没变化就完全跳过 OCR —— 这是监听时最省 CPU 的一招。
+    """
+    if image is None:
+        return b""
+    try:
+        from PIL import Image
+
+        resample = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
+        return image.convert("L").resize((size, size), resample).tobytes()
+    except Exception:
+        return b""
+
+
+def frames_differ(current: bytes, previous: bytes,
+                  tolerance: int = 6, threshold: int = 6) -> bool:
+    """比较两帧指纹：允许 tolerance 级灰阶差异、最多 threshold 个像素点不同。
+
+    这样能忽略光标闪烁、轻微抖动这类"没意义的变化"，但只要有新聊天行
+    （大片像素变化）就会判定为"变了"。
+    """
+    if not current or not previous or len(current) != len(previous):
+        return True
+    diff = 0
+    for now, before in zip(current, previous):
+        if abs(now - before) > tolerance:
+            diff += 1
+            if diff > threshold:
+                return True
+    return False
     try:
         return hashlib.sha1(image.convert("RGB").tobytes()).hexdigest()
     except Exception:
