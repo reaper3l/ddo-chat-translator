@@ -1,6 +1,18 @@
 """外观样式解析测试。"""
 from app.config import DEFAULT_CONFIG
 from app.ui import style
+from app.ui import theme
+
+
+def test_mix_blends_two_colors():
+    """频道小灯"变暗"用的颜色混合（theme.mix）。"""
+    assert theme.mix("#000000", "#ffffff", 0.5) == "#808080"
+    assert theme.mix("#ffffff", "#000000", 0.0) == "#ffffff"
+    assert theme.mix("#ffffff", "#000000", 1.0) == "#000000"
+    assert theme.mix("#ff0000", "#0000ff", 1.0) == "#0000ff"
+    # 比例越界要夹住，不认识的色值原样返回（不能把界面颜色搞崩）
+    assert theme.mix("#ffffff", "#000000", 5) == "#000000"
+    assert theme.mix("red", "#000000", 0.5) == "red"
 
 
 def _config() -> dict:

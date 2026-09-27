@@ -369,11 +369,30 @@ def main() -> int:
         if "▸" not in str(app.brand.cget("text")):
             raise AssertionError("折叠后标题没有提示可以展开：%r" % app.brand.cget("text"))
         collapsed_width = app.top_frame.winfo_reqwidth()
-        if collapsed_width > 260:
-            raise AssertionError("折叠后工具条还是太宽（%d px）" % collapsed_width)
         if app.frameless.min_w > 240:
             raise AssertionError("折叠后最小宽度没放宽（%d），窗口还是收不小"
                                  % app.frameless.min_w)
+        # 折叠后那段留白里放了"频道灯条"，内容自然比过去长；关键是**窗口收小时
+        # 它要自己分级瘦身**，不能把窗口顶开。这里直接验证分级逻辑（窗口在自检里
+        # 是 withdraw 状态，改 geometry 不会真的生效，所以不能靠量窗口宽度）。
+        enabled = app.config.get("channels_enabled") or {}
+        widths = [(stage, app._apply_strip_stage(stage, enabled))
+                  for stage in ("full", "no_stats", "dots", "on_only", "dot_only")]
+        values = [width for _stage, width in widths]
+        if values != sorted(values, reverse=True):
+            raise AssertionError("灯条分级没有越缩越窄：%s" % widths)
+        if values[-1] > 40:
+            raise AssertionError("最紧凑档还是太宽（%d px）：%s" % (values[-1], widths))
+        app._apply_strip_stage("dot_only", enabled)
+        if is_shown(app._channel_chips["小队"][0]):
+            raise AssertionError("最紧凑档不该还显示频道小灯")
+        if not is_shown(app.run_dot):
+            raise AssertionError("最紧凑档必须留着运行状态点")
+        app._apply_strip_stage("full", enabled)
+        app._strip_stage = None
+        app._fit_channel_strip()
+        app.root.update_idletasks()
+        _ = collapsed_width          # 只作参考，不再作为断言
         app._toggle_toolbar()            # 再展开，确认最小宽度恢复
         app.root.update_idletasks()
         if app.frameless.min_w < 320:
@@ -417,6 +436,40 @@ def main() -> int:
         app.apply_settings()
 
     step("主题生效 + 工具栏点开收起", theme_and_toolbar_click)
+
+    def channel_strip():
+        """收起工具条后那块留白：状态点 + 频道小灯，点一下就能开关频道。"""
+        original_collapsed = bool(app.config.get("toolbar_collapsed", True))
+        original_enabled = dict(app.config.get("channels_enabled") or {})
+        app.config["toolbar_collapsed"] = True
+        app._apply_toolbar_collapsed()
+        app.root.update_idletasks()
+        if not is_shown(app.channel_strip):
+            raise AssertionError("收起工具条后没显示频道灯条")
+        if not is_shown(app.run_dot):
+            raise AssertionError("频道灯条里没有运行状态点")
+        chip, tooltip = app._channel_chips["公会"]
+        if not is_shown(chip):
+            raise AssertionError("频道小灯没显示出来")
+        colors = app.config.get("channel_colors") or {}
+        enabled_bg = str(app._channel_chips["小队"][0].cget("bg")).lower()
+        if enabled_bg != str(colors.get("小队", "")).lower():
+            raise AssertionError("开着的频道小灯没有用该频道的颜色：%r" % enabled_bg)
+        before = bool((app.config.get("channels_enabled") or {}).get("公会", True))
+        app._toggle_channel("公会")
+        app.root.update_idletasks()
+        after = bool((app.config.get("channels_enabled") or {}).get("公会", True))
+        if after == before:
+            raise AssertionError("点频道小灯没有切换频道开关")
+        if "点一下" not in str(tooltip.text):
+            raise AssertionError("频道小灯的悬停说明不对：%r" % tooltip.text)
+        app._toggle_channel("公会")                      # 还原
+        app.config["channels_enabled"] = original_enabled
+        app.config["toolbar_collapsed"] = original_collapsed
+        app._apply_toolbar_collapsed()
+        app.root.update_idletasks()
+
+    step("收起后的频道灯条（点一下开关频道）", channel_strip)
 
     def body_color_follows_channel():
         """正文颜色要跟随频道色：小队的绿、常规的黄，各是各的。"""

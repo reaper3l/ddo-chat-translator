@@ -19,7 +19,7 @@ from ..store import MemoryStore
 from .cn2en import CnToEnDialog
 from .learn import CorrectionDialog, DictionaryDialog, LearningCenterDialog
 from .region import RegionPicker, show_preview
-from .settings import SettingsDialog
+from .settings import CHANNELS, SettingsDialog
 from . import style
 from . import theme
 from .frameless import FramelessWindow
@@ -27,6 +27,12 @@ from .frameless import FramelessWindow
 from .. import AUTHOR, HOMEPAGE, __version__          # noqa: E402
 
 APP_TITLE = "DDO 翻译助手 v%s" % __version__
+
+# 频道小灯上的短名：得能一眼区分（"公会"和"公共"不能都写"公"）
+CHANNEL_SHORT = {"小队": "小队", "队伍": "队伍", "公会": "公会", "常规": "常规",
+                 "公共": "公共", "悄悄话": "悄悄", "战利品": "战利"}
+# 频道刚来消息时，小灯亮白框的持续时间（秒）
+CHANNEL_PULSE_SECONDS = 2.0
 
 # 工具栏按钮：(图标, 文字, 方法名, 悬停说明)
 ACTION_BUTTONS = (
@@ -171,6 +177,8 @@ class MainWindow:
         self.actions = actions
         self._build_actions()
 
+        self._build_channel_strip(top)
+
         window_buttons = ttk.Frame(top, style="Surface.TFrame")
         window_buttons.pack(side="right", padx=(2, 6))
         self.quit_button = ttk.Button(window_buttons, text="✕", width=2,
@@ -277,6 +285,155 @@ class MainWindow:
             except Exception:
                 pass
 
+    # ------------------------------------------------- 工具条收起后的那块留白
+    # 收起工具条后，工具条右侧会空出一大片（▶ 到 ✕ 之间）。与其留白，不如放
+    # 三样"折叠状态下最想知道/最想点"的东西：
+    #   ● 运行状态点   —— 绿=正在监听，灰=停止
+    #   频道小灯       —— 颜色就是该频道的颜色（和游戏里一致）；亮=显示中，
+    #                     暗=已隐藏，刚来消息时闪一下白框（一眼看出哪个频道在说话）；
+    #                     **点一下就能开关这个频道**，和 设置 → 监控 里的勾选是同一个开关
+    #   两个关键计数   —— 译了多少条 / 过滤掉多少噪音
+    def _build_channel_strip(self, parent) -> None:
+        strip = tk.Frame(parent, bg=theme.PALETTE["bg"])
+        self.channel_strip = strip
+        self._channel_activity = {}
+        self._channel_chips = {}
+        self._strip_refreshed = 0.0
+        font_family = self.config.get("font_family", "Microsoft YaHei")
+
+        self.run_dot = tk.Label(strip, text="●", bd=0, padx=0, pady=0,
+                                bg=theme.PALETTE["bg"], fg=theme.PALETTE["muted"],
+                                font=("Segoe UI", 10))
+        self.run_dot.pack(side="left", padx=(0, 5))
+        self.run_dot_tooltip = theme.Tooltip(self.run_dot, "运行状态：绿色=正在监听")
+
+        for channel in CHANNELS:
+            chip = tk.Label(strip, text=CHANNEL_SHORT.get(channel, channel[:1]),
+                            bd=0, padx=2, pady=0, cursor="hand2",
+                            font=(font_family, 8))
+            chip.pack(side="left", padx=1)
+            chip.bind("<Button-1>",
+                      lambda _event, name=channel: self._toggle_channel(name))
+            self._channel_chips[channel] = (chip, theme.Tooltip(chip, channel))
+
+        self.strip_stats = tk.Label(strip, text="", bd=0, padx=0, pady=0,
+                                    bg=theme.PALETTE["bg"],
+                                    fg=theme.PALETTE["muted"],
+                                    font=(font_family, 8))
+        self.strip_stats.pack(side="left", padx=(7, 0))
+        self._strip_stage = None
+        self._refresh_channel_strip()
+        # 窗口变窄时逐级"瘦身"：先藏计数，再让小灯变成纯色点，最后只留状态点
+        parent.bind("<Configure>", lambda _e: self._fit_channel_strip(), add="+")
+
+    def _fit_channel_strip(self) -> None:
+        """按当前窗口宽度给留白里的东西分级显示（窄窗口不能被撑爆）。"""
+        try:
+            if not self.channel_strip.winfo_manager():
+                return
+            top_width = self.channel_strip.master.winfo_width()
+            if top_width <= 1:
+                return
+            reserved = (self.brand.winfo_reqwidth() + self.monitor_button.winfo_reqwidth()
+                        + self.window_buttons.winfo_reqwidth() + 50)
+            space = top_width - reserved
+            enabled = self.config.get("channels_enabled", {}) or {}
+            for stage in ("full", "no_stats", "dots", "on_only", "dot_only"):
+                if self._strip_stage == stage:
+                    return
+                if self._apply_strip_stage(stage, enabled) <= space or stage == "dot_only":
+                    self._strip_stage = stage
+                    return
+        except Exception:
+            pass
+
+    def _apply_strip_stage(self, stage: str, enabled: dict) -> int:
+        """套用某一级布局，返回它需要多宽（像素）。
+
+        五级"瘦身"（窗口越窄越往后）：
+            full      计数 + 全部小灯（带字）
+            no_stats  全部小灯（带字）
+            dots      全部小灯（纯色点，没有字）
+            on_only   只留开着的频道（纯色点）
+            dot_only  只剩运行状态点
+        """
+        with_stats = stage == "full"
+        show_chips = stage != "dot_only"
+        compact = stage in ("dots", "on_only", "dot_only")
+        show_only_on = stage == "on_only"
+
+        if with_stats:
+            if not self.strip_stats.winfo_manager():
+                self.strip_stats.pack(side="left", padx=(7, 0))
+        else:
+            self.strip_stats.pack_forget()
+
+        width = self.run_dot.winfo_reqwidth() + 5
+        for channel, (chip, _tooltip) in self._channel_chips.items():
+            wanted = show_chips and ((not show_only_on)
+                                     or bool(enabled.get(channel, True)))
+            if wanted:
+                if not chip.winfo_manager():
+                    chip.pack(side="left", padx=1)
+                chip.configure(
+                    text="" if compact else CHANNEL_SHORT.get(channel, channel[:1]),
+                    width=1 if compact else 0, padx=0 if compact else 2)
+                width += chip.winfo_reqwidth() + 2
+            else:
+                chip.pack_forget()
+        if with_stats:
+            width += self.strip_stats.winfo_reqwidth() + 7
+        return width
+
+    def _refresh_channel_strip(self) -> None:
+        """刷新状态点和频道小灯（颜色、开关状态、刚说话的白色脉冲框）。"""
+        enabled = self.config.get("channels_enabled", {}) or {}
+        colors = self.config.get("channel_colors", {}) or {}
+        font_family = self.config.get("font_family", "Microsoft YaHei")
+        base = theme.PALETTE["bg"]
+        now = time.time()
+        for channel, (chip, tooltip) in self._channel_chips.items():
+            color = colors.get(channel) or theme.PALETTE["muted"]
+            is_on = bool(enabled.get(channel, True))
+            pulsing = (now - self._channel_activity.get(channel, 0.0)) < CHANNEL_PULSE_SECONDS
+            if is_on:
+                background = color
+                foreground = "#101218"           # 亮色块上压深色字，清楚
+            else:
+                background = theme.mix(base, color, 0.16)     # 暗底
+                foreground = theme.mix(color, base, 0.45)     # 淡淡的频道色
+            try:
+                chip.configure(bg=background, fg=foreground, font=(font_family, 8),
+                               highlightthickness=1 if pulsing else 0,
+                               highlightbackground="#ffffff",
+                               highlightcolor="#ffffff")
+            except Exception:
+                pass
+            try:
+                tooltip.text = "%s：%s\n点一下%s这个频道%s" % (
+                    channel, "显示中" if is_on else "已隐藏（不翻译、不显示）",
+                    "隐藏" if is_on else "显示",
+                    "\n（刚才有新消息）" if pulsing else "")
+            except Exception:
+                pass
+
+    def _toggle_channel(self, channel: str) -> None:
+        """点频道小灯 = 开关这个频道（和 设置 → 监控 里的勾选同一个项）。"""
+        enabled = dict(self.config.get("channels_enabled", {}) or {})
+        enabled[channel] = not bool(enabled.get(channel, True))
+        self.config["channels_enabled"] = enabled
+        config_module.save_config(self.config)
+        self._refresh_channel_strip()
+        self._strip_stage = None            # 开关变了 → 重新分级（可能能多显示一点）
+        self._fit_channel_strip()
+        self.set_status("%s：%s" % (channel, "显示" if enabled[channel] else "已隐藏"),
+                        "info")
+
+    def _note_channel_activity(self, channel: str) -> None:
+        """记下"这个频道刚说话"，让小灯闪一下白框。"""
+        if channel:
+            self._channel_activity[channel] = time.time()
+
     def _apply_frameless(self) -> None:
         """按设置切换窗口边框；无边框时显示最小化按钮和右下角缩放角。"""
         enabled = bool(self.config.get("frameless", False))
@@ -318,10 +475,15 @@ class MainWindow:
             if collapsed:
                 self.actions.pack_forget()
                 self.separator.pack_forget()
+                # 收起后空出来的那一段：放状态点 + 频道小灯 + 计数
+                self.channel_strip.pack(side="left", padx=(2, 4))
+                self._strip_stage = None
+                self.channel_strip.after_idle(self._fit_channel_strip)
             else:
                 # 顺序很重要：先把 actions 交给 pack 管理，再用 before= 插分隔线。
                 # 反过来写会报 "window isn't packed"，整条工具条就永远显示不出来。
                 self.actions.pack(side="left")
+                self.channel_strip.pack_forget()
                 try:
                     self.separator.pack(side="left", fill="y", padx=4, pady=6,
                                         before=self.actions)
@@ -348,6 +510,7 @@ class MainWindow:
                 self.root.minsize(*minimum)
             except Exception:
                 pass
+            self._refresh_channel_strip()
         except Exception:
             pass
 
@@ -516,10 +679,25 @@ class MainWindow:
                stats.get("skipped_frame", 0),
                stats.get("api_errors", 0))
         )
+        # 收起时那条留白：状态点 + 两个关键计数（频道小灯另见 _refresh_channel_strip）
+        now = time.time()
+        if hasattr(self, "channel_strip") and now - self._strip_refreshed > 0.25:
+            self._strip_refreshed = now
+            try:
+                self.run_dot.configure(
+                    fg=theme.PALETTE["ok"] if running else theme.PALETTE["muted"])
+                self.strip_stats.configure(
+                    text="译 %d · 滤 %d" % (stats.get("translated", 0),
+                                           stats.get("filtered", 0)))
+            except Exception:
+                pass
+            if self.channel_strip.winfo_manager():
+                self._refresh_channel_strip()
 
     # ------------------------------------------------------------------ 渲染
     def _render(self, item: DisplayItem) -> None:
         self.text.configure(state="normal")
+        self._note_channel_activity(item.channel)
         if self.config.get("show_timestamp", False):
             self.text.insert("end", time.strftime("%H:%M:%S "), "meta")
 
@@ -731,6 +909,7 @@ class MainWindow:
         self._apply_transparency()
         self._configure_tags()
         self._apply_visual_config()
+        self._refresh_channel_strip()
         self.set_status("设置已生效", "ok")
 
     def _apply_visual_config(self) -> None:

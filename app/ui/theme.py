@@ -39,6 +39,29 @@ UI_FONT_SIZE = 11
 KEY_COLOR = "#010203"
 
 
+def mix(color_a: str, color_b: str, ratio: float = 0.5) -> str:
+    """把两个 #rrggbb 颜色按比例混合（ratio=0 取 color_a，1 取 color_b）。
+
+    用来做"变暗"：频道小灯关掉时把频道色和背景色混一混，颜色还认得出，
+    但一眼能看出是关着的。
+    """
+    def parts(color: str):
+        text = str(color).strip().lstrip("#")
+        if len(text) != 6:
+            return None
+        try:
+            return [int(text[i:i + 2], 16) for i in (0, 2, 4)]
+        except ValueError:
+            return None
+
+    first, second = parts(color_a), parts(color_b)
+    if first is None or second is None:
+        return color_a
+    ratio = max(0.0, min(1.0, float(ratio)))
+    mixed = [round(a + (b - a) * ratio) for a, b in zip(first, second)]
+    return "#%02x%02x%02x" % tuple(mixed)
+
+
 def install(root: tk.Misc, config: Optional[dict] = None) -> ttk.Style:
     """给整个窗口装暗色主题（只有这一套）。"""
     config = config or {}
