@@ -210,3 +210,32 @@ def test_display_order_matches_game_order():
     assert rendered[0].speaker == "Dorqeth"
     assert rendered[1].channel == "小队"
     assert rendered[0].prefix == "(小队): [小队] "
+
+
+def test_system_message_is_not_repeated_every_frame():
+    """系统消息会在聊天框里停留很久，不能每帧都重新显示一遍（否则滚屏）。"""
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    frame = [
+        "(小队):你加入了Longdd的队伍",
+        "(小队):[小队] Guihuo: 嗨,马上到",
+    ]
+    # 连续三帧画面基本没变（系统消息还在屏幕上）
+    for _ in range(3):
+        pipeline._handle_lines(frame)
+        pipeline._collect_ready()
+        pipeline._flush_display()
+    pipeline._collect_ready()
+    pipeline._flush_display(force=True)
+
+    rendered = []
+    while not pipeline.ui_queue.empty():
+        event = pipeline.ui_queue.get_nowait()
+        if event.get("type") == "message":
+            rendered.append(event["item"])
+    texts = [item.translated for item in rendered]
+    assert texts.count("你加入了Longdd的队伍") == 1, texts
+    # 上下文中也只应出现一次
+    assert list(pipeline._system_events).count("你加入了Longdd的队伍") == 0  # 还没进上下文
+    pipeline._drain_system_events()
+    assert list(pipeline._system_events).count("你加入了Longdd的队伍") == 1

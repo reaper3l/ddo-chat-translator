@@ -24,7 +24,9 @@ from . import style
 from . import theme
 from .frameless import FramelessWindow
 
-APP_TITLE = "DDO 聊天翻译助手 v3.0"
+from .. import AUTHOR, HOMEPAGE, __version__          # noqa: E402
+
+APP_TITLE = "DDO 翻译助手 v%s" % __version__
 
 # 工具栏按钮：(图标, 文字, 方法名, 悬停说明)
 ACTION_BUTTONS = (

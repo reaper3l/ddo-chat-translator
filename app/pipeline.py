@@ -302,6 +302,11 @@ class Pipeline:
         for event in events:
             if event.kind == KIND_SYSTEM:
                 if event.text:
+                    # 系统消息也要去重：它会在聊天框里停留很久，每帧重新识别一遍
+                    # 就会把同一条消息无限重复地打到屏幕上（也会灌满上下文）。
+                    system_fp = textutil.fingerprint(event.text)
+                    if system_fp and self.deduper.check(system_fp):
+                        continue
                     # 系统消息照样进上下文（翻译时有用），但是否显示听用户的
                     self._system_events_queue.put(event.text)
                     if self.config.get("show_system", True) and (

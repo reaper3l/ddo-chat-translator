@@ -148,12 +148,13 @@ class SettingsDialog:
     def _build_about_tab(self, parent: ttk.Frame) -> None:
         """关于页：版本、引擎、数据位置、快捷键，并可直接打开对应文件。"""
         from .. import paths
+        from .. import AUTHOR, HOMEPAGE, __version__
 
         info = ttk.LabelFrame(parent, text="关于")
         info.pack(fill="x", padx=10, pady=(8, 4))
         for line in (
-            "DDO 翻译助手 v3.0.0",
-            "作者：一键三连　项目主页：https://gitee.com/git55236/ddo-chat-translator",
+            "DDO 翻译助手 v%s" % __version__,
+            "作者：%s　项目主页：%s" % (AUTHOR, HOMEPAGE),
             "翻译引擎：%s" % self.app.pipeline.engine.describe(),
             "",
             "数据目录：%s" % paths.DATA_DIR,

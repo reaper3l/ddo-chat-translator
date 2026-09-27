@@ -8,6 +8,8 @@
 """
 from PyInstaller.utils.hooks import collect_all
 
+APP_NAME = "DDO翻译助手_v3.0.1"      # 改版本时改这里（EXE/COLLECT/瘦身都用它）
+
 datas = []
 binaries = []
 hiddenimports = []
@@ -42,7 +44,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="DDO翻译助手_v3.0.0",
+    name=APP_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -64,7 +66,7 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="DDO翻译助手_v3.0.0",
+    name=APP_NAME,
 )
 
 # --------------------------------------------------------------------------
@@ -76,7 +78,7 @@ import glob
 import os
 import shutil
 
-_internal = os.path.join(DISTPATH, "DDO翻译助手_v3.0.0", "_internal")
+_internal = os.path.join(DISTPATH, APP_NAME, "_internal")
 _patterns = [
     "cv2/*ffmpeg*.dll",                    # OpenCV 的视频解码库（约 29MB）
     "rapidocr_onnxruntime/models/ch_PP-OCRv4_*.onnx",   # 只用 v5，v4 用不到（约 15MB）
