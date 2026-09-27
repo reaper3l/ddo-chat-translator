@@ -26,6 +26,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "capture_backend": "auto",
     # 系统消息（组队/死亡/断线/战利品）默认也显示 —— 和游戏聊天框保持一致
     "show_system": True,
+    "system_whitelist": True,    # 系统消息只显示队伍/生死/队长相关提示，过滤战利品等噪音
     "show_notes": False,         # 是否在译文后面标注"记忆命中/缓存"等来源
     # 翻译
     "engine": "deepseek",        # deepseek | mymemory | offline

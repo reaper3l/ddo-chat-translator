@@ -56,6 +56,11 @@ class Pipeline:
     # 各种错字版本，全部拦掉（这些对理解聊天没有帮助）。
     NOISE_KEYWORDS = ("宝箱信息", "被拾取次数", "掠夺重置", "任务名称", "战利品信息",
                       "宝箱已禁用", "从宝箱中取出")
+    # 只显示"对聊天有用"的系统提示；其余（战利品、宝箱、拾取、各种 OCR 错字版本）
+    # 一律不显示。用白名单是因为 OCR 会把"宝箱"认成"玉相"、"战利品"认成"或利品"，
+    # 黑名单永远列不全。
+    NOTICE_KEYWORDS = ("你加入了", "已加入", "加入了你的队伍", "离开了你的队伍",
+                       "已死亡", "已断线", "现在是队长", "移出了小队", "复活")
 
     def __init__(self, config: dict, memory, glossary: Glossary,
                  ui_queue: "queue.Queue[dict]") -> None:
@@ -442,6 +447,10 @@ class Pipeline:
                     text = event.text
                     # 1) 战利品/宝箱信息面板：对理解聊天没帮助，而且会被反复识别成错字版本
                     if any(keyword in text for keyword in self.NOISE_KEYWORDS):
+                        continue
+                    # 1.5) 白名单：只显示与队伍/生死/队长相关的提示，其余系统消息不显示
+                    if self.config.get("system_whitelist", True) and not any(
+                            keyword in text for keyword in self.NOTICE_KEYWORDS):
                         continue
                     # 2) 模糊去重：OCR 每次都会有细微差异，精确指纹拦不住
                     if any(textutil.similar(text, old) >= 0.82
