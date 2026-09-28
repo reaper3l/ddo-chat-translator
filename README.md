@@ -1,4 +1,4 @@
-# DDO 翻译助手 v3.0.21
+# DDO 翻译助手 v3.0.22
 
 **DDO（龙与地下城 Online）游戏聊天实时翻译助手**
 
@@ -9,13 +9,17 @@
 | --- | --- |
 | 作者 | **一键三连**（Gitee：[git55236](https://gitee.com/git55236)） |
 | 项目地址 | https://gitee.com/git55236/ddo-chat-translator |
-| 当前版本 | v3.0.21（2026-09-28） |
+| 当前版本 | v3.0.22（2026-09-28） |
 | 完整手册 | [使用说明.md](使用说明.md) ← **新手先看这个** |
 | 条款 / 安全 | [版权与使用条款.md](版权与使用条款.md) · [安全与验证说明.md](安全与验证说明.md) |
 | 技术栈 | Python 3.11 + tkinter · OCR: RapidOCR(PP-OCRv5) · 翻译: DeepSeek / MyMemory / 离线术语表 |
 
 ### 更新日志
 
+* **v3.0.22**（2026-09-28）发布密钥加了**备用钥匙**（`RELEASE_PUBKEY` 现在两把：
+  主钥丢失/要轮换时，用备用钥签的包，装了本版及以后版本的用户照样认），
+  并补了两个发版小工具（`tools\sign_release.py fingerprint`、
+  `tools\release_notes.py`）。界面与翻译逻辑没动，装不装都不影响使用。
 * **v3.0.21**（2026-09-28）新增**首次启动的「使用须知与免责声明」**：同意后才能使用
   （不同意 / 关窗口 / 按 Esc 都直接退出程序；同意之前不提示用步骤、不查更新、不截图）。
   条款有版本号，改版会再确认一次；同意时间记在本地配置。设置 → 关于 里可随时回看。
@@ -430,7 +434,7 @@ python tools/ui_smoke.py       # 界面自检：每个窗口真实创建一遍�
 ```
 python -m PyInstaller --noconfirm --clean build.spec
 python tools/verify_build.py                    # 查关键文件 + 跑一次 exe 自检
-DDO翻译助手_v3.0.21.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
+DDO翻译助手_v3.0.22.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
 ```
 
 > 发布发行版时注意：**发行说明（body）别用 curl 的 `--form-string` 传中文** ——
@@ -473,7 +477,7 @@ DDO翻译助手_v3.0.21.exe --self-check             # 用户侧自检（报告�
 
 * **作者**：一键三连
 * **项目主页 / 问题反馈**：https://gitee.com/git55236/ddo-chat-translator
-* **打包版本**：`DDO翻译助手_v3.0.21.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.21.exe`）
+* **打包版本**：`DDO翻译助手_v3.0.22.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.22.exe`）
 * **版权与条款**：著作权归作者所有，默认**保留所有权利**（仓库代码公开可见，
   但公开可见 ≠ 授权）；可用 / 不可用、以及"怎样才算官方版本"见
   [版权与使用条款.md](版权与使用条款.md)。
@@ -505,8 +509,8 @@ DDO翻译助手_v3.0.21.exe --self-check             # 用户侧自检（报告�
   ```
 
 * **自己验证一个包**：对一下发行说明里的 sha256
-  （`Get-FileHash "DDO翻译助手_v3.0.21.zip" -Algorithm SHA256`），
-  或者跑 `python tools\sign_release.py verify "DDO翻译助手_v3.0.21.zip"`。
+  （`Get-FileHash "DDO翻译助手_v3.0.22.zip" -Algorithm SHA256`），
+  或者跑 `python tools\sign_release.py verify "DDO翻译助手_v3.0.22.zip"`。
 * **关于"未知发布者"警告**：Windows 下载时会提示发布者未知 —— 本项目是公益作品，
   作者**不购买**代码签名证书（那是每年付费的），请用上面的 sha256 + 签名核对来确认文件
   没问题：拿得到"√ 签名有效"，就说明这个包确实是作者发的、且一个字都没被改过。
