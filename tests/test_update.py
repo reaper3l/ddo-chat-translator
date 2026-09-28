@@ -68,8 +68,8 @@ def test_notes_brief_truncates():
     assert update.notes_brief("x" * 100, limit=10).endswith("……")
 
 
-def test_prepare_update_writes_updater_script():
-    """造一个假的安装包，验证解压 + 更新脚本内容（不启动它）。"""
+def test_prepare_update_extracts_package_and_builds_command():
+    """造一个假的安装包，验证解压结果和"启动新版"的命令行（不真的启动它）。"""
     tmp = Path(tempfile.mkdtemp(prefix="ddo_upd_test_"))
     package = tmp / "DDO_v9.9.9.zip"
     with zipfile.ZipFile(package, "w") as archive:
@@ -80,21 +80,89 @@ def test_prepare_update_writes_updater_script():
     target.mkdir()
 
     prepared = update.prepare_update(package, "9.9.9", target_dir=target)
-    script = prepared.script
-    text = script.read_text(encoding="mbcs" if __import__("os").name == "nt"
-                            else "utf-8", errors="replace")
-    assert script.exists() and script.suffix == ".cmd"
-    # 路径**不在脚本里**（中文路径靠启动参数传，免得被 cmd 的代码页搞乱）
-    assert str(target) not in text
-    assert "%~1" in text and "%~2" in text and "%~3" in text
-    assert str(prepared.target) == str(target)    # 但调用方拿得到
+    assert str(prepared.target) == str(target)
     assert prepared.exe_name == "DDO翻译助手_v9.9.9.exe"
-    assert text.isascii()                         # 脚本必须全 ASCII
-    assert "/XD data" in text                     # 保留用户数据
-    assert "robocopy" in text.lower()
-    # 解压出来的文件确实在（robocopy 的源目录）
+    # 解压出来的文件确实在（后面新版本就从这个目录把自己复制过去）
     assert (prepared.source / "_internal" / "lib.dll").exists()
     assert prepared.source.name == "DDO翻译助手_v9.9.9"
+    # 启动命令：跑新版本的 exe，告诉它目标目录、临时目录、以及"等我退出"
+    command = update.update_command(prepared)
+    assert command[0] == str(prepared.source / prepared.exe_name)
+    assert command[1] == update.APPLY_FLAG
+    assert command[2] == str(target)
+    assert str(prepared.tmp_dir) in command
+
+
+def test_should_skip_keeps_user_data_and_logs():
+    assert update.should_skip(Path("data") / "config.json") is True
+    assert update.should_skip(Path("data") / "logs" / "app.log") is True
+    assert update.should_skip(Path("ddo_update.log")) is True
+    assert update.should_skip(Path("_internal") / "x.log") is True
+    assert update.should_skip(Path("DDO翻译助手_v9.9.9.exe")) is False
+    assert update.should_skip(Path("_internal") / "python311.dll") is False
+
+
+def test_copy_tree_copies_files_and_keeps_user_data():
+    """覆盖文件时：新版文件要到位、旧版多余文件不用管、**用户数据一个都不能动**。"""
+    tmp = Path(tempfile.mkdtemp(prefix="ddo_copy_test_"))
+    source = tmp / "new"
+    target = tmp / "app"
+    (source / "_internal").mkdir(parents=True)
+    (source / "data").mkdir()
+    (source / "DDO_v9.9.9.exe").write_text("new exe", encoding="utf-8")
+    (source / "_internal" / "python311.dll").write_text("new dll", encoding="utf-8")
+    (source / "data" / "config.json").write_text("{\"from\": \"package\"}",
+                                                 encoding="utf-8")
+    (source / "app.log").write_text("package log", encoding="utf-8")
+    (target / "data").mkdir(parents=True)
+    (target / "data" / "config.json").write_text("{\"mine\": true}", encoding="utf-8")
+    (target / "DDO_v9.9.8.exe").write_text("old exe", encoding="utf-8")
+
+    failures = update.copy_tree(source, target)
+    assert failures == []
+    assert (target / "DDO_v9.9.9.exe").read_text(encoding="utf-8") == "new exe"
+    assert (target / "_internal" / "python311.dll").exists()
+    # 用户数据没被包里的同名文件覆盖，日志也没被复制过来
+    assert (target / "data" / "config.json").read_text(encoding="utf-8") == "{\"mine\": true}"
+    assert not (target / "app.log").exists()
+    assert (target / "DDO_v9.9.8.exe").exists()      # 旧 exe 由 apply_update 负责删
+
+
+def test_copy_tree_reports_failures():
+    """被占用/没权限的文件要如实报出来（apply_update 靠它决定是否重试、是否弹窗）。"""
+    import shutil as shutil_module
+
+    tmp = Path(tempfile.mkdtemp(prefix="ddo_copy_fail_"))
+    source = tmp / "new"
+    target = tmp / "app"
+    source.mkdir()
+    target.mkdir()
+    (source / "ok.dll").write_text("1", encoding="utf-8")
+    (source / "locked.dll").write_text("2", encoding="utf-8")
+    original = shutil_module.copy2
+
+    def fake_copy2(src, dst, *args, **kwargs):
+        if Path(src).name == "locked.dll":
+            raise PermissionError("被占用")
+        return original(src, dst, *args, **kwargs)
+
+    shutil_module.copy2 = fake_copy2
+    try:
+        failures = update.copy_tree(source, target)
+    finally:
+        shutil_module.copy2 = original
+    assert len(failures) == 1 and "locked.dll" in failures[0]
+    assert (target / "ok.dll").exists()               # 其它文件照样复制
+
+
+def test_parse_apply_args_and_wait_for_exit():
+    options = update.parse_apply_args(
+        ["prog.exe", update.APPLY_FLAG, "E:\\app", update.TMP_FLAG, "C:\\tmp",
+         update.PID_FLAG, "1234"])
+    assert options == {"target": "E:\\app", "tmp_dir": "C:\\tmp", "wait_pid": "1234"}
+    assert update.parse_apply_args(["prog.exe"])["target"] == ""
+    # wait_for_exit：PID 为 0 时应该立刻返回，不阻塞、不报错
+    update.wait_for_exit(0)
 
 
 def test_can_self_update_only_for_frozen():

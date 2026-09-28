@@ -109,6 +109,12 @@ def _setup_logging() -> None:
 
 
 def main() -> int:
+    # 自动升级：由旧版拉起来的"新版本 exe"走这条路 —— 只做文件替换，不开界面、
+    # 不设 DPI/优先级，所以必须放在最前面拦下来。
+    if "--apply-update" in sys.argv:
+        from app import update as update_module
+
+        return update_module.apply_update_from_argv(sys.argv)
     dpi_state = _setup_environment()
     _setup_logging()
     logging.info("程序启动，DPI 模式：%s", dpi_state)

@@ -134,7 +134,7 @@ class UpdateDialog:
                     self.queue.put(("progress", (done, total)))
 
                 update_module.download(url, target, progress=progress)
-                self.queue.put(("progress_text", "正在解压并准备更新脚本…"))
+                self.queue.put(("progress_text", "正在解压新版本…"))
                 # 下载完再验一次签名（这次是对着真实文件的 sha256 验，最权威）
                 ok, reason = update_module.verify_package(target, self.info)
                 if not ok and not bool(self.app.config.get("update_allow_unsigned",
@@ -200,11 +200,11 @@ class UpdateDialog:
             pass
 
     def _finish(self, prepared) -> None:
-        """启动更新脚本，然后退出程序（脚本会等我们退出再覆盖文件并重启）。"""
+        """启动解压出来的新版本，然后退出程序（由它覆盖文件并重启）。"""
         try:
             prepared.launch()
         except Exception as exc:
-            messagebox.showwarning("启动更新脚本失败", str(exc), parent=self.window)
+            messagebox.showwarning("启动新版本失败", str(exc), parent=self.window)
             return
         try:
             self.window.destroy()

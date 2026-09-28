@@ -178,10 +178,8 @@ class SettingsDialog:
             "",
             "运行方式：%s" % ("打包版（可以自动升级）" if update_module.can_self_update()
                            else "源码运行（更新请 git pull 或下载发行版）"),
-            "更新来源：%s（自动升级只装用下面这把公钥签过名的安装包）"
-            % HOMEPAGE.split("//")[-1],
-            "签名公钥指纹（可和发行页上贴的核对，对不上就不是官方包）：%s"
-            % (fingerprint or "（未配置）"),
+            "更新来源：%s" % HOMEPAGE.split("//")[-1],
+            "发布签名指纹：%s" % (fingerprint or "（未配置）"),
             "使用须知：%s" % ("已同意（%s）" % disclaimer.accepted_at(self.app.config)
                           if not disclaimer.needs_agreement(self.app.config)
                           else "尚未确认（下次启动会再问一次）"),

@@ -2,9 +2,10 @@
 
 * **查**：读 Gitee 的 `releases/latest` 接口（公开接口，不需要 Token），拿到最新
   版本号和发行说明，和当前 `__version__` 比一比；
-* **升**：下载发行版压缩包 → 解压到临时目录 → 写一个 `update.cmd` → 退出程序 →
-  由那个批处理等几秒、把新文件覆盖到程序目录（**保留 data\\ 用户数据**）→
-  重新启动程序 → 自己删除自己。
+* **升**：下载发行版压缩包 → 解压到临时目录 → 启动"解压出来的新 exe"（带上目标目录）
+  → 旧程序退出 → 新 exe 把文件覆盖到程序目录（**保留 data\\ 用户数据**）→
+  启动程序目录里的新版。整个过程写日志到程序目录的 `ddo_update.log`，
+  失败会弹窗说明并把旧版本重新打开（不再用批处理脚本，见下面 APPLY_FLAG 那段注释）。
 
 只有**打包版 exe**能自动升级；源码运行（`python main.py`）只提示去发行版下载或
 `git pull` —— 直接改源码树太危险，而且用户多半是用 git 管理的。
@@ -20,11 +21,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
@@ -190,43 +193,34 @@ def _find_new_exe(root: Path, version: str) -> Optional[Path]:
     return None
 
 
-# 这个批处理**全部用 ASCII**、而且**不把路径写在文件里** —— 路径是启动时当参数传进来的
-# （%~1 源目录、%~2 程序目录、%~3 新 exe 名、%~4 临时目录）。
-# 为什么要这样：程序目录/文件名带中文（DDO翻译助手_v3.0.20），而 cmd.exe 是用"控制台
-# 代码页"读批处理文件的，把中文路径写进脚本里，换个代码页就全乱（实测 robocopy 直接
-# 报"用法错误"退出，什么都没复制）。参数是进程间用 Unicode 传的，不受代码页影响。
-# 另外也不改代码页（chcp）—— 那样只会让 echo 的中文更像乱码。
-UPDATER_TEMPLATE = """@echo off
-title DDO translator - updating
-echo Updating DDO translator, please wait...
-rem Wait for the app to exit completely: its exe and _internal DLLs are locked while running.
-timeout /t 4 /nobreak >nul
-robocopy "%~1" "%~2" /E /XD data /XF *.log /NFL /NDL /NJH /NJS /NP >nul
-if errorlevel 8 (
-  echo.
-  echo Update failed. Please extract the new package manually over this folder.
-  pause
-  exit /b 1
-)
-rem Remove exe files from older versions (each version has its version in the name).
-for %%f in ("%~2\\*.exe") do if /I not "%%~nxf"=="%~3" del "%%f" >nul 2>nul
-cd /d "%~2"
-start "" "%~2\\%~3"
-cd /d "%TEMP%"
-rmdir /s /q "%~4" >nul 2>nul
-del "%~f0" >nul 2>nul
-"""
+# ---------------------------------------------------------------------- 自更新
+# v3.0.23 起，覆盖文件这件事不再交给批处理脚本，而是**由解压出来的新版本自己干**：
+#
+#   旧版：下载 → 解压 → 写一个 update.cmd → 退出 → 由 cmd / robocopy 覆盖文件 → 启动新版
+#   现在：下载 → 解压 → 启动"临时目录里的新 exe"，带上 `--apply-update <旧目录>`
+#         → 旧版退出 → 新 exe 把文件复制过去 → 启动"程序目录里的新版"
+#
+# 为什么换掉批处理：那段是**哑的** —— 失败时用户看不到任何提示，也没日志可查。
+# 真实案例：升级脚本没生效，用户只看到"程序关了、什么都没发生"，临时目录还留着，
+# 却无从知道卡在哪一步。现在这几步都在 Python 里做，可以逐文件重试、每步写日志
+# （程序目录下的 ddo_update.log）、失败弹窗并**把旧版本重新启动**。
+APPLY_FLAG = "--apply-update"              # 新 exe 用这个参数进入"执行更新"模式
+TMP_FLAG = "--update-tmp"
+PID_FLAG = "--wait-pid"
+UPDATE_LOG_NAME = "ddo_update.log"
+COPY_ATTEMPTS = 4                          # 复制重试次数（旧版刚退出时文件可能还被占用）
+COPY_RETRY_DELAY = 2.0                     # 每次重试之间等几秒
+SKIP_DIR_NAMES = ("data",)                 # 用户数据：配置、学习库、缓存、日志 —— 一律不动
 
 
 @dataclass
 class PreparedUpdate:
-    """解压 + 脚本都准备好了，就等程序退出后启动它。"""
+    """新版本已经解压好，就等程序退出后由它自己把文件覆盖过去。"""
 
-    script: Path
-    source: Path          # 新版本所在目录（robocopy 的源）
+    source: Path          # 新版本所在目录（临时目录里解压出来的那个）
     target: Path          # 程序目录（要被覆盖的那个）
     exe_name: str         # 新版本的 exe 文件名
-    tmp_dir: Path         # 临时目录（脚本最后会删掉）
+    tmp_dir: Path         # 临时目录（下次启动时清掉）
     version: str = ""
 
     def launch(self) -> None:
@@ -235,13 +229,10 @@ class PreparedUpdate:
 
 def prepare_update(package_zip: Path, version: str,
                    target_dir: Optional[Path] = None) -> PreparedUpdate:
-    """解压新版本并写好更新脚本，返回 PreparedUpdate（调用方随后退出程序并启动它）。
+    """解压新版本，返回 PreparedUpdate（调用方随后退出程序，由新版接手覆盖文件）。
 
     目录安排（都在系统临时目录里）：
-        %TEMP%\\ddo_update_xxx\\app\\    解压出来的新版本（robocopy 的源）
-        %TEMP%\\ddo_update_xxx.cmd       更新脚本（故意放在解压目录外面，
-                                          这样才能把解压目录整个删掉）
-    路径不写进脚本，靠启动参数传（见 UPDATER_TEMPLATE 的说明）。
+        %TEMP%\\ddo_update_xxx\\app\\<新版目录>\\   解压出来的新版本
     """
     package_zip = Path(package_zip)
     target = Path(target_dir or app_dir())
@@ -253,24 +244,215 @@ def prepare_update(package_zip: Path, version: str,
     new_exe = _find_new_exe(extract_dir, version)
     if new_exe is None:
         raise RuntimeError("安装包里没找到 exe")
-    script = tmp.with_suffix(".cmd")          # 放在解压目录**外面**
-    script.write_text(UPDATER_TEMPLATE, encoding="ascii")
-    return PreparedUpdate(script=script, source=new_exe.parent, target=target,
+    return PreparedUpdate(source=new_exe.parent, target=target,
                           exe_name=new_exe.name, tmp_dir=tmp, version=version)
 
 
-def launch_updater(prepared: "PreparedUpdate") -> None:
-    """脱离当前进程启动更新脚本（关掉程序后由它接管）。
+def update_command(prepared: "PreparedUpdate") -> List[str]:
+    """启动"新版本 exe"时的完整命令行（单独拿出来方便单测）。
 
-    路径**当参数传**（Unicode 进程参数），不写进 .cmd 文件里 —— 见 UPDATER_TEMPLATE。
+    参数含义：把 `prepared.target`（程序目录）里的旧文件换成自己这一份；
+    同时告诉它旧程序的 PID，等旧程序真的退出再动手。
     """
+    return [str(prepared.source / prepared.exe_name),
+            APPLY_FLAG, str(prepared.target),
+            TMP_FLAG, str(prepared.tmp_dir),
+            PID_FLAG, str(os.getpid())]
+
+
+def launch_updater(prepared: "PreparedUpdate") -> None:
+    """脱离当前进程启动"临时目录里的新 exe"，由它在我们退出后覆盖文件。"""
     flags = 0
     if os.name == "nt":
         flags = 0x00000008 | 0x00000200      # DETACHED_PROCESS | NEW_PROCESS_GROUP
-    subprocess.Popen(["cmd", "/c", str(prepared.script), str(prepared.source),
-                      str(prepared.target), prepared.exe_name,
-                      str(prepared.tmp_dir)],
+    subprocess.Popen(update_command(prepared), cwd=str(prepared.source),
                      close_fds=True, creationflags=flags)
+
+
+# ------------------------------------------------------------------ 执行覆盖
+def should_skip(relative: Path) -> bool:
+    """复制时跳过哪些：用户数据（data\\）、日志、我们自己的更新日志。"""
+    parts = [part.lower() for part in relative.parts]
+    if parts and parts[0] in SKIP_DIR_NAMES:
+        return True
+    if relative.name.lower() == UPDATE_LOG_NAME.lower():
+        return True
+    return relative.suffix.lower() == ".log"
+
+
+def copy_tree(source: Path, target: Path) -> List[str]:
+    """把新版本的文件覆盖到程序目录；返回没成功的相对路径（空列表 = 全部成功）。"""
+    failures: List[str] = []
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        if should_skip(relative):
+            continue
+        destination = target / relative
+        try:
+            if path.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination)
+        except Exception as exc:
+            failures.append("%s（%s）" % (relative, exc))
+    return failures
+
+
+def _log_writer(log_path: Path) -> Callable[[str], None]:
+    """写一行日志（同时打印到标准输出，方便手动跑的时候看）。"""
+    def log(message: str) -> None:
+        line = "%s  %s" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), message)
+        try:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            pass
+        try:
+            print(line)
+        except Exception:
+            pass
+    return log
+
+
+def wait_for_exit(pid: int, timeout: float = 60.0) -> None:
+    """等旧程序退出再动手（Windows 内核等待；不轮询、不依赖第三方库）。"""
+    if not pid or os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x00100000, False, int(pid))   # SYNCHRONIZE
+        if not handle:
+            return                       # 已经退出了（或没权限，那就直接往下走）
+        try:
+            kernel32.WaitForSingleObject(handle, int(max(1.0, timeout) * 1000))
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return
+
+
+def _other_exe(target: Path, keep: str) -> Optional[Path]:
+    """程序目录里除自己以外的 exe（就是上一版）。"""
+    for path in sorted(target.glob("*.exe")):
+        if path.name.lower() != keep.lower():
+            return path
+    return None
+
+
+def _launch(exe: Path, cwd: Optional[Path] = None) -> None:
+    """脱离当前进程启动一个 exe（自己随后退出时它不受影响）。"""
+    flags = 0
+    if os.name == "nt":
+        flags = 0x00000008 | 0x00000200      # DETACHED_PROCESS | NEW_PROCESS_GROUP
+    subprocess.Popen([str(exe)], cwd=str(cwd or exe.parent), close_fds=True,
+                     creationflags=flags)
+
+
+def _notify_failure(target: Path, source: Path, log_path: Path,
+                    failures: List[str]) -> None:
+    """更新失败时：把旧版本重新打开 + 弹窗告诉他怎么手动更新。"""
+    old = _other_exe(target, Path(sys.executable).name)
+    if old is not None:
+        try:
+            _launch(old, target)
+        except Exception:
+            pass
+    lines = ["自动更新没有完成：有 %d 个文件没能替换（常见原因：被杀毒软件拦住，"
+             "或程序还没完全退出）。" % len(failures),
+             "",
+             "原来的版本已经帮你重新打开了，可以继续用。",
+             "",
+             "想手动更新的话：把下面这个文件夹里的内容复制到程序目录",
+             "　新版本：%s" % source,
+             "　程序目录：%s" % target,
+             "　（data 文件夹不要覆盖，那是配置和学习记录）",
+             "",
+             "详细日志：%s" % log_path]
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, "\n".join(lines),
+                                         "DDO 翻译助手 · 更新没成功",
+                                         0x00040000 | 0x00000030)
+    except Exception:
+        pass
+
+
+def apply_update(target_dir, tmp_dir=None, wait_pid: int = 0) -> int:
+    """新版本自己执行更新：等旧版退出 → 覆盖文件 → 启动新版。返回进程退出码。
+
+    只有 `--apply-update` 启动的那份新 exe 会走到这里，不打开界面。
+    """
+    source = Path(sys.executable).resolve().parent
+    target = Path(target_dir)
+    log = _log_writer(target / UPDATE_LOG_NAME)
+    log("=" * 60)
+    log("开始更新：新版 v%s（%s）→ 程序目录 %s" % (__version__, source, target))
+    if wait_pid:
+        log("等待旧版本退出（PID %s）…" % wait_pid)
+        wait_for_exit(int(wait_pid))
+        log("旧版本已退出（或超时，后面会按文件重试）")
+    failures: List[str] = []
+    for attempt in range(1, COPY_ATTEMPTS + 1):
+        failures = copy_tree(source, target)
+        log("第 %d 次复制：%s" % (attempt, "全部成功" if not failures
+                                 else "%d 个文件没成功" % len(failures)))
+        if not failures:
+            break
+        if attempt < COPY_ATTEMPTS:
+            time.sleep(COPY_RETRY_DELAY)
+    if failures:
+        for item in failures[:15]:
+            log("  × %s" % item)
+        log("更新失败：共 %d 个文件没能覆盖" % len(failures))
+        _notify_failure(target, source, target / UPDATE_LOG_NAME, failures)
+        return 1
+    keep = Path(sys.executable).name
+    old = _other_exe(target, keep)
+    if old is not None:
+        try:
+            old.unlink()
+            log("删掉旧版本：%s" % old.name)
+        except Exception as exc:
+            log("旧版本 %s 没能删除（%s）" % (old.name, exc))
+    log("更新完成，启动新版：%s" % keep)
+    try:
+        _launch(target / keep, target)
+    except Exception as exc:
+        log("启动新版失败：%s" % exc)
+        _notify_failure(target, source, target / UPDATE_LOG_NAME, ["启动新版失败"])
+        return 1
+    if tmp_dir:
+        shutil.rmtree(str(tmp_dir), ignore_errors=True)    # 尽力清（自己所在目录删不干净）
+    return 0
+
+
+def parse_apply_args(argv: List[str]) -> dict:
+    """从命令行里取 `--apply-update` / `--update-tmp` / `--wait-pid` 的值。"""
+    def value(flag: str, default: str = "") -> str:
+        if flag in argv:
+            index = argv.index(flag)
+            if index + 1 < len(argv):
+                return str(argv[index + 1])
+        return default
+    return {"target": value(APPLY_FLAG), "tmp_dir": value(TMP_FLAG),
+            "wait_pid": value(PID_FLAG, "0")}
+
+
+def apply_update_from_argv(argv: List[str]) -> int:
+    """`--apply-update` 的入口（main.py 一开始就拦下来）。"""
+    options = parse_apply_args(argv)
+    if not options["target"]:
+        return 1
+    try:
+        wait_pid = int(options["wait_pid"] or 0)
+    except (TypeError, ValueError):
+        wait_pid = 0
+    return apply_update(options["target"], tmp_dir=options["tmp_dir"] or None,
+                        wait_pid=wait_pid)
 
 
 def open_page(url: str) -> bool:
@@ -427,11 +609,11 @@ def verify_package(package: Path, info: "UpdateInfo",
 
 
 def cleanup_leftovers() -> None:
-    """清掉升级时留在临时目录里的脚本和文件。
+    """清掉升级时留在临时目录里的东西（解压出来的新版本、旧版留下的脚本）。
 
-    更新脚本跑完会尽力删自己，但**正在运行的 .cmd 删不掉**（Windows 会拒绝），
-    所以每次程序启动时顺手把 `%TEMP%\\ddo_update_*` 清一遍。
-    脚本是先复制完文件、再启动新程序，所以新程序这时删它是安全的。
+    新版本自己删不掉自己所在的目录（文件被占用），所以要等**下一次启动**时顺手清：
+    那时候新程序已经在程序目录里跑，临时目录没人用了。旧版本（≤ v3.0.22）留下的
+    `ddo_update_*.cmd` 也在这里一起清掉。
     """
     try:
         temp = Path(tempfile.gettempdir())
