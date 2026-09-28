@@ -115,6 +115,12 @@ def main() -> int:
     print("=" * 62)
     silence_dialogs()
 
+    # 自检会真的创建/关闭窗口，可能把窗口位置写回配置 —— 先备份，结束时还原，
+    # 保证自检过程不会改动用户的任何设置。
+    from app import paths as paths_module
+
+    config_backup = paths_module.read_json(paths_module.CONFIG_PATH, None)
+
     from app.pipeline import DisplayItem
     from app.ui.cn2en import CnToEnDialog
     from app.ui.learn import CorrectionDialog, DictionaryDialog, LearningCenterDialog
@@ -562,6 +568,9 @@ def main() -> int:
                                       app.memory.flush(force=True)))
 
     step("关闭主窗口", app.quit_app)
+
+    if config_backup is not None:                  # 还原配置，自检不留痕迹
+        paths_module.write_json(paths_module.CONFIG_PATH, config_backup)
 
     failed = [(name, exc) for name, exc in RESULTS if exc is not None]
     print("\n" + "=" * 62)

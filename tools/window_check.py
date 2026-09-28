@@ -29,6 +29,29 @@ from app.ui.main_window import MainWindow   # noqa: E402
 RESULTS = []
 
 
+def _config_snapshot():
+    """自检会创建真实窗口，关窗口时程序可能把窗口位置写回配置 —— 先备份再还原，
+    保证自检不留下任何痕迹。"""
+    from app import paths
+
+    try:
+        return paths.read_json(paths.CONFIG_PATH, None), paths.CONFIG_PATH
+    except Exception:
+        return None, None
+
+
+def _config_restore(snapshot) -> None:
+    data, path = snapshot
+    if data is None or path is None:
+        return
+    from app import paths
+
+    try:
+        paths.write_json(path, data)
+    except Exception:
+        pass
+
+
 def pump(app, seconds: float) -> None:
     end = time.time() + seconds
     while time.time() < end:
@@ -48,6 +71,7 @@ def main() -> int:
     print("=" * 62)
 
     app = MainWindow()
+    snapshot = _config_snapshot()
     app.root.deiconify()            # 真实使用时主窗口是显示的
     app.root.geometry("+40+40")
     app.root.update()
@@ -155,6 +179,7 @@ def main() -> int:
         app.quit_app()
     except Exception:
         pass
+    _config_restore(snapshot)
 
     failed = [name for name, ok in RESULTS if not ok]
     print("\n" + "=" * 62)
