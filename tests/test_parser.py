@@ -252,3 +252,70 @@ def test_normal_mention_of_teammate_is_not_split():
     assert [event.text for event in chats] == ["my teanmate is afk, lets wait"]
     chats = _chats(["(小队):[小队]Guihuo: 我的队友在挂机"])
     assert [event.text for event in chats] == ["我的队友在挂机"]
+
+
+# --------------------------------------------------------------- 悄悄话（私聊）
+# 游戏里的悄悄话是另一套格式（实测截图）：
+#     (私聊): 你对 Rockok说，da lao shui jiao le ..     ← 我发给对方
+#     (私聊): Rockok告诉你: o na jiu shui jiao ba        ← 对方发给我
+# 两种都不是 "名字:" 开头，以前整条被当成系统消息、**不翻译**。
+
+def test_whisper_incoming_is_chat():
+    events = ChatParser().parse(["(私聊): Rockok告诉你: o na jiu shui jiao ba"])
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "chat"
+    assert event.channel == "悄悄话"
+    assert event.speaker == "Rockok告诉你"      # 主语照游戏原样，显示才 1:1
+    assert event.text == "o na jiu shui jiao ba"
+
+
+def test_whisper_outgoing_is_chat():
+    events = ChatParser().parse(["(私聊): 你对 Rockok说，da lao shui jiao le .."])
+    assert len(events) == 1
+    assert events[0].kind == "chat"
+    assert events[0].channel == "悄悄话"
+    assert events[0].speaker == "你对 Rockok说"
+    assert events[0].text == "da lao shui jiao le"
+
+
+def test_whisper_without_prefix_still_recognized():
+    """OCR 把 "(私聊): " 整个吃掉时也要认得出来 —— 这个格式本身能自证。"""
+    events = ChatParser().parse(["Rockok告诉你: need heals for shroud"])
+    assert len(events) == 1
+    assert events[0].kind == "chat"
+    assert events[0].channel == "悄悄话"
+    assert events[0].text == "need heals for shroud"
+
+
+def test_whisper_ocr_junk_and_two_word_names():
+    # 等级/图标被 OCR 读成单个字母 → 按老规矩当杂质丢掉（和普通聊天一致）
+    incoming = ChatParser().parse(["(私聊): V Warzar告诉你: in"])[0]
+    assert incoming.speaker == "Warzar告诉你"
+    # 名字里带空格（陪宠/委任名）照样认得出来
+    two_words = ChatParser().parse(["(私聊): 你对 Kendra Estleton说，hi"])[0]
+    assert two_words.speaker == "你对 Kendra Estleton说"
+    assert two_words.text == "hi"
+
+
+def test_whisper_body_continuation_merges():
+    """悄悄话正文被 OCR 折到下一行时要接回去。"""
+    events = ChatParser().parse(["(私聊): Rockok告诉你:", "we need a healer"])
+    chats = [event for event in events if event.is_chat]
+    assert len(chats) == 1
+    assert chats[0].text == "we need a healer"
+
+
+def test_whisper_chinese_body_is_kept():
+    events = ChatParser().parse(["(私聊): Rockok告诉你: 你好，在吗"])
+    assert events[0].kind == "chat"
+    assert events[0].channel == "悄悄话"
+    assert "你好" in events[0].text
+
+
+def test_normal_channels_not_affected_by_whisper_rules():
+    """普通频道不能被悄悄话规则抢走。"""
+    chats = _chats(["(小队):[小队]Guihuo: xie xie da lao!",
+                    "(常规)Alice: OMW"])
+    assert [event.channel for event in chats] == ["小队", "常规"]
+    assert [event.speaker for event in chats] == ["Guihuo", "Alice"]

@@ -102,6 +102,20 @@ LABEL_SPLIT_RE = re.compile(
 # 会被 SPEAKER_RE 误当成"玩家名: 正文"，所以要先识别出来当续行处理。
 URL_START_RE = re.compile(r"^\s*(?:https?|ftp|www)\b", re.IGNORECASE)
 
+# 悄悄话（私聊）是**另一套格式**：没有 "[频道] 名字: 正文"，而是把动词写进行里了。
+# 真实截图（中文客户端）：
+#     (私聊): 你对 Rockok说，da lao shui jiao le ..      ← 我发给对方
+#     (私聊): Rockok告诉你: o na jiu shui jiao ba         ← 对方发给我
+# 两种都不是 "名字:" 开头，所以以前被当成系统消息、不翻译 —— 现在单独认。
+# 名字允许带空格（Kendra Estleton）；前面允许极短 OCR 杂质（规矩同 _split_speaker）。
+WHISPER_NAME = r"[A-Za-z][A-Za-z0-9_'\-\. ]{0,23}?"
+WHISPER_IN_RE = re.compile(
+    r"^(?P<junk>.{0,%d}?)(?P<name>%s)\s*告诉你\s*[:：]?\s*(?P<body>.*)$"
+    % (NAME_JUNK_LIMIT, WHISPER_NAME))
+WHISPER_OUT_RE = re.compile(
+    r"^(?P<junk>.{0,%d}?)你对\s*(?P<name>%s)\s*说\s*[:：，,、]?\s*(?P<body>.*)$"
+    % (NAME_JUNK_LIMIT, WHISPER_NAME))
+
 
 @dataclass
 class Event:
@@ -215,6 +229,33 @@ def _split_speaker(rest: str) -> Tuple[str, str]:
 def _clean_chat_body(body: str) -> str:
     """清理玩家正文（去掉首尾垃圾，并还原"整条被贴两遍"的重复）。"""
     return textutil.collapse_doubled(textutil.clean_body(body))
+
+
+def _split_whisper(rest: str) -> Optional[Tuple[str, str]]:
+    """识别悄悄话（私聊）行，返回 (主语, 消息正文)；不是悄悄话返回 None。
+
+    主语**照游戏里的写法**留着（"Rockok告诉你" / "你对 Rockok说"），显示时就成了
+    `(私聊): Rockok告诉你: 译文` —— 和游戏那一行一模一样，只有消息被翻译过。
+    """
+    for pattern, outgoing in ((WHISPER_OUT_RE, True), (WHISPER_IN_RE, False)):
+        match = pattern.match(rest)
+        if not match:
+            continue
+        junk = match.group("junk") or ""
+        if junk and not _is_junk_prefix(junk):
+            continue
+        name = match.group("name").strip()
+        if not name:
+            continue
+        # OCR 常把等级/图标读成一个字母粘在名字前（"[小队]V Warzar:" → "Warzar"）。
+        # 悄悄话按同一规矩处理：名字的第一段只有一个字母就当杂质扔掉。
+        parts = name.split()
+        if len(parts) >= 2 and len(parts[0]) == 1:
+            name = " ".join(parts[1:])
+        body = match.group("body").strip()
+        subject = "你对 %s说" % name if outgoing else "%s告诉你" % name
+        return subject, body
+    return None
 
 
 def _split_trailing_notice(body: str) -> Tuple[str, str]:
@@ -342,6 +383,20 @@ class ChatParser:
 
         # ---- 有频道前缀 ----
         if spans:
+            # 悄悄话（私聊）先单独认：它的正文格式和别人不一样（见 _split_whisper）
+            whisper = _split_whisper(rest)
+            if whisper is not None:
+                subject, whisper_body = whisper
+                clean, notice = _split_trailing_notice(_clean_chat_body(whisper_body))
+                event = Event(KIND_CHAT, clean,
+                              channel or normalize_channel("私聊", self.aliases),
+                              subject, raw_line, [s[2] for s in spans], prefix_text)
+                events.append(event)
+                if notice:
+                    events.append(Event(KIND_SYSTEM, notice, event.channel, "", raw_line,
+                                        [s[2] for s in spans], prefix_text))
+                return event
+
             name, body = _split_speaker(rest)
 
             # 有 "玩家名:" → 玩家发言（正文可能为空，等下一行的续行接上）
@@ -378,6 +433,19 @@ class ChatParser:
             return last_chat
 
         if textutil.has_cjk(line):
+            # 悄悄话丢前缀也有可能（OCR 把 "(私聊): " 整个吃掉），格式本身能自证身份
+            whisper = _split_whisper(line)
+            if whisper is not None:
+                subject, whisper_body = whisper
+                clean, notice = _split_trailing_notice(_clean_chat_body(whisper_body))
+                event = Event(KIND_CHAT, clean,
+                              normalize_channel("私聊", self.aliases)
+                              or (last_chat.channel if last_chat is not None else ""),
+                              subject, raw_line)
+                events.append(event)
+                if notice:
+                    events.append(Event(KIND_SYSTEM, notice, event.channel, "", raw_line))
+                return event
             events.append(Event(KIND_SYSTEM, textutil.clean_body(line), "", "", raw_line))
             return None
 

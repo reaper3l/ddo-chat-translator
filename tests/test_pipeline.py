@@ -326,6 +326,29 @@ def test_loot_line_never_reaches_the_translator():
     pipeline = make_pipeline(engine)
     pipeline._handle_lines(["(聊天): 战利品:你舟5unsone从玉相取正"])
     assert _drain_jobs(pipeline) == []
+
+
+def test_whisper_reaches_translator():
+    """悄悄话要当玩家发言送翻译（以前被当成系统消息，直接不翻）。"""
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(["(私聊): Rockok告诉你: need heals for shroud"])
+    job = pipeline._jobs.get_nowait()
+    assert job.channel == "悄悄话"
+    assert job.speaker == "Rockok告诉你"
+    assert job.source == "need heals for shroud"
+    item = pipeline._process(job)
+    assert "需要治疗" in item.translated        # 术语表照样生效
+
+
+def test_whisper_outgoing_reaches_translator():
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(["(私聊): 你对 Rockok说，omw"])
+    job = pipeline._jobs.get_nowait()
+    assert job.channel == "悄悄话"
+    assert job.speaker == "你对 Rockok说"
+    assert job.source == "omw"
     while not pipeline._jobs.empty():
         pipeline._jobs.get_nowait()
     pipeline._collect_ready()
