@@ -17,6 +17,11 @@ from __future__ import annotations
 from typing import Dict, List
 
 # 默认频道表（按游戏里实际的频道；**没有"队伍"** —— 游戏里不存在这个频道）
+# 字段说明：
+#   name    频道名（要和游戏里显示的一致）
+#   color   颜色（翻译窗口里的前缀/正文色 + 工具条收起时那盏小灯的颜色）
+#   enabled 这个频道显不显示、翻不翻译
+#   strip   工具条收起时，要不要在这一排小灯里显示它（用户可自定义，默认都显示）
 DEFAULT_CHANNELS: List[Dict[str, object]] = [
     {"name": "小队", "color": "#22bb2e", "enabled": True},
     {"name": "公会", "color": "#79c0ff", "enabled": True},
@@ -48,7 +53,9 @@ def _clean_entry(entry) -> Dict[str, object] | None:
     if not name:
         return None
     color = str(entry.get("color") or "").strip() or FALLBACK_COLOR
-    return {"name": name, "color": color, "enabled": bool(entry.get("enabled", True))}
+    return {"name": name, "color": color,
+            "enabled": bool(entry.get("enabled", True)),
+            "strip": bool(entry.get("strip", True))}
 
 
 def effective(config: dict) -> List[Dict[str, object]]:
@@ -70,6 +77,7 @@ def effective(config: dict) -> List[Dict[str, object]]:
                 "name": name,
                 "color": str(colors.get(name) or entry["color"]),
                 "enabled": bool(enabled.get(name, entry["enabled"])),
+                "strip": True,
             })
         # 旧配置里额外自定义过、且不在默认表里的频道也保留下来
         known = {item["name"] for item in items}
@@ -78,7 +86,7 @@ def effective(config: dict) -> List[Dict[str, object]]:
             if not name or name in known or name in DROPPED_CHANNELS:
                 continue
             items.append({"name": name, "color": str(color) or FALLBACK_COLOR,
-                          "enabled": bool(enabled.get(name, True))})
+                          "enabled": bool(enabled.get(name, True)), "strip": True})
 
     sync(config, items)
     return items
@@ -125,6 +133,12 @@ def enabled_map(config: dict) -> Dict[str, bool]:
 
 def color_map(config: dict) -> Dict[str, str]:
     return {str(entry["name"]): str(entry["color"]) for entry in effective(config)}
+
+
+def strip_map(config: dict) -> Dict[str, bool]:
+    """哪些频道要出现在工具条收起时的那排小灯里（用户可自己选）。"""
+    return {str(entry["name"]): bool(entry.get("strip", True))
+            for entry in effective(config)}
 
 
 def alias_table(config: dict) -> Dict[str, str]:

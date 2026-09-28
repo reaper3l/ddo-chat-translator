@@ -177,14 +177,16 @@ def install(root: tk.Misc, config: Optional[dict] = None) -> ttk.Style:
               background=[("pressed", "#d32f2f"), ("active", "#ff6b68")])
     # 窗口按钮（— 最小化 / ✕ 关闭）：平时和工具条同底色、低调；悬停才亮起来，
     # 关闭键悬停变红 —— 这是大家都习惯的暗示，也和暗色主题搭。
+    # 字号只比正文大 1 号、内边距小，按钮就小巧一些（用户反馈要调小）。
+    window_font = (family, size + 1)
     style.configure("Window.TButton", background=p["surface"], foreground=p["muted"],
-                    padding=(7, 2), borderwidth=0, focusthickness=0, font=icon_font)
+                    padding=(4, 1), borderwidth=0, focusthickness=0, font=window_font)
     style.map("Window.TButton",
               background=[("pressed", p["surface_press"]), ("active", p["surface_hi"])],
               foreground=[("pressed", p["text"]), ("active", p["text"])])
     style.configure("WindowClose.TButton", background=p["surface"],
-                    foreground=p["muted"], padding=(7, 2), borderwidth=0,
-                    focusthickness=0, font=icon_font)
+                    foreground=p["muted"], padding=(4, 1), borderwidth=0,
+                    focusthickness=0, font=window_font)
     style.map("WindowClose.TButton",
               background=[("pressed", "#d32f2f"), ("active", p["danger"])],
               foreground=[("pressed", "#ffffff"), ("active", "#ffffff")])
@@ -275,15 +277,24 @@ def install(root: tk.Misc, config: Optional[dict] = None) -> ttk.Style:
 class Tooltip:
     """鼠标悬停提示（LunaTranslator 的按钮都带提示，我们照做）。"""
 
-    def __init__(self, widget: tk.Misc, text: str, delay: int = 350) -> None:
+    def __init__(self, widget: tk.Misc, text: str, delay: int = 350,
+                 hide_after: int = 4000) -> None:
         self.widget = widget
         self.text = text
         self.delay = delay
+        # 悬停提示到点自动收掉：鼠标停着不动、或者点回游戏时，提示不该永远挂在屏幕上
+        self.hide_after = hide_after
         self._tip = None
         self._job = None
+        self._hide_job = None
         widget.bind("<Enter>", self._schedule, add="+")
         widget.bind("<Leave>", self._hide, add="+")
         widget.bind("<ButtonPress>", self._hide, add="+")
+        # 窗口失去焦点（最常见的：点回游戏）也要收掉
+        try:
+            widget.winfo_toplevel().bind("<FocusOut>", self._hide, add="+")
+        except Exception:
+            pass
 
     def _schedule(self, _event=None) -> None:
         self._cancel()
@@ -299,6 +310,14 @@ class Tooltip:
             except Exception:
                 pass
             self._job = None
+
+    def _cancel_hide(self) -> None:
+        if self._hide_job is not None:
+            try:
+                self.widget.after_cancel(self._hide_job)
+            except Exception:
+                pass
+            self._hide_job = None
 
     def _show(self) -> None:
         if self._tip is not None or not self.text:
@@ -329,11 +348,16 @@ class Tooltip:
             except Exception:
                 pass
             self._tip = tip
+            try:
+                self._hide_job = tip.after(self.hide_after, self._hide)
+            except Exception:
+                self._hide_job = None
         except Exception:
             self._tip = None
 
     def _hide(self, _event=None) -> None:
         self._cancel()
+        self._cancel_hide()
         if self._tip is not None:
             try:
                 self._tip.destroy()

@@ -83,6 +83,26 @@ def test_short_name_trims_long_names():
     assert channels.short_name("悄悄话频道") == "悄悄"
 
 
+def test_strip_flag_defaults_to_showing_every_lamp():
+    """默认所有频道都在工具条那排小灯里；用户可以逐项关掉（strip=False）。"""
+    config = {}
+    items = channels.effective(config)
+    assert all(bool(item.get("strip", True)) for item in items)
+    assert all(channels.strip_map(config).values())
+
+
+def test_strip_map_reflects_user_choice():
+    config = {"channels": [
+        {"name": "小队", "color": "#22bb2e", "enabled": True, "strip": True},
+        {"name": "公会", "color": "#79c0ff", "enabled": True, "strip": False},
+    ]}
+    mapping = channels.strip_map(config)
+    assert mapping["小队"] is True
+    assert mapping["公会"] is False
+    # 关掉小灯不影响"要不要翻译这个频道"
+    assert channels.enabled_map(config)["公会"] is True
+
+
 def test_pipeline_only_shows_configured_channels():
     """关掉的频道不显示；认不出来的频道不隐藏（fail-open，别让更新后的聊天消失）。"""
     from app.pipeline import Pipeline

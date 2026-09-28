@@ -175,6 +175,30 @@ def main() -> int:
           "按钮 %d px，灯条 %d px" % (app.actions_holder.winfo_width(),
                                      app.strip_holder.winfo_width()))
 
+    # ---------------- 悬停提示不能一直挂着 ----------------
+    from app.ui import theme as theme_module
+
+    auto = theme_module.Tooltip(app.monitor_button, "提示自动消失测试",
+                                delay=10, hide_after=300)
+    auto._schedule()
+    pump(app, 0.15)
+    shown = auto._tip is not None
+    pump(app, 0.7)
+    check("悬停提示到点会自己消失（不会一直挂着）",
+          shown and auto._tip is None,
+          "出现过=%s，之后还在=%s" % (shown, auto._tip is not None))
+
+    focus = theme_module.Tooltip(app.monitor_button, "失焦就收掉",
+                                 delay=10, hide_after=99000)
+    focus._schedule()
+    pump(app, 0.15)
+    shown = focus._tip is not None
+    app.monitor_button.winfo_toplevel().event_generate("<FocusOut>")
+    pump(app, 0.15)
+    check("窗口失焦（点回游戏）时提示会收掉",
+          shown and focus._tip is None,
+          "出现过=%s，失焦后还在=%s" % (shown, focus._tip is not None))
+
     try:
         app.quit_app()
     except Exception:

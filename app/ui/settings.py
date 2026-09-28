@@ -305,11 +305,22 @@ class SettingsDialog:
                     muted=True, anchor="w", wraplength=520, justify="left").pack(
             fill="x", pady=(0, 6))
 
+        # 表头：两列勾选框分别管"翻不翻"和"小灯里显不显示"，先说清楚
+        header = ttk.Frame(tab)
+        header.pack(fill="x", pady=(0, 2))
+        ttk.Label(header, text="显示", style="Muted.TLabel", width=4).pack(side="left")
+        ttk.Label(header, text="小灯", style="Muted.TLabel", width=4).pack(
+            side="left", padx=(6, 0))
+        ttk.Label(header, text="频道名", style="Muted.TLabel", width=13).pack(
+            side="left", padx=(6, 0))
+        ttk.Label(header, text="颜色", style="Muted.TLabel").pack(side="left", padx=(6, 0))
+
         self.channel_rows_frame = ttk.Frame(tab)
         self.channel_rows_frame.pack(fill="x")
         self.channel_rows = []
         for entry in channels_module.effective(self.config):
-            self._add_channel_row(entry["name"], entry["color"], entry["enabled"])
+            self._add_channel_row(entry["name"], entry["color"], entry["enabled"],
+                                  bool(entry.get("strip", True)))
 
         row = ttk.Frame(tab)
         row.pack(fill="x", pady=(6, 0))
@@ -321,20 +332,24 @@ class SettingsDialog:
             tab,
             "提示：名字要和游戏里显示的一致（例如「小队」）；颜色决定翻译窗口里这个频道的"
             "前缀/正文颜色，也决定工具条收起时那盏小灯的颜色。\n"
-            "「显示」关掉=这个频道不显示也不翻译（省接口调用）。改完点「保存并关闭」。",
+            "「显示」关掉=这个频道不显示也不翻译（省接口调用）；"
+            "「小灯」= 工具条收起时那一排小灯里要不要有它（只管显示、不影响翻译）。\n"
+            "改完点「保存并关闭」。",
             muted=True, anchor="w", wraplength=520, justify="left").pack(
             fill="x", pady=(8, 0))
 
     def _add_channel_row(self, name: str = "", color: str = "#7ee787",
-                         enabled: bool = True) -> None:
-        """在频道页加一行： [显示] 名字 [颜色][选色] [删除]"""
+                         enabled: bool = True, strip: bool = True) -> None:
+        """在频道页加一行： [显示] [小灯] 名字 [颜色][选色] [删除]"""
         row = ttk.Frame(self.channel_rows_frame)
         row.pack(fill="x", pady=2)
         enabled_var = tk.BooleanVar(value=bool(enabled))
+        strip_var = tk.BooleanVar(value=bool(strip))
         name_var = tk.StringVar(value=name)
         color_var = tk.StringVar(value=color or "#7ee787")
         ttk.Checkbutton(row, variable=enabled_var).pack(side="left")
-        ttk.Entry(row, textvariable=name_var, width=12).pack(side="left", padx=(4, 6))
+        ttk.Checkbutton(row, variable=strip_var).pack(side="left", padx=(6, 0))
+        ttk.Entry(row, textvariable=name_var, width=12).pack(side="left", padx=(6, 6))
         entry = ttk.Entry(row, textvariable=color_var, width=10)
         entry.pack(side="left")
         swatch = tk.Label(row, text="　", bg=color_var.get(),
@@ -343,7 +358,8 @@ class SettingsDialog:
         ttk.Button(row, text="选色", width=5,
                    command=lambda v=color_var, s=swatch: self._pick_color(v, s)
                    ).pack(side="left")
-        record = {"frame": row, "enabled": enabled_var, "name": name_var,
+        record = {"frame": row, "enabled": enabled_var, "strip": strip_var,
+                  "name": name_var,
                   "color": color_var, "swatch": swatch}
         ttk.Button(row, text="删除", width=5,
                    command=lambda r=record: self._remove_channel_row(r)).pack(
@@ -456,7 +472,8 @@ class SettingsDialog:
                     continue
                 items.append({"name": name,
                               "color": str(record["color"].get()).strip() or "#7ee787",
-                              "enabled": bool(record["enabled"].get())})
+                              "enabled": bool(record["enabled"].get()),
+                              "strip": bool(record["strip"].get())})
             if items:
                 channels_module.sync(self.config, items)
         if self.appearance is not None:

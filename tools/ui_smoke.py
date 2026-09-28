@@ -460,7 +460,7 @@ def main() -> int:
         original_items = [dict(item) for item in channels_module.effective(app.config)]
         app.config["toolbar_collapsed"] = True
         app._apply_toolbar_collapsed()
-        app._apply_strip_stage("no_stats")           # 固定成一档（自检里窗口是 withdraw 的）
+        app._apply_strip_stage("all_names")          # 固定成一档（自检里窗口是 withdraw 的）
         app.root.update_idletasks()
         if not is_shown(app.channel_strip):
             raise AssertionError("收起工具条后没显示频道灯条")
@@ -488,8 +488,12 @@ def main() -> int:
         names = [name for _x1, _y1, _x2, _y2, name in boxes]
         if not names:
             raise AssertionError("频道小灯没画出来")
-        if len(names) != len(channels_module.effective(app.config)):
-            raise AssertionError("小灯数量和频道表对不上：%s" % names)
+        # 画出来的必须正好是"用户勾了要显示小灯"的那些频道（strip 字段）
+        expected = [str(entry["name"]) for entry in channels_module.effective(app.config)
+                    if bool(entry.get("strip", True))]
+        if names != expected:
+            raise AssertionError("小灯和「设置 → 频道」里勾选的（小灯列）对不上："
+                                 "%s != %s" % (names, expected))
         colors = channels_module.color_map(app.config)
         items = app._lamp_canvas.find_all()
         first_fill = str(app._lamp_canvas.itemcget(items[0], "fill")).lower()
@@ -519,6 +523,22 @@ def main() -> int:
         app.config["toolbar_collapsed"] = original_collapsed
         app._apply_toolbar_collapsed()
         app.root.update_idletasks()
+
+        # 关掉"小灯"勾选以后，那一盏就不该再画出来
+        items = channels_module.effective(app.config)
+        if items:
+            items[0]["strip"] = not bool(items[0].get("strip", True))
+            channels_module.sync(app.config, items)
+            app._apply_strip_stage("all_names")
+            app.root.update_idletasks()
+            drawn = [box[4] for box in app._lamp_boxes]
+            wanted = [str(entry["name"]) for entry in channels_module.effective(app.config)
+                      if bool(entry.get("strip", True))]
+            if drawn != wanted:
+                raise AssertionError("取消「小灯」勾选后还画着它：%s != %s"
+                                     % (drawn, wanted))
+            channels_module.sync(app.config, original_items)
+            config_module.save_config(app.config)
 
     step("收起后的频道灯条（点一下开关频道）", channel_strip)
 

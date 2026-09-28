@@ -203,12 +203,12 @@ class MainWindow:
         # 侧边 pack 的顺序决定位置：先 pack 的在最右边，所以先 pack 关闭键。
         window_buttons = ttk.Frame(top, style="Surface.TFrame")
         window_buttons.pack(side="right", padx=(4, 6))
-        self.quit_button = ttk.Button(window_buttons, text="✕", width=3,
+        self.quit_button = ttk.Button(window_buttons, text="✕", width=2,
                                       style="WindowClose.TButton",
                                       command=self.quit_app)
         self.quit_button.pack(side="right")
         theme.Tooltip(self.quit_button, "退出程序")
-        self.min_button = ttk.Button(window_buttons, text="—", width=3,
+        self.min_button = ttk.Button(window_buttons, text="—", width=2,
                                      style="Window.TButton", command=self._minimize)
         theme.Tooltip(self.min_button, "最小化（无边框模式下会先恢复系统边框，方便从任务栏找回）")
         self.window_buttons = window_buttons
@@ -357,6 +357,11 @@ class MainWindow:
         """当前生效的频道列表（可自定义，见 app/channels.py）。"""
         return channels.effective(self.config)
 
+    def _strip_items(self):
+        """要显示在小灯里的频道：用户可以在 设置 → 频道 里逐项勾选（strip 字段）。"""
+        return [entry for entry in self._channel_items()
+                if bool(entry.get("strip", True))]
+
     @staticmethod
     def _round_rect(canvas, x1, y1, x2, y2, radius, **kwargs):
         """Canvas 没有圆角矩形，用平滑多边形凑一个（看着比方块舒服）。"""
@@ -386,7 +391,7 @@ class MainWindow:
         compact = stage in ("dots", "on_dots", "hidden")
         only_on = stage in ("on_names", "on_dots")
         width = STRIP_PAD + LAMP_LEFT
-        for entry in self._channel_items():
+        for entry in self._strip_items():
             if only_on and not bool(entry["enabled"]):
                 continue
             label = "" if compact else channels.short_name(str(entry["name"]))
@@ -402,7 +407,7 @@ class MainWindow:
         now = time.time()
         compact = self._lamp_compact
         x = LAMP_LEFT
-        for entry in self._channel_items():
+        for entry in self._strip_items():
             name = str(entry["name"])
             color = str(entry["color"])
             is_on = bool(entry["enabled"])
