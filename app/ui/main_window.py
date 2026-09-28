@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 import time
 import tkinter as tk
 from tkinter import font as tkfont
@@ -95,6 +96,8 @@ class MainWindow:
         self._publish_screen_size()
         self.root.after(100, self._poll)
         self.root.after(400, self._first_run_hint)
+        # 启动几秒后悄悄查一次有没有新版本（后台线程，不挡界面；一天最多一次）
+        self.root.after(4000, self.maybe_check_update)
 
     def _publish_screen_size(self) -> None:
         """把 Tk 的屏幕尺寸告知流水线（用于截图坐标换算）。"""
@@ -879,6 +882,9 @@ class MainWindow:
                 self._render(event["item"])
             elif kind == "status":
                 self.set_status(event.get("text", ""), event.get("level", "info"))
+            elif kind == "update":
+                self._on_update_result(event.get("info"), bool(event.get("manual")),
+                                       bool(event.get("skipped")))
 
         self._update_stats()
         self.memory.flush()
@@ -1190,3 +1196,65 @@ class MainWindow:
 
     def run(self) -> None:
         self.root.mainloop()
+
+    # ------------------------------------------------------------------ 更新检查
+    UPDATE_CHECK_INTERVAL = 24 * 3600      # 自动检查的间隔（秒）：一天一次够了
+
+    def check_update(self, manual: bool = False) -> None:
+        """查有没有新版本（后台线程，不挡界面）；有新版就弹更新窗口。"""
+        if getattr(self, "_update_busy", False):
+            return
+        self._update_busy = True
+        if manual:
+            self.set_status("正在检查更新…", "info")
+        skipped = str(self.config.get("update_skipped") or "")
+
+        def work() -> None:
+            from .. import update as update_module
+
+            try:
+                info = update_module.check()
+            except Exception:
+                info = None
+            try:
+                self.config["update_checked_at"] = time.time()
+                config_module.save_config(self.config)
+            except Exception:
+                pass
+            if info is None or info.version == skipped:
+                self.ui_queue.put({"type": "update", "info": None,
+                                   "manual": manual,
+                                   "skipped": bool(info and info.version == skipped)})
+            else:
+                self.ui_queue.put({"type": "update", "info": info, "manual": manual})
+
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+
+    def maybe_check_update(self) -> None:
+        """启动后按间隔自动查一次（设置里可以关）。"""
+        if not self.config.get("check_update", True):
+            return
+        try:
+            last = float(self.config.get("update_checked_at") or 0)
+        except Exception:
+            last = 0.0
+        if time.time() - last < self.UPDATE_CHECK_INTERVAL:
+            return
+        self.check_update()
+
+    def _on_update_result(self, info, manual: bool, skipped: bool = False) -> None:
+        self._update_busy = False
+        if info is None:
+            if manual:
+                if skipped:
+                    self.set_status("这个版本（v%s）被你跳过了，可在「关于」里点"
+                                    "「立即检查更新」重新查看"
+                                    % self.config.get("update_skipped"), "info")
+                else:
+                    self.set_status("已经是最新版 v%s" % __version__, "ok")
+            return
+        self.set_status("发现新版本 v%s" % info.version, "ok")
+        from .update_dialog import UpdateDialog
+
+        UpdateDialog(self, info)
+

@@ -133,6 +133,7 @@ def main() -> int:
 
     def create_main():
         app = MainWindow()
+        app.config["check_update"] = False      # 自检不联网（启动检查是后台请求）
         app.root.withdraw()
         app.root.update_idletasks()
         holder["app"] = app
@@ -628,6 +629,88 @@ def main() -> int:
                 pass
 
     step("中译英：上下文推荐回复（中英对照 / 点击复制）", cn2en_reply_suggestions)
+
+    def update_dialog_smoke():
+        """「发现新版本」窗口的接线（不联网：喂一个假的 UpdateInfo）。"""
+        from app import update as update_module
+        from app.ui.update_dialog import UpdateDialog
+
+        original_can = update_module.can_self_update
+        info = update_module.UpdateInfo(
+            version="9.9.9", tag="v9.9.9", notes="1. 测试用的更新说明\n2. 第二条",
+            page_url="https://example.invalid/releases/tag/v9.9.9",
+            asset_url="",                     # 没有可下载附件 → 只应引导去发行页
+            asset_name="", asset_size=12 * 1024 * 1024, current="3.0.19")
+        dialog = UpdateDialog(app, info)
+        try:
+            dialog.window.update_idletasks()
+            body = dialog.window.winfo_children()
+            texts = []
+            for child in body:
+                try:
+                    if isinstance(child, tk.Text):
+                        texts.append(child.get("1.0", "end"))
+                except Exception:
+                    pass
+            if not any("测试用的更新说明" in text for text in texts):
+                raise AssertionError("更新说明没显示出来")
+            if find_widget(dialog.window, ttk.Button, "稍后再说") is None:
+                raise AssertionError("缺少「稍后再说」按钮")
+            if find_widget(dialog.window, ttk.Button, "跳过这个版本") is None:
+                raise AssertionError("缺少「跳过这个版本」按钮")
+            # 没有可下载附件时不该出现"现在升级"（自动升级）按钮
+            if find_widget(dialog.window, ttk.Button, "现在升级（自动下载并重启）"):
+                raise AssertionError("没有附件却提供了自动升级按钮")
+            dialog.skip_version()               # 点"跳过这个版本"要记住
+            if str(app.config.get("update_skipped")) != "9.9.9":
+                raise AssertionError("跳过版本没有记进配置")
+        finally:
+            try:
+                dialog.window.destroy()
+            except Exception:
+                pass
+            app.config["update_skipped"] = ""
+
+        # 打包版 + 有安装包但**没有签名** → 不许自动安装（防"被人换了包"）
+        update_module.can_self_update = lambda: True
+        unsigned = update_module.UpdateInfo(
+            version="9.9.9", tag="v9.9.9", notes="这次没有签名块",
+            page_url="https://example.invalid/", asset_url="https://x/y.zip",
+            asset_name="DDO.zip", asset_size=1024, current="3.0.19")
+        dialog = UpdateDialog(app, unsigned)
+        try:
+            dialog.window.update_idletasks()
+
+            def collect_texts(widget):
+                """把控件树里所有 text 属性收集起来（标签可能是 ttk 也可能是 tk）。"""
+                found = []
+                try:
+                    value = widget.cget("text")
+                    if isinstance(value, str):
+                        found.append(value)
+                except Exception:
+                    pass
+                for child in widget.winfo_children():
+                    found.extend(collect_texts(child))
+                return found
+
+            texts = collect_texts(dialog.window)
+            if not any("签名" in text for text in texts):
+                raise AssertionError("没签名的发行版应该明确提示（不让自动升级）")
+            if find_widget(dialog.window, ttk.Button, "现在升级（自动下载并重启）"):
+                raise AssertionError("没签名却给了自动升级按钮")
+            # 即使点了"仍要安装"（没勾允许未签名）也必须被拦住、不进入下载
+            dialog.start_update()
+            if dialog.busy:
+                raise AssertionError("没勾选允许未签名时不该开始下载")
+        finally:
+            update_module.can_self_update = original_can
+            try:
+                dialog.window.destroy()
+            except Exception:
+                pass
+
+    step("检查更新：发现新版本窗口（假数据，不联网）", update_dialog_smoke)
 
     def window_buttons():
         """窗口按钮：关闭在最右、最小化在它左边；悬停要有明暗反馈（关闭键变红）。"""

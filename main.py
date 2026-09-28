@@ -118,6 +118,13 @@ def main() -> int:
         from app.selfcheck import run as run_selfcheck
 
         return run_selfcheck()
+    # 顺手清理上一次自动升级留在临时目录里的脚本/解压文件
+    try:
+        from app import update as update_module
+
+        update_module.cleanup_leftovers()
+    except Exception:
+        pass
     try:
         from app.ui.main_window import MainWindow
 

@@ -20,6 +20,8 @@ MODULES = [
     "test_config",
     "test_channels",
     "test_replies",
+    "test_update",
+    "test_ed25519",
     "test_parser",
     "test_dedup",
     "test_glossary",

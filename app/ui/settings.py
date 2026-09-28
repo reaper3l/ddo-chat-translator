@@ -148,8 +148,17 @@ class SettingsDialog:
 
     def _build_about_tab(self, parent: ttk.Frame) -> None:
         """关于页：版本、引擎、数据位置、快捷键，并可直接打开对应文件。"""
-        from .. import paths
+        from .. import paths, update as update_module
         from .. import AUTHOR, HOMEPAGE, __version__
+
+        # 公钥指纹：让用户能拿它跟发行页/README 上贴的对一对 —— 万一流传出去的是
+        # 别人改过源码重打包的"假官方版"，指纹对不上就能看出来。
+        keys = update_module.pubkeys()
+        fingerprint = update_module.pubkey_fingerprint(keys[0]) if keys else ""
+        if fingerprint:                      # 分两行，免得把设置窗口撑宽
+            groups = fingerprint.split(" ")
+            fingerprint = "\n".join(" ".join(groups[i:i + 8])
+                                    for i in range(0, len(groups), 8))
 
         info = ttk.LabelFrame(parent, text="关于")
         info.pack(fill="x", padx=10, pady=(8, 4))
@@ -163,9 +172,25 @@ class SettingsDialog:
             "",
             "快捷键：F8 开始/停止　F9 剪贴板中译英　F10 纠错　F5 测试识别",
             "术语表：assets\\glossary.json（可直接编辑，也可在「词典」里改）",
+            "",
+            "运行方式：%s" % ("打包版（可以自动升级）" if update_module.can_self_update()
+                           else "源码运行（更新请 git pull 或下载发行版）"),
+            "更新来源：%s（自动升级只装用下面这把公钥签过名的安装包）"
+            % HOMEPAGE.split("//")[-1],
+            "签名公钥指纹（可和发行页上贴的核对，对不上就不是官方包）：%s"
+            % (fingerprint or "（未配置）"),
         ):
             ttk.Label(info, text=line, style="SurfaceMuted.TLabel").pack(
                 anchor="w", padx=8, pady=1)
+
+        self._check(parent, "check_update", "启动时自动检查更新（只查询，不会偷偷下载）")
+        row = ttk.Frame(parent)
+        row.pack(fill="x", padx=10, pady=(2, 6))
+        ttk.Button(row, text="立即检查更新",
+                   command=lambda: self.app.check_update(manual=True)).pack(side="left")
+        ttk.Button(row, text="打开发行页",
+                   command=lambda: update_module.open_page(HOMEPAGE + "/releases")).pack(
+            side="left", padx=6)
 
         row = ttk.Frame(parent)
         row.pack(fill="x", padx=10, pady=6)

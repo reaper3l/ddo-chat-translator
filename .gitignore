@@ -15,6 +15,10 @@ data/
 # 发布流程用的临时文件
 release_id.txt
 
+# 发布签名私钥（拿到它就能签出"验得过"的假安装包）——永远不要提交
+.ddo-release/
+*.key
+
 # 编辑器
 .vscode/
 .idea/

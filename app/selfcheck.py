@@ -65,6 +65,14 @@ def collect() -> Tuple[List[str], List[str]]:
     lines.append("Python：%s" % sys.version.split()[0])
     lines.append("程序目录：%s" % paths.APP_DIR)
     lines.append("启动命令：%s" % (sys.executable if frozen else sys.argv[0]))
+    # 把"这份 exe 认哪把发布公钥"写进报告：这是自动更新的信任根，
+    # 用 `exe --self-check --no-dialog` 就能问出来，方便和发行页上的指纹核对。
+    from app import update as update_module
+
+    keys = update_module.pubkeys()
+    lines.append("更新来源：%s" % update_module.HOMEPAGE)
+    lines.append("签名公钥指纹：%s" % (update_module.pubkey_fingerprint(keys[0])
+                                 if keys else "（未配置，不会自动安装任何更新）"))
     lines.append("")
 
     paths.ensure_dirs()

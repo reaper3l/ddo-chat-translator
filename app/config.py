@@ -105,6 +105,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "learn_min_count": 2,        # 同一句被修正多少次后写入长期规则
     "candidate_min_count": 3,    # 陌生词出现多少次后进入"待学习"列表
     "dedup_ttl_seconds": 90,
+    # 自动检查更新：启动后每隔一段时间查一次 Gitee 发行版（只查询，不会偷偷下载）
+    "check_update": True,
+    "update_checked_at": 0,        # 上次检查的时间戳（秒）
+    "update_skipped": "",          # 用户点过"跳过这个版本"的版本号
+    # 发布包签名校验：默认**拒绝**安装未签名的包（见 CHANGELOG「发布包签名」）
+    "update_allow_unsigned": False,
     # 高级
     "window_pos": None,
     "window_size": [520, 620],
