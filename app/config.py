@@ -49,6 +49,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "transparency_mode": "off",
     "alpha": "0.85",             # alpha 模式下的整窗透明度（0.3~1.0）
     "ui_scale": 1.0,             # 界面缩放：1.0=96DPI 经典比例；0.85 更小巧
+    "ui_animation": True,        # 工具条收起/展开的过渡动画（嫌晃可以关掉）
     "show_original": False,
     "show_timestamp": False,
     "font_family": "Microsoft YaHei",
@@ -75,9 +76,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "timestamp": {"family": "", "size": -2, "weight": "normal", "slant": "roman",
                       "color": "#98a1ab", "bg": "", "border": 0, "follow_channel": False},
     },
+    # 频道表（可自定义：游戏更新加了频道、或频道名变了，在这里改）
+    # 结构：[{"name": "小队", "color": "#22bb2e", "enabled": true}, ...]
+    # 下面两个字典是从它派生出来的（界面和流水线还在读），改频道请改上面的表。
+    "channels": [
+        {"name": "小队", "color": "#22bb2e", "enabled": True},
+        {"name": "公会", "color": "#79c0ff", "enabled": True},
+        {"name": "常规", "color": "#ffd866", "enabled": True},
+        {"name": "公共", "color": "#ffa657", "enabled": True},
+        {"name": "悄悄话", "color": "#ff9ecd", "enabled": True},
+        {"name": "战利品", "color": "#a9b1ba", "enabled": False},
+    ],
     "channel_colors": {
         "小队": "#7ee787",
-        "队伍": "#7ee787",
         "公会": "#79c0ff",
         "常规": "#ffd866",
         "公共": "#ffa657",
@@ -86,11 +97,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "channels_enabled": {
         "小队": True,
-        "队伍": True,
         "公会": True,
         "常规": True,
         "公共": True,
         "悄悄话": True,
+        "战利品": False,
     },
     "max_lines": 600,            # 显示区最多保留多少行，防止越用越卡
     # 词典 / 学习
@@ -107,12 +118,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 def load_config() -> Dict[str, Any]:
     config = dict(DEFAULT_CONFIG)
+    config["channels"] = [dict(item) for item in DEFAULT_CONFIG["channels"]]
     config["channel_colors"] = dict(DEFAULT_CONFIG["channel_colors"])
     config["channels_enabled"] = dict(DEFAULT_CONFIG["channels_enabled"])
     user = paths.read_json(paths.CONFIG_PATH, {})
     if isinstance(user, dict):
         for key, value in user.items():
             config[key] = value
+    # 频道表是"可自定义"的：缺了就按旧的两个字典迁移一次（详见 app/channels.py）
+    from . import channels as channels_module
+
+    channels_module.effective(config)
     return config
 
 

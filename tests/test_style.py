@@ -15,6 +15,15 @@ def test_mix_blends_two_colors():
     assert theme.mix("red", "#000000", 0.5) == "red"
 
 
+def test_text_on_picks_readable_color():
+    """频道颜色是用户自己设的，深色底上必须用浅色字。"""
+    assert theme.text_on("#22bb2e") == "#101218"       # 亮绿 → 深色字
+    assert theme.text_on("#ffd866") == "#101218"       # 亮黄 → 深色字
+    assert theme.text_on("#1b2a4a") == "#f2f5f8"       # 深蓝 → 浅色字
+    assert theme.text_on("#000000") == "#f2f5f8"
+    assert theme.text_on("不是颜色") == "#101218"       # 坏值也不能崩
+
+
 def _config() -> dict:
     config = dict(DEFAULT_CONFIG)
     config["appearance"] = {key: dict(value)

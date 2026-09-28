@@ -62,6 +62,30 @@ def mix(color_a: str, color_b: str, ratio: float = 0.5) -> str:
     return "#%02x%02x%02x" % tuple(mixed)
 
 
+def text_on(color: str) -> str:
+    """在某个底色的色块上，文字该用深色还是浅色（按亮度算）。
+
+    频道颜色是用户自己设的，可能很深（深蓝、深紫）。固定用深色字会出现
+    "黑字压黑底"看不清的情况，所以这里按**相对亮度**挑（标准做法：先做
+    sRGB 线性化再按 0.2126/0.7152/0.0722 加权）。
+    """
+    text = str(color).strip().lstrip("#")
+    if len(text) != 6:
+        return "#101218"
+    try:
+        red, green, blue = (int(text[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except ValueError:
+        return "#101218"
+
+    def linear(channel: float) -> float:
+        return channel / 12.92 if channel <= 0.03928 \
+            else ((channel + 0.055) / 1.055) ** 2.4
+
+    luminance = (0.2126 * linear(red) + 0.7152 * linear(green)
+                 + 0.0722 * linear(blue))
+    return "#101218" if luminance > 0.35 else "#f2f5f8"
+
+
 def install(root: tk.Misc, config: Optional[dict] = None) -> ttk.Style:
     """给整个窗口装暗色主题（只有这一套）。"""
     config = config or {}

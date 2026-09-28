@@ -4,20 +4,19 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import colorchooser, messagebox, ttk
 
 from .appearance_tab import AppearanceTab
+from .. import channels as channels_module
 from . import theme
 from .widgets import ScrollableFrame
-
-CHANNELS = ["小队", "队伍", "公会", "常规", "公共", "悄悄话", "战利品"]
-
 
 class SettingsDialog:
     # 设置中心里的分类：(标题, 一句话说明)
     CATEGORIES = (
         ("翻译", "引擎、API Key、翻译模式、上下文"),
-        ("监控", "聊天区域、截图间隔、频道开关"),
+        ("监控", "聊天区域、截图间隔、性能"),
+        ("频道", "频道名、颜色、显示开关（可自定义增删）"),
         ("显示与学习", "窗口形态、显示项、学习阈值"),
         ("外观", "字体、字号、颜色、底色、边框"),
         ("关于", "版本、数据位置、快捷键"),
@@ -29,6 +28,7 @@ class SettingsDialog:
         self.queue: "queue.Queue[str]" = queue.Queue()
         self.vars = {}
         self.channel_vars = {}
+        self.channel_rows = []           # 「频道」页里的行（可增删）
         self.pages = {}                  # 分类名 -> 该分类的窗口
         self.appearance = None
         self.status = tk.StringVar(value="")
@@ -128,6 +128,8 @@ class SettingsDialog:
                 self._build_translate_tab(None)
             elif title == "监控":
                 self._build_monitor_tab(None)
+            elif title == "频道":
+                self._build_channel_tab(None)
             elif title == "显示与学习":
                 self._build_display_tab(None)
             elif title == "外观":
@@ -290,13 +292,98 @@ class SettingsDialog:
                     muted=True, anchor="w", wraplength=520, justify="left").pack(
             fill="x", pady=(0, 4))
 
-        theme.label(tab, "要翻译的频道：", muted=True, anchor="w").pack(
+    def _build_channel_tab(self, _parent) -> None:
+        """频道页：增删频道、改名、改颜色、开关显示。
+
+        为什么要单独一页：游戏更新时频道名可能变、也可能多出新频道
+        （而且游戏里其实并没有"队伍"这个频道）。列表存进配置，随时能自己调。
+        """
+        from .. import channels as channels_module
+
+        tab = self._tab(None, "频道")
+        theme.label(tab, "游戏里的频道（可自行增删；改了以后翻译窗口的颜色/前缀就按这里来）",
+                    muted=True, anchor="w", wraplength=520, justify="left").pack(
+            fill="x", pady=(0, 6))
+
+        self.channel_rows_frame = ttk.Frame(tab)
+        self.channel_rows_frame.pack(fill="x")
+        self.channel_rows = []
+        for entry in channels_module.effective(self.config):
+            self._add_channel_row(entry["name"], entry["color"], entry["enabled"])
+
+        row = ttk.Frame(tab)
+        row.pack(fill="x", pady=(6, 0))
+        ttk.Button(row, text="＋ 添加频道", command=self._add_channel_row).pack(side="left")
+        ttk.Button(row, text="恢复默认频道", command=self._reset_channels).pack(
+            side="left", padx=6)
+
+        theme.label(
+            tab,
+            "提示：名字要和游戏里显示的一致（例如「小队」）；颜色决定翻译窗口里这个频道的"
+            "前缀/正文颜色，也决定工具条收起时那盏小灯的颜色。\n"
+            "「显示」关掉=这个频道不显示也不翻译（省接口调用）。改完点「保存并关闭」。",
+            muted=True, anchor="w", wraplength=520, justify="left").pack(
             fill="x", pady=(8, 0))
-        channels = self.config.get("channels_enabled", {}) or {}
-        for channel in CHANNELS:
-            var = tk.BooleanVar(value=bool(channels.get(channel, True)))
-            self.channel_vars[channel] = var
-            ttk.Checkbutton(tab, text=channel, variable=var).pack(anchor="w")
+
+    def _add_channel_row(self, name: str = "", color: str = "#7ee787",
+                         enabled: bool = True) -> None:
+        """在频道页加一行： [显示] 名字 [颜色][选色] [删除]"""
+        row = ttk.Frame(self.channel_rows_frame)
+        row.pack(fill="x", pady=2)
+        enabled_var = tk.BooleanVar(value=bool(enabled))
+        name_var = tk.StringVar(value=name)
+        color_var = tk.StringVar(value=color or "#7ee787")
+        ttk.Checkbutton(row, variable=enabled_var).pack(side="left")
+        ttk.Entry(row, textvariable=name_var, width=12).pack(side="left", padx=(4, 6))
+        entry = ttk.Entry(row, textvariable=color_var, width=10)
+        entry.pack(side="left")
+        swatch = tk.Label(row, text="　", bg=color_var.get(),
+                          relief="flat", width=2, bd=1)
+        swatch.pack(side="left", padx=4)
+        ttk.Button(row, text="选色", width=5,
+                   command=lambda v=color_var, s=swatch: self._pick_color(v, s)
+                   ).pack(side="left")
+        record = {"frame": row, "enabled": enabled_var, "name": name_var,
+                  "color": color_var, "swatch": swatch}
+        ttk.Button(row, text="删除", width=5,
+                   command=lambda r=record: self._remove_channel_row(r)).pack(
+            side="left", padx=(6, 0))
+        color_var.trace_add("write",
+                            lambda *_a, r=record: self._sync_swatch(r))
+        self.channel_rows.append(record)
+
+    @staticmethod
+    def _sync_swatch(record) -> None:
+        try:
+            record["swatch"].configure(bg=record["color"].get() or "#7ee787")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _pick_color(var: tk.StringVar, swatch=None) -> None:
+        chosen = colorchooser.askcolor(color=var.get() or "#7ee787")
+        if chosen and chosen[1]:
+            var.set(chosen[1])
+            if swatch is not None:
+                try:
+                    swatch.configure(bg=chosen[1])
+                except Exception:
+                    pass
+
+    def _remove_channel_row(self, record) -> None:
+        try:
+            record["frame"].destroy()
+        except Exception:
+            pass
+        self.channel_rows = [row for row in self.channel_rows if row is not record]
+
+    def _reset_channels(self) -> None:
+        from .. import channels as channels_module
+
+        for record in list(self.channel_rows):
+            self._remove_channel_row(record)
+        for entry in channels_module.DEFAULT_CHANNELS:
+            self._add_channel_row(entry["name"], entry["color"], entry["enabled"])
 
     def _build_display_tab(self, notebook) -> None:
         tab = self._tab(notebook, "显示与学习")
@@ -311,6 +398,7 @@ class SettingsDialog:
                     "不会出现在任务栏/Alt+Tab）", False)
         self._check(tab, "toolbar_icons_only", "工具栏只显示图标（更紧凑，悬停有说明）", False)
         self._check(tab, "toolbar_collapsed", "工具条折叠（只留标题，点标题展开/收起）")
+        self._check(tab, "ui_animation", "工具条收起/展开有过渡动画（嫌晃可以关掉）")
         self._check(tab, "show_status_bar", "显示底部状态栏（待译/调用等计数）")
         self._choice_labeled(tab, "transparency_mode", "背景透明",
                              [("off", "不透明"),
@@ -360,8 +448,21 @@ class SettingsDialog:
             self.config["channels_enabled"] = {
                 channel: bool(var.get()) for channel, var in self.channel_vars.items()
             }
+        if self.channel_rows:              # 只有打开过「频道」页才有这些行
+            items = []
+            for record in self.channel_rows:
+                name = str(record["name"].get()).strip()
+                if not name:
+                    continue
+                items.append({"name": name,
+                              "color": str(record["color"].get()).strip() or "#7ee787",
+                              "enabled": bool(record["enabled"].get())})
+            if items:
+                channels_module.sync(self.config, items)
         if self.appearance is not None:
             self.appearance.save()
+        # 「外观」页改的频道颜色、「监控」页改的开关，最后都并回同一份频道表
+        channels_module.apply_legacy(self.config)
         self.app.apply_settings()
         self.status.set("已保存并生效")
         if close_window is not None:

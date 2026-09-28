@@ -18,6 +18,7 @@ for path in (str(ROOT), str(HERE)):
 MODULES = [
     "test_textutil",
     "test_config",
+    "test_channels",
     "test_parser",
     "test_dedup",
     "test_glossary",

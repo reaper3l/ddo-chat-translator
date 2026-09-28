@@ -20,7 +20,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
 
-from . import capture, frame, paths, textutil
+from . import capture, channels, frame, paths, textutil
 from .dedup import Deduper
 from .engines import BaseEngine, OfflineEngine, create_engine
 from .glossary import Glossary
@@ -100,7 +100,7 @@ class Pipeline:
         self.ui_queue = ui_queue
 
         self.ocr = OcrEngine()
-        self.parser = ChatParser(config.get("prefix_aliases"))
+        self.parser = ChatParser(channels.alias_table(config))
         self.deduper = Deduper(ttl_seconds=float(config.get("dedup_ttl_seconds", 90)))
         self.engine: BaseEngine = OfflineEngine()
         self.engine_note = ""
@@ -300,7 +300,7 @@ class Pipeline:
     def apply_config(self) -> None:
         """配置改变后调用（阈值、术语、引擎等）。"""
         self.deduper.ttl = float(self.config.get("dedup_ttl_seconds", 90))
-        self.parser = ChatParser(self.config.get("prefix_aliases"))
+        self.parser = ChatParser(channels.alias_table(self.config))
         self._last_lines = []          # 区域/参数变了，缓存的行作废
         self._frames_since_full = 0
         self.reload_engine()
@@ -475,7 +475,9 @@ class Pipeline:
 
     def _handle_lines(self, lines: List[str]) -> None:
         events = self.parser.parse(lines)
-        enabled = self.config.get("channels_enabled", {}) or {}
+        # 只显示"频道表里有、而且开着"的频道；认不出来的频道一律不显示
+        # （玩家删掉的频道不该再冒出来）
+        enabled = channels.enabled_map(self.config)
 
         for event in events:
             if event.kind == KIND_SYSTEM:
@@ -510,6 +512,8 @@ class Pipeline:
 
             if event.kind != KIND_CHAT:
                 continue
+            # 频道的开关只对"频道表里的频道"生效；万一游戏更新多出个没登记的
+            # 频道，宁可先照常显示（fail-open），也不要让玩家看不到聊天
             if event.channel and not enabled.get(event.channel, True):
                 continue
             # OCR 有时把面板文字粘在玩家正文后面（"堡垒? 错误):你的队友已经…"），

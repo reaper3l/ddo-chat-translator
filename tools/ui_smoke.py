@@ -376,19 +376,24 @@ def main() -> int:
         # 它要自己分级瘦身**，不能把窗口顶开。这里直接验证分级逻辑（窗口在自检里
         # 是 withdraw 状态，改 geometry 不会真的生效，所以不能靠量窗口宽度）。
         enabled = app.config.get("channels_enabled") or {}
-        widths = [(stage, app._apply_strip_stage(stage, enabled))
-                  for stage in ("full", "no_stats", "dots", "on_only", "dot_only")]
+        widths = [(stage, app._apply_strip_stage(stage))
+                  for stage in ("full", "no_stats", "on_names", "dots")]
         values = [width for _stage, width in widths]
         if values != sorted(values, reverse=True):
             raise AssertionError("灯条分级没有越缩越窄：%s" % widths)
-        if values[-1] > 40:
-            raise AssertionError("最紧凑档还是太宽（%d px）：%s" % (values[-1], widths))
-        app._apply_strip_stage("dot_only", enabled)
-        if is_shown(app._channel_chips["小队"][0]):
-            raise AssertionError("最紧凑档不该还显示频道小灯")
-        if not is_shown(app.run_dot):
-            raise AssertionError("最紧凑档必须留着运行状态点")
-        app._apply_strip_stage("full", enabled)
+        app._apply_strip_stage("on_names")
+        on_names = [box[4] for box in app._lamp_boxes]
+        if any(not enabled.get(name, True) for name in on_names):
+            raise AssertionError("「只留开着的频道」这一档还画了关掉的频道：%s" % on_names)
+        # 最窄的一档：整条藏起来（窗口小到放不下时不能把窗口顶开）
+        if app._apply_strip_stage("hidden") != 0:
+            raise AssertionError("最窄档应该整条藏起来")
+        if is_shown(app.channel_strip):
+            raise AssertionError("最窄档还占着位置")
+        app._apply_strip_stage("full")
+        if not is_shown(app.channel_strip):
+            raise AssertionError("恢复 full 档以后灯条没回来")
+        app._apply_strip_stage("full")
         app._strip_stage = None
         app._fit_channel_strip()
         app.root.update_idletasks()
@@ -438,33 +443,46 @@ def main() -> int:
     step("主题生效 + 工具栏点开收起", theme_and_toolbar_click)
 
     def channel_strip():
-        """收起工具条后那块留白：状态点 + 频道小灯，点一下就能开关频道。"""
+        """收起工具条后那块留白：一排频道小灯，点一下就能开关频道。"""
+        from app import channels as channels_module
+
         original_collapsed = bool(app.config.get("toolbar_collapsed", True))
-        original_enabled = dict(app.config.get("channels_enabled") or {})
+        original_items = [dict(item) for item in channels_module.effective(app.config)]
         app.config["toolbar_collapsed"] = True
         app._apply_toolbar_collapsed()
+        app._apply_strip_stage("no_stats")           # 固定成一档（自检里窗口是 withdraw 的）
         app.root.update_idletasks()
         if not is_shown(app.channel_strip):
             raise AssertionError("收起工具条后没显示频道灯条")
-        if not is_shown(app.run_dot):
-            raise AssertionError("频道灯条里没有运行状态点")
-        chip, tooltip = app._channel_chips["公会"]
-        if not is_shown(chip):
-            raise AssertionError("频道小灯没显示出来")
-        colors = app.config.get("channel_colors") or {}
-        enabled_bg = str(app._channel_chips["小队"][0].cget("bg")).lower()
-        if enabled_bg != str(colors.get("小队", "")).lower():
-            raise AssertionError("开着的频道小灯没有用该频道的颜色：%r" % enabled_bg)
-        before = bool((app.config.get("channels_enabled") or {}).get("公会", True))
-        app._toggle_channel("公会")
+        if is_shown(app.actions):
+            raise AssertionError("收起后功能按钮还显示着")
+        boxes = app._lamp_boxes
+        names = [name for _x1, _y1, _x2, _y2, name in boxes]
+        if not names:
+            raise AssertionError("频道小灯没画出来")
+        if len(names) != len(channels_module.effective(app.config)):
+            raise AssertionError("小灯数量和频道表对不上：%s" % names)
+        colors = channels_module.color_map(app.config)
+        items = app._lamp_canvas.find_all()
+        first_fill = str(app._lamp_canvas.itemcget(items[0], "fill")).lower()
+        if first_fill != str(colors.get(names[0], "")).lower():
+            raise AssertionError("开着的频道小灯没有用该频道的颜色：%r" % first_fill)
+
+        # 直接点第一盏灯（走的是真实的坐标命中 + 开关逻辑）
+        class _Click:
+            def __init__(self, x, y):
+                self.x, self.y = x, y
+
+        target = "公会" if "公会" in names else names[0]
+        x1, y1, x2, y2, _name = next(box for box in boxes if box[4] == target)
+        before = bool(channels_module.enabled_map(app.config).get(target, True))
+        app._on_lamp_click(_Click((x1 + x2) // 2, (y1 + y2) // 2))
         app.root.update_idletasks()
-        after = bool((app.config.get("channels_enabled") or {}).get("公会", True))
+        after = bool(channels_module.enabled_map(app.config).get(target, True))
         if after == before:
             raise AssertionError("点频道小灯没有切换频道开关")
-        if "点一下" not in str(tooltip.text):
-            raise AssertionError("频道小灯的悬停说明不对：%r" % tooltip.text)
-        app._toggle_channel("公会")                      # 还原
-        app.config["channels_enabled"] = original_enabled
+        app._toggle_channel(target)                  # 还原
+        channels_module.sync(app.config, original_items)
         app.config["toolbar_collapsed"] = original_collapsed
         app._apply_toolbar_collapsed()
         app.root.update_idletasks()

@@ -1,4 +1,4 @@
-# DDO 翻译助手 v3.0.7
+# DDO 翻译助手 v3.0.8
 
 **DDO（龙与地下城 Online）游戏聊天实时翻译助手**
 
@@ -9,17 +9,21 @@
 | --- | --- |
 | 作者 | **一键三连**（Gitee：[git55236](https://gitee.com/git55236)） |
 | 项目地址 | https://gitee.com/git55236/ddo-chat-translator |
-| 当前版本 | v3.0.7（2026-09-27） |
+| 当前版本 | v3.0.8（2026-09-28） |
 | 完整手册 | [使用说明.md](使用说明.md) ← **新手先看这个** |
 | 技术栈 | Python 3.11 + tkinter · OCR: RapidOCR(PP-OCRv5) · 翻译: DeepSeek / MyMemory / 离线术语表 |
 
 ### 更新日志
 
+* **v3.0.8**（2026-09-28）工具条收起后那块留白改成**频道小灯**（圆角、颜色=频道色、
+  刚说话闪白框、点一下开关频道；按你的要求去掉了运行状态灯），窗口变窄会自动分级瘦身；
+  **频道可以自定义**了：设置中心新增「频道」页，可增删改名改色，默认表里去掉了游戏里
+  并不存在的"队伍"；工具条收起/展开加了**过渡动画**（可关）。老配置自动迁移。
 * **v3.0.7**（2026-09-27）修复：同一句话被显示 2~3 遍（"还是有重复刷屏"）。根因是
   OCR 每帧把同一句读得略有不同，精确指纹拦不住；现在加了**模糊去重**（按顺序比相似度，
   长句被读短也算同一条）和**"别把自己显示的译文读回来"**。另外修了两个问题：
   系统提示粘在玩家正文后面（`笑死 Imao的队友Guihuo已死亡`）、中译英窗口有时点回去
-  打不了字。新增 `tools\focus_check.py` 焦点自检；`tools\trace.py` 补上 DPI 感知。
+  打不了字。新增窗口自检工具；`tools\trace.py` 补上 DPI 感知。
 * **v3.0.6**（2026-09-27）修复：战利品/宝箱/任务面板还是会漏进来，而且上一版为了挡它们
   把 OCR 读花的玩家发言一起丢掉了（实测丢掉过 `S Sinoke:guihuo,nikyireddoor`）。
   现在改成**按结构判断**：玩家发言 = 频道前缀 + 名字 + 冒号，系统提示 = 含"组队/生死/队长"
@@ -370,16 +374,16 @@ ddo-translator/
 │  ├─ verify_build.py      发布前检查：查关键文件 + 跑一次 exe 自检
 │  ├─ check_names.py       静态检查（未导入的名字 / 属性覆盖方法 / 参数写错）
 │  ├─ ui_smoke.py          界面自检：每个窗口真实创建一遍再关掉
-│  ├─ focus_check.py       焦点自检：对话框"点回去能不能打字"（需图形界面）
+│  ├─ window_check.py      窗口自检：焦点（点回去能不能打字）+ 收起动画（需图形界面）
 │  ├─ dpi_check.py         DPI / 坐标自检（--cursor 可截一块图验证）
 │  └─ import_old_data.py   导入旧版词典/纠错记录
-└─ tests/                  113 项纯逻辑测试（不需要界面和网络）
+└─ tests/                  123 项纯逻辑测试（不需要界面和网络）
 ```
 
 跑测试与检查：
 
 ```
-python tests/run_all.py        # 113 项，全通过才说明逻辑没问题
+python tests/run_all.py        # 123 项，全通过才说明逻辑没问题
 python tools/check_names.py    # 防止出现旧版那种 NameError
 python tools/ui_smoke.py       # 界面自检：每个窗口真实创建一遍再关掉
 ```
@@ -389,7 +393,7 @@ python tools/ui_smoke.py       # 界面自检：每个窗口真实创建一遍�
 ```
 python -m PyInstaller --noconfirm --clean build.spec
 python tools/verify_build.py                    # 查关键文件 + 跑一次 exe 自检
-DDO翻译助手_v3.0.7.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
+DDO翻译助手_v3.0.8.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
 ```
 
 ---
@@ -426,6 +430,6 @@ DDO翻译助手_v3.0.7.exe --self-check             # 用户侧自检（报告�
 
 * **作者**：一键三连
 * **项目主页 / 问题反馈**：https://gitee.com/git55236/ddo-chat-translator
-* **打包版本**：`DDO翻译助手_v3.0.7.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.7.exe`）
+* **打包版本**：`DDO翻译助手_v3.0.8.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.8.exe`）
 * **免责声明**：本工具只在本机读取屏幕、调用你自己配置的翻译接口，不收集也不上传任何游戏或个人信息；
   请遵守游戏服务条款，仅用于帮助理解聊天内容。
