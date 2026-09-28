@@ -203,6 +203,55 @@ def main() -> int:
           shown and focus._tip is None,
           "出现过=%s，失焦后还在=%s" % (shown, focus._tip is not None))
 
+    # ---------------- 缩放窗口时，窗口按钮不能被灯条挤掉 ----------------
+    app.config["frameless"] = True
+    app.config["toolbar_collapsed"] = True
+    app.apply_settings()
+    pump(app, 0.3)
+    def squeezed(widget) -> bool:
+        """Tk 挤不下时会把控件压窄（或挪出可视区）—— 这两种都算"看不见了"。
+        注意不能用 winfo_ismapped()：被压窄/挪出去的控件依然"已映射"。"""
+        try:
+            parent = widget.master
+            if widget.winfo_width() < widget.winfo_reqwidth() - 1:
+                return True
+            if widget.winfo_x() + widget.winfo_width() > parent.winfo_width() + 1:
+                return True
+            if parent.winfo_width() < parent.winfo_reqwidth() - 1:
+                return True          # 连按钮容器都被压窄了
+        except Exception:
+            return False
+        return False
+
+    bad = []
+    for width in (700, 560, 500, 460, 430, 400, 360, 330, 300, 270, 240, 210):
+        app.root.geometry("%dx300" % width)
+        pump(app, 0.3)
+        if not app.min_button.winfo_ismapped() or not app.quit_button.winfo_ismapped():
+            bad.append("%dpx(按钮没映射)" % width)
+        elif squeezed(app.min_button) or squeezed(app.quit_button):
+            bad.append("%dpx(按钮被压窄：—=%d/%d ✕=%d/%d)"
+                       % (width, app.min_button.winfo_width(),
+                          app.min_button.winfo_reqwidth(), app.quit_button.winfo_width(),
+                          app.quit_button.winfo_reqwidth()))
+    check("收窄窗口时最小化/关闭按钮一直完整（不会被灯条挤掉）",
+          not bad, "全部正常" if not bad else "出问题的宽度：" + "、".join(bad))
+
+    # 用户实测的 bug：窗口很窄时灯条会整条收起来，但再拖宽它不会自己回来
+    # （必须点一下 DDO 收放工具条才恢复）。
+    for width in (300, 260, 230):
+        app.root.geometry("%dx300" % width)
+        pump(app, 0.3)
+    narrow_stage = app._strip_stage
+    app.root.geometry("560x300")
+    pump(app, 0.6)
+    check("窗口拖宽后小灯会自己回来（不会一直空着）",
+          bool(app.channel_strip.winfo_manager()) and len(app._lamp_boxes) > 0,
+          "窄时档位=%s → 拖宽后档位=%s，小灯 %d 个"
+          % (narrow_stage, app._strip_stage, len(app._lamp_boxes)))
+    app.root.geometry("414x300")
+    pump(app, 0.3)
+
     # ---------------- 弹窗要开在主窗口旁边（不是屏幕左上角） ----------------
     app.root.geometry("414x300+900+520")
     pump(app, 0.4)

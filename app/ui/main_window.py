@@ -477,8 +477,10 @@ class MainWindow:
         try:
             if getattr(self, "_animating", False):
                 return
-            if not self.channel_strip.winfo_manager():
-                return
+            # 注意：这里**不能**因为"灯条当前没被布局"就 return ——
+            # 窄到一定程度时灯条会整条收起来（档位 hidden），窗口再拖宽就再也回不来了
+            # （用户实测：小圆点在缩放窗口时消失，得点一下 DDO 收放工具条才恢复）。
+            # 展开状态下本来就不该显示灯条，那个判断在下面。
             if not bool(self.config.get("toolbar_collapsed", True)):
                 return                       # 展开时灯条让位给功能按钮
             top_width = self._top_container.winfo_width()
@@ -490,15 +492,17 @@ class MainWindow:
                     self._top_container.after(60, self._fit_channel_strip)
                 return
             self._fit_retries = 0
-            # 用**实际**宽度算剩余空间：窗口很窄时 Tk 会裁别的控件，
-            # 拿 reqwidth 算会把可用空间估大，灯条就压到 ✕ 上去了
+            # 算剩余空间时，"窗口按钮（— ✕）"要用**它需要的宽度**（reqwidth）：
+            # 用实际宽度会死锁 —— 按钮被灯条挤扁以后实际宽度变小，于是算出来的
+            # 空间反而更大，灯条继续占着地方，按钮永远回不来（用户实测：
+            # 调小窗口后那个"缩小版小按钮"有时会消失，得点一下 DDO 才恢复）。
             used = 0
-            for widget, padding in ((self.brand, 16), (self.monitor_button, 2),
-                                    (self.window_buttons, 8)):
+            for widget, padding in ((self.brand, 16), (self.monitor_button, 2)):
                 width = widget.winfo_width()
                 if width <= 1:
                     width = widget.winfo_reqwidth()
                 used += width + padding
+            used += self.window_buttons.winfo_reqwidth() + 8
             space = max(0, top_width - used - TOOLBAR_OTHER_PADDING)
             # 先算宽度（不动界面），选好档位再一次性套用
             chosen = None
@@ -512,6 +516,35 @@ class MainWindow:
             self._strip_stage = chosen
             self._apply_strip_stage(chosen)
             self._sync_strip_width()
+            # 排完再确认一次：窗口按钮绝不能被灯条挤掉
+            self.channel_strip.after_idle(self._ensure_window_buttons)
+        except Exception:
+            pass
+
+    def _ensure_window_buttons(self) -> None:
+        """安全网：最小化/关闭按钮必须一直在（被挤掉就把灯条再让一档）。
+
+        灯条宽度是按"当前窗口宽度 - 其它控件"算的，正常不会挤到窗口按钮；
+        但拖动缩放时 Tk 的布局是分几步收敛的，偶尔会先挤掉按钮 —— 这里兜一下，
+        免得用户看到按钮莫名其妙消失、还得点 DDO 才能恢复。
+        """
+        try:
+            if getattr(self, "_animating", False):
+                return
+            if not self._top_container.winfo_ismapped():
+                return                      # 窗口还没显示（自检里是 withdraw 状态）
+            if not bool(self.config.get("frameless", False)):
+                return                      # 标准窗口有系统标题栏，不需要这两个按钮
+            if self.min_button.winfo_ismapped() and self.quit_button.winfo_ismapped():
+                return
+            order = list(self.STRIP_STAGES)
+            stage = self._strip_stage if self._strip_stage in order else order[0]
+            index = order.index(stage)
+            if index + 1 < len(order):
+                self._strip_stage = order[index + 1]
+                self._apply_strip_stage(self._strip_stage)
+                self._sync_strip_width()
+                self.channel_strip.after_idle(self._ensure_window_buttons)
         except Exception:
             pass
 
@@ -684,6 +717,7 @@ class MainWindow:
                 # 还没量出档位（窗口刚建好、还没布局）——先给个自然宽度，等布局好再收
                 self._strip_width = self.channel_strip.winfo_reqwidth()
             self._sync_strip_width()
+            self.channel_strip.after_idle(self._ensure_window_buttons)
 
     def _animate_toolbar(self, expanded: bool) -> None:
         """工具条收起/展开的过渡动画（两个容器宽度此消彼长，约 130ms）。"""
