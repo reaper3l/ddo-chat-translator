@@ -401,6 +401,16 @@ def test_ocr_variants_of_same_line_are_shown_once():
     assert [job.source for job in jobs] == ["lgotone-shotbyittoday"]
 
 
+def test_trailing_channel_label_variant_shown_once():
+    """同一条消息的"带频道标签 / 不带"两个 OCR 结果，只能显示一次。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines(["(小队):[小队] Dreambarb: out 小队"])
+    first = _drain_jobs(pipeline)
+    assert [job.source for job in first] == ["out"]      # 尾巴上的"小队"已经被摘掉
+    pipeline._handle_lines(["(小队):[小队] Dreambarb: out"])
+    assert _drain_jobs(pipeline) == []                   # 去重后不再排一次
+
+
 def test_long_line_read_short_is_not_shown_twice():
     pipeline = make_pipeline(EchoEngine())
     pipeline._handle_lines(["(小队):[小队] Beruthiell:there is something like thisinArtofWar"])

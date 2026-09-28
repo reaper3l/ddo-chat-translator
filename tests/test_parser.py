@@ -319,3 +319,31 @@ def test_normal_channels_not_affected_by_whisper_rules():
                     "(常规)Alice: OMW"])
     assert [event.channel for event in chats] == ["小队", "常规"]
     assert [event.speaker for event in chats] == ["Guihuo", "Alice"]
+
+
+# ------------------------------------------------- 正文尾巴上的"频道标签"
+# 游戏聊天框在每一行**右边**还画一次频道名，OCR 常把它并进正文尾部。实测译文里
+# 会多出"小队"两个字（"走" → "走小队"），同一条消息还会因为"带标签/不带标签"
+# 两个读法被显示两遍。
+
+def test_trailing_channel_label_is_stripped():
+    assert _chats(["(小队):[小队] Dreambarb: out 小队"])[0].text == "out"
+    assert _chats(["(小队):[小队] AngelGwing: ty all (小队)"])[0].text == "ty all"
+    assert _chats(["(小队):[小队] AngelGwing: ty all[小队]"])[0].text == "ty all"
+    assert _chats(["(小队):[小队] Mornyngstar: resetting?小队"])[0].text == "resetting?"
+    assert _chats(["(常规): Alice: hi 常规"])[0].text == "hi"
+    # 系统消息尾巴上也会粘（"…离开了你的队伍。 小队"）
+    systems = [event for event in ChatParser().parse(
+        ["(小队):AngelGwing离开了你的队伍。 小队"]) if event.kind == "system"]
+    assert systems and systems[0].text == "AngelGwing离开了你的队伍"
+
+
+def test_trailing_label_stripped_in_whisper():
+    assert _chats(["(私聊): Rockok告诉你: need heals 小队"])[0].text == "need heals"
+
+
+def test_trailing_label_does_not_eat_real_text():
+    # 中文正文里"回小队"是正常说法（标签直接粘在中文后面时不砍）
+    assert _chats(["(小队):[小队] Bob: 我要回小队"])[0].text == "我要回小队"
+    # 普通英文结尾不能动
+    assert _chats(["(小队):[小队] Bob: need a squad"])[0].text == "need a squad"

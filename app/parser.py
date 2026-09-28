@@ -231,6 +231,47 @@ def _clean_chat_body(body: str) -> str:
     return textutil.collapse_doubled(textutil.clean_body(body))
 
 
+# 游戏聊天框在**每一行右边**还画一次频道名（小队 / 常规 / 战利品…），OCR 经常把它
+# 并到正文尾部：实测译文会多出"小队"两个字（"走" 变成 "走小队"），而且同一条消息
+# 会因为"带标签/不带标签"两个 OCR 结果被显示两遍。
+_LABEL_WRAP = "()[]{}（）【】<>《》"
+_LABEL_TAIL_TRIM = " \t。，,、;；…·-—"
+
+
+def _strip_trailing_channel_label(text: str, aliases) -> str:
+    """去掉正文末尾那个"频道标签"尾巴。
+
+    只认**频道表里有的名字**（含内置的 OCR 错字别名），而且至少要两个字，
+    所以像 "战"、"小" 这种单字不会误伤正常内容；整条就只有标签时也不动
+    （免得把消息清成空）。
+
+    还有一条：标签**直接粘在中文后面**时不砍 —— "我要回小队" 是正常聊天，
+    而 UI 那个标签总是空格隔开、或者粘在英文/标点后面（"out 小队"、"resetting?小队"）。
+    """
+    candidate = (text or "").rstrip()
+    if not candidate:
+        return text
+    for size in range(1, min(13, len(candidate) + 1)):
+        raw = candidate[-size:]
+        if any(ch.isspace() for ch in raw):
+            break                       # 标签里不会有空格，越界了就别再往前试
+        label = raw.strip(_LABEL_WRAP).strip()
+        if len(label) < 2:
+            continue
+        # 这里用"严格等于某个频道名/别名"判断，**不走模糊兜底** —— 模糊规则会把
+        # "回小队""要回小队"这种正常中文尾巴也认成频道名，那就把正文吃掉了。
+        table = DEFAULT_ALIASES if aliases is None else aliases
+        if label not in table:
+            continue
+        before = candidate[: len(candidate) - size]
+        if before and textutil.has_cjk(before[-1:]):
+            continue                    # "我要回小队""在小队" 这种正常中文结尾不能砍
+        rest = before.rstrip(_LABEL_TAIL_TRIM)
+        if rest:                        # 别把整条消息吃光
+            return rest
+    return text
+
+
 def _split_whisper(rest: str) -> Optional[Tuple[str, str]]:
     """识别悄悄话（私聊）行，返回 (主语, 消息正文)；不是悄悄话返回 None。
 
@@ -380,6 +421,8 @@ class ChatParser:
         channels = [c for c in (normalize_channel(s[2], self.aliases) for s in spans) if c]
         channel = channels[0] if channels else ""
         rest = (line[spans[-1][1]:] if spans else line).strip()
+        # 游戏聊天框右侧那一次频道名会被 OCR 并进正文尾部 → 先摘掉
+        rest = _strip_trailing_channel_label(rest, self.aliases)
 
         # ---- 有频道前缀 ----
         if spans:
@@ -452,7 +495,7 @@ class ChatParser:
         # "Name: text" 但前缀丢了 → 按聊天行处理，频道沿用上一条
         name, body = _split_speaker(line)
         if name and last_chat is not None:
-            body = _clean_chat_body(body)
+            body = _clean_chat_body(_strip_trailing_channel_label(body, self.aliases))
             if textutil.is_noise(body):
                 return last_chat
             event = Event(KIND_CHAT, body,
@@ -463,7 +506,8 @@ class ChatParser:
 
         # 续行：接到上一条聊天消息后面
         if last_chat is not None and not textutil.is_noise(line):
-            tail = textutil.clean_body(line)
+            tail = textutil.clean_body(
+                _strip_trailing_channel_label(line, self.aliases))
             if tail:
                 last_chat.text = textutil.normalize(last_chat.text + " " + tail)
             return last_chat
