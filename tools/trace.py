@@ -28,12 +28,22 @@ from app.store import MemoryStore             # noqa: E402
 
 def _verdict(event, config) -> str:
     """这条内容最终会不会显示在主界面（和 Pipeline._handle_lines 同一套判断）。"""
-    enabled = config.get("channels_enabled", {}) or {}
+    from app import channels as channels_module
+
+    enabled = channels_module.enabled_map(config)
     if Pipeline.is_panel_text(event.text):
         return "不显示（战利品/宝箱/任务面板特征）"
     if event.kind == "chat":
-        if event.channel and not enabled.get(event.channel, True):
-            return "不显示（频道已关闭）"
+        channel = getattr(event, "channel", "") or ""
+        if channel:
+            if channel in enabled and not enabled[channel]:
+                return "不显示（这个频道在 设置 → 频道 里关着）"
+            if channel not in enabled:
+                return ("不显示（频道表里没有「%s」：去 设置 → 频道 加一行就能显示）"
+                        % channel)
+        elif getattr(event, "prefix_text", ""):
+            return ("不显示（有括号前缀但没登记这个频道：%r）"
+                    % event.prefix_text.strip())
         return "★显示（玩家发言，会被翻译）"
     if event.kind == "system":
         if config.get("system_whitelist", True) and \

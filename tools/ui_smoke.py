@@ -225,26 +225,26 @@ def main() -> int:
     step("设置分类各自独立窗口且按钮可见", settings_buttons_visible)
 
     def appearance_preview_follows_channel_color():
-        """改频道颜色时，外观页的预览必须立刻跟着变。"""
+        """频道颜色现在统一在「设置 → 频道」里改：改完外观页的预览要跟着变。"""
         dialog = SettingsDialog(app)
         page = dialog.open_category("外观")
         page.update_idletasks()
         tab = dialog.appearance
         if tab is None:
             raise AssertionError("外观页没有创建出来")
-        original = tab.channel_vars["小队"].get()      # 记下来，测完还原
-        tab.channel_vars["小队"].set("#ff00ff")
+        if hasattr(tab, "channel_vars"):
+            raise AssertionError("外观页不该再有单独的频道颜色输入框（已合并到频道页）")
+        # 频道颜色只有一份（config["channel_colors"]，由频道表派生）：
+        # 改它 → 外观预览、主窗口文字、工具条小灯都跟着变
+        original = dict(app.config.get("channel_colors") or {})
+        app.config["channel_colors"] = dict(original, **{"小队": "#ff00ff"})
+        tab.refresh_preview()
         page.update_idletasks()
         actual = str(tab.preview.tag_cget("channel_小队", "foreground")).lower()
         if actual != "#ff00ff":
             raise AssertionError("预览里的频道颜色没跟着变（当前 %r）" % actual)
-        dialog.save()
-        page.update_idletasks()
-        actual = str(tab.preview.tag_cget("channel_小队", "foreground")).lower()
-        if actual != "#ff00ff":
-            raise AssertionError("保存后预览颜色又变回去了（当前 %r）" % actual)
-        tab.channel_vars["小队"].set(original)
-        dialog.save()                                   # 把你的原颜色存回去
+        app.config["channel_colors"] = original
+        tab.refresh_preview()
         dialog.window.destroy()      # 子窗口会跟着主窗口一起销毁
 
     step("外观预览跟随频道颜色变化", appearance_preview_follows_channel_color)

@@ -77,6 +77,45 @@ def test_alias_table_recognises_custom_channel():
     assert events[0].channel == "团队"
 
 
+def test_alias_table_only_covers_channels_in_the_table():
+    """识别跟着频道表走：内置的 OCR 错字别名只对表里存在的频道生效。"""
+    from app.parser import alias_table_for, normalize_channel
+
+    with_squad = alias_table_for(["小队", "公会"])
+    assert normalize_channel("寸队", with_squad) == "小队"      # 内置错字别名还在
+    assert normalize_channel("小队", with_squad) == "小队"
+
+    without_squad = alias_table_for(["团队"])
+    assert normalize_channel("小队", without_squad) == ""       # 表里没有就不认
+    assert normalize_channel("寸队", without_squad) == ""
+    assert normalize_channel("团队", without_squad) == "团队"   # 自己加的认得
+
+
+def test_unknown_channel_line_keeps_its_prefix_for_filtering():
+    """没登记的频道：解析成"没有频道名"，但保留括号前缀 —— 流水线据此过滤并提示。"""
+    table = {"团队": "团队"}
+    events = ChatParser(table).parse(["(聊天): Sinoke: hi there"])
+    assert events[0].kind == "chat"
+    assert events[0].channel == ""
+    assert events[0].prefix_text            # 有前缀 → 上层能看出"这是没登记的频道"
+
+
+def test_single_char_fuzzy_rule_needs_exact_match():
+    """单字兜底规则（"队"/"小"）不能把"团队""队伍"这类别的频道吸过来。"""
+    from app.parser import alias_table_for, normalize_channel
+
+    table = alias_table_for(["小队", "公会"])       # 表里没有 队伍/团队
+    assert normalize_channel("队", table) == "小队"     # 整个标签就一个字 → 兜底
+    assert normalize_channel("小", table) == "小队"
+    assert normalize_channel("团队", table) == ""       # 不认，也不冒充小队
+    assert normalize_channel("队伍", table) == ""
+    # OCR 把 ① 读成 1 之后（"( 1队 )"）仍然要认出小队
+    assert normalize_channel("1队", table) == "小队"
+
+    with_team = alias_table_for(["小队", "团队"])
+    assert normalize_channel("团队", with_team) == "团队"   # 登记过就正常认出来
+
+
 def test_short_name_trims_long_names():
     assert channels.short_name("小队") == "小队"
     assert channels.short_name("战利品") == "战利品"

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from .parser import alias_table_for
+
 # 默认频道表（按游戏里实际的频道；**没有"队伍"** —— 游戏里不存在这个频道）
 # 字段说明：
 #   name    频道名（要和游戏里显示的一致）
@@ -142,9 +144,9 @@ def strip_map(config: dict) -> Dict[str, bool]:
 
 
 def alias_table(config: dict) -> Dict[str, str]:
-    """给解析器用的别名表：玩家自己加的频道名也要能认出来。"""
-    table = {name: name for name in names(config)}
+    """给解析器用的别名表：识别跟着「设置 → 频道」走。
+
+    内置的 OCR 错字别名只对表里存在的频道生效，玩家自定义的频道名也一起认。
+    """
     user = config.get("prefix_aliases")
-    if isinstance(user, dict):
-        table.update({str(k): str(v) for k, v in user.items()})
-    return table
+    return alias_table_for(names(config), user if isinstance(user, dict) else None)

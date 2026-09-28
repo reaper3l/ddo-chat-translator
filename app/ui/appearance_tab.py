@@ -21,8 +21,9 @@ SYSTEM_SAMPLE = "你的队友 Kendra Estleton 已死亡"
 
 
 class AppearanceTab:
-    def __init__(self, parent: tk.Misc, config: dict) -> None:
+    def __init__(self, parent: tk.Misc, config: dict, dialog=None) -> None:
         self.config = config
+        self.dialog = dialog          # 用来跳转到「频道」页（颜色统一在那边改）
         self.working = copy.deepcopy(config.get("appearance") or {})
         for name, _label in style.ELEMENTS:
             # 和默认值合并：老配置里没有的新字段（比如 follow_channel）也能取到默认值，
@@ -30,10 +31,8 @@ class AppearanceTab:
             merged = dict(style.DEFAULTS[name])
             merged.update(self.working.get(name) or {})
             self.working[name] = merged
-        self.channel_colors = dict(config.get("channel_colors") or {})
         self.current = "channel"
         self.vars = {}
-        self.channel_vars = {}
         self._build(parent)
         self._load_element("channel")
         self.refresh_preview()
@@ -151,30 +150,20 @@ class AppearanceTab:
         ttk.Label(row, text="（Tk 不支持字形描边，用底色+边框近似）",
                   style="Muted.TLabel").pack(side="left", padx=6)
 
-        channels = ttk.LabelFrame(parent, text="频道颜色")
-        channels.pack(fill="x", padx=10, pady=4)
-        for index, channel in enumerate(list(self.channel_colors.keys())):
-            cell = ttk.Frame(channels)
-            cell.grid(row=index // 2, column=index % 2, sticky="w", padx=4, pady=2)
-            ttk.Label(cell, text=channel, width=8).pack(side="left")
-            var = tk.StringVar(value=self.channel_colors.get(channel, "#ffffff"))
-            self.channel_vars[channel] = var
-            ttk.Entry(cell, textvariable=var, width=9).pack(side="left")
-            ttk.Button(cell, text="取色", width=4,
-                       command=lambda v=var: self._pick(v)).pack(side="left", padx=3)
-            # 关键：颜色一变就刷新预览（之前漏了，导致改了颜色预览不动）
-            var.trace_add("write", lambda *_a: self.refresh_preview())
-
-        def set_all_channels():
-            chosen = colorchooser.askcolor(color="#ffffff")
-            if chosen and chosen[1]:
-                for var in self.channel_vars.values():
-                    var.set(chosen[1])
-                self.refresh_preview()
-
-        ttk.Button(channels, text="全部设为同一色", command=set_all_channels).grid(
-            row=(len(self.channel_vars) + 1) // 2, column=0, columnspan=2,
-            sticky="w", padx=4, pady=(4, 2))
+        # 频道颜色不在这里改了 —— 已合并到「设置 → 频道」页：
+        # 那里一个频道一行，**名字 / 颜色 / 要不要翻 / 要不要小灯**都在一起，
+        # 而且那个颜色同时用于"频道前缀 + 正文（跟随频道色）+ 工具条那盏小灯"，
+        # 三处一致，不会再出现"文字是绿的、小灯是另一种绿"这种对不上的情况。
+        channel_hint = ttk.LabelFrame(parent, text="频道颜色")
+        channel_hint.pack(fill="x", padx=10, pady=4)
+        ttk.Label(
+            channel_hint, style="Muted.TLabel", justify="left", wraplength=520,
+            text="频道名、颜色、要不要翻译、要不要显示小灯，都在「设置 → 频道」里改。\n"
+                 "那里的颜色同时用于这个频道的**前缀、正文（跟随频道色时）和工具条小灯**。"
+        ).pack(anchor="w", padx=8, pady=6)
+        ttk.Button(channel_hint, text="打开「频道」设置",
+                   command=self._open_channel_settings).pack(
+            anchor="w", padx=8, pady=(0, 8))
 
         preview_frame = ttk.LabelFrame(parent, text="预览")
         preview_frame.pack(fill="both", expand=True, padx=10, pady=(4, 8))
@@ -205,6 +194,14 @@ class AppearanceTab:
             chosen = None
         if chosen and chosen[1]:
             var.set(chosen[1])
+
+    def _open_channel_settings(self) -> None:
+        """跳到「频道」页改频道名/颜色（颜色统一在那边管）。"""
+        try:
+            if self.dialog is not None:
+                self.dialog.open_category("频道")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ 编辑
     def _switch_element(self) -> None:
@@ -278,7 +275,9 @@ class AppearanceTab:
     def _preview_config(self) -> dict:
         config = dict(self.config)
         config["appearance"] = self.working
-        config["channel_colors"] = {k: v.get().strip() for k, v in self.channel_vars.items()}
+        # 频道颜色取当前配置里的那一份（「设置 → 频道」管着它），这样预览里
+        # 看到的前缀/正文颜色和主窗口、和小灯都是同一个色
+        config["channel_colors"] = dict(self.config.get("channel_colors") or {})
         config["font_family"] = self.base_family.get().strip() or "Microsoft YaHei"
         try:
             config["font_size"] = int(str(self.base_size.get()).strip() or 11)
@@ -320,9 +319,8 @@ class AppearanceTab:
     def save(self) -> None:
         self._store_current()
         self.config["appearance"] = copy.deepcopy(self.working)
-        self.config["channel_colors"] = {
-            key: (var.get().strip() or "#ffffff") for key, var in self.channel_vars.items()
-        }
+        # 频道颜色不在这里写了：统一由「设置 → 频道」那张表管（保存时会同步到
+        # channel_colors，供样式和渲染读取）。
         self.config["font_family"] = self.base_family.get().strip() or "Microsoft YaHei"
         try:
             self.config["font_size"] = int(str(self.base_size.get()).strip() or 11)

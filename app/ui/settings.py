@@ -133,7 +133,8 @@ class SettingsDialog:
             elif title == "显示与学习":
                 self._build_display_tab(None)
             elif title == "外观":
-                self.appearance = AppearanceTab(scrollable.inner, self.config)
+                self.appearance = AppearanceTab(scrollable.inner, self.config,
+                                                dialog=self)
             elif title == "关于":
                 self._build_about_tab(scrollable.inner)
         finally:

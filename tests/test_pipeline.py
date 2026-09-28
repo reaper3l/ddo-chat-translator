@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from app.config import DEFAULT_CONFIG
+from app import channels
 from app.engines import BaseEngine, TranslationResult
 from app.glossary import Glossary
 from app.pipeline import DisplayItem, Pipeline
@@ -154,7 +155,8 @@ def test_cache_avoids_second_api_call():
     # 同一句在去重时间窗内会被直接拦掉，这里模拟"过了时间窗又出现一次"
     pipeline.deduper.clear()
     pipeline.forget_recent()
-    pipeline._handle_lines(["(队伍)Bob: a fresh sentence here"])
+    # 换一个"表里确实存在、且开着"的频道（默认表里没有"队伍"这个频道）
+    pipeline._handle_lines(["(公会)Bob: a fresh sentence here"])
     item = pipeline._process(pipeline._jobs.get_nowait())
     assert engine.calls == 1          # 命中缓存
     assert item.note == "缓存"
@@ -411,3 +413,33 @@ def test_repeated_system_notice_is_shown_once():
     pipeline._handle_lines(["(小队): 你的队友 Beruthiell 己死亡"])
     shown = _drain_display(pipeline)
     assert [item.kind for item in shown] == ["system"]
+
+
+def test_unregistered_channel_is_filtered_with_a_hint():
+    """没登记的频道（游戏更新/OCR 读花）不显示，但要计数 + 提示去频道页加一行。"""
+    pipeline = make_pipeline(EchoEngine())
+    before = pipeline.stats["filtered"]
+    pipeline._handle_lines(["(聊天): Sinoke: hi there"])
+    assert _drain_jobs(pipeline) == []                    # 不翻译
+    assert pipeline.stats["filtered"] == before + 1        # 但算进"过滤"
+    notices = []
+    while not pipeline.ui_queue.empty():
+        event = pipeline.ui_queue.get_nowait()
+        if event.get("type") == "status":
+            notices.append(event.get("text", ""))
+    assert any("没登记的频道" in text for text in notices), notices
+
+
+def test_channel_switch_off_is_silent():
+    """表里存在但被用户关掉的频道：静默跳过（不计入"过滤"，也不提示）。"""
+    pipeline = make_pipeline(EchoEngine())
+    config = pipeline.config
+    items = channels.effective(config)
+    for entry in items:
+        if entry["name"] == "小队":
+            entry["enabled"] = False
+    channels.sync(config, items)
+    before = pipeline.stats["filtered"]
+    pipeline._handle_lines(["(小队):[小队] Sinoke: hi there"])
+    assert _drain_jobs(pipeline) == []
+    assert pipeline.stats["filtered"] == before

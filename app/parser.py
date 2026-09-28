@@ -120,15 +120,50 @@ class Event:
         return self.kind == KIND_CHAT
 
 
-def normalize_channel(raw: str, aliases: Optional[Dict[str, str]] = None) -> str:
-    """把 OCR 认出的频道名归一化成标准频道；认不出来返回空串。"""
+def alias_table_for(names: Sequence[str],
+                    extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """按"当前频道表"生成别名表（识别跟着设置走）。
+
+    内置的那堆 OCR 错字别名（寸队→小队、战励品→战利品…）**只对表里存在的频道生效**：
+    玩家改了名字、或者删掉某个频道以后，识别也跟着变 —— 不会再把已经删掉的频道
+    认出来，也就不会冒出"设置里根本没有的频道"。
+    """
+    wanted = [str(name).strip() for name in (names or []) if str(name).strip()]
+    table: Dict[str, str] = {}
+    for alias, canonical in DEFAULT_ALIASES.items():
+        if canonical in wanted:
+            table[alias] = canonical
+    for name in wanted:
+        table[name] = name
+    if extra:
+        table.update({str(k): str(v) for k, v in extra.items()})
+    return table
+
+
+def normalize_channel(raw: str, aliases: Optional[Dict[str, str]] = None,
+                      allowed: Optional[Sequence[str]] = None) -> str:
+    """把 OCR 认出的频道名归一化成标准频道；认不出来返回空串。
+
+    `allowed` 是"当前允许的频道名集合"（一般直接由别名表推导）：模糊兜底规则
+    只会归到集合里的频道，免得把已经删掉的频道又认回来。
+    """
     name = (raw or "").strip().strip(":：").replace(" ", "").replace("　", "")
     if not name:
         return ""
     table = DEFAULT_ALIASES if aliases is None else aliases
     if name in table:
         return table[name]
+    allowed_set = set(table.values()) if allowed is None else set(allowed)
+    # 这个名字会不会其实是"表里没有的另一个频道"？（例如表里没有"队伍"，
+    # 而标签是"团队/队伍"）—— 是的话别用模糊规则硬凑到某个频道上，
+    # 返回空，让上层提示"去 设置 → 频道 加一行"。
+    absent = {alias for alias, canonical in DEFAULT_ALIASES.items()
+              if canonical not in allowed_set}
+    if name in absent or any(len(word) >= 2 and word in name for word in absent):
+        return ""
     for token, channel in _FUZZY_RULES:
+        if channel not in allowed_set:
+            continue
         if token in name:
             return channel
     return ""
@@ -277,9 +312,9 @@ class ChatParser:
 
     def __init__(self, aliases: Optional[Dict[str, str]] = None,
                  infer_channel_from_previous: bool = True) -> None:
-        self.aliases = dict(DEFAULT_ALIASES)
-        if aliases:
-            self.aliases.update(aliases)
+        # 传进来的别名表就是"当前全部可识别的频道"（由 app/channels.py 按频道表生成）；
+        # 传 None 时用内置那套（单测和老工具用）。
+        self.aliases = dict(DEFAULT_ALIASES) if aliases is None else dict(aliases)
         self.infer_channel_from_previous = infer_channel_from_previous
 
     # ---------------------------------------------------------------- 主入口

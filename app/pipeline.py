@@ -135,6 +135,7 @@ class Pipeline:
         self._cache: Dict[str, str] = {}
         self._cache_dirty = False
         self._last_notice = 0.0
+        self._unknown_channels: Dict[str, float] = {}   # 没登记的频道 → 最近一次出现时间
         self.screen_size = None      # Tk 认为的屏幕尺寸，由界面线程写入
         self.stats = {
             "frames": 0,
@@ -512,9 +513,12 @@ class Pipeline:
 
             if event.kind != KIND_CHAT:
                 continue
-            # 频道的开关只对"频道表里的频道"生效；万一游戏更新多出个没登记的
-            # 频道，宁可先照常显示（fail-open），也不要让玩家看不到聊天
-            if event.channel and not enabled.get(event.channel, True):
+            # 识别与过滤都跟着「设置 → 频道」那张表走：
+            #   * 表里开着 → 正常翻译显示
+            #   * 表里关掉 → 静默跳过（是玩家自己关的）
+            #   * 表里没有（含"有括号前缀但认不出频道"的）→ 不显示，但要计数 +
+            #     隔一会儿提示一次"去频道页加一行"，免得游戏更新后聊天悄悄消失
+            if not self._channel_ok(event, enabled):
                 continue
             # OCR 有时把面板文字粘在玩家正文后面（"堡垒? 错误):你的队友已经…"），
             # 这种正文翻出来一定是垃圾，直接不显示。
@@ -558,6 +562,37 @@ class Pipeline:
     def _count_filtered(self) -> None:
         """记一笔"被过滤掉的噪音行"，界面上能看到过滤器确实在干活。"""
         self.stats["filtered"] = self.stats.get("filtered", 0) + 1
+
+    def _channel_ok(self, event, enabled: dict) -> bool:
+        """这条玩家发言的频道该不该处理（判断依据就是 设置 → 频道 那张表）。"""
+        channel = getattr(event, "channel", "") or ""
+        if channel:
+            if channel in enabled:
+                return bool(enabled[channel])
+            # 表里没有这个频道 → 不显示。但提示一下，别让玩家以为程序坏了
+            self._count_filtered()
+            self._notice_unknown_channel(getattr(event, "prefix_text", "") or channel)
+            return False
+        if getattr(event, "prefix_text", ""):
+            # 有括号前缀却认不出是哪个频道（OCR 读花，或者游戏新增了频道）
+            self._count_filtered()
+            self._notice_unknown_channel(event.prefix_text)
+            return False
+        return True          # 没前缀的（续行 / 丢了前缀的名字行）照旧处理
+
+    def _notice_unknown_channel(self, label: str) -> None:
+        """提示"有没登记的频道"，同一个频道 60 秒内只说一次。"""
+        label = " ".join(str(label or "").split())
+        if not label:
+            return
+        now = time.time()
+        self._unknown_channels[label] = now
+        for name in [k for k, when in self._unknown_channels.items()
+                     if now - when > 60]:
+            self._unknown_channels.pop(name, None)
+        recent = sorted(self._unknown_channels)
+        self._notice("有没登记的频道：%s（设置 → 频道 里加一行就能显示/翻译）"
+                     % "、".join(recent[:3]), "warn", min_gap=30.0)
 
     def _seen_recently(self, text: str) -> bool:
         """这条内容最近是不是已经出现过（允许 OCR 读花几个字）。
