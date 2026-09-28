@@ -347,3 +347,8 @@ def test_trailing_label_does_not_eat_real_text():
     assert _chats(["(小队):[小队] Bob: 我要回小队"])[0].text == "我要回小队"
     # 普通英文结尾不能动
     assert _chats(["(小队):[小队] Bob: need a squad"])[0].text == "need a squad"
+
+
+def test_trailing_label_tolerates_ocr_misread():
+    """标签被 OCR 认花（"小际"）时，只要它跟正文之间有空格，也按标签摘掉。"""
+    assert _chats(["(小队):[小队] Bob: out 小际"])[0].text == "out"

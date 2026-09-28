@@ -251,15 +251,18 @@ def _strip_trailing_channel_label(text: str, aliases) -> str:
     candidate = (text or "").rstrip()
     if not candidate:
         return text
-    for size in range(1, min(13, len(candidate) + 1)):
+    # 尾巴最多取 8 个字（自定义频道名够用）；模糊兜底只给"真实标签长度"（≤4）用，
+    # 否则 "我要回小队" 这种整句会被当成一个长标签匹配掉。
+    for size in range(1, min(9, len(candidate) + 1)):
         raw = candidate[-size:]
         if any(ch.isspace() for ch in raw):
             break                       # 标签里不会有空格，越界了就别再往前试
         label = raw.strip(_LABEL_WRAP).strip()
         if len(label) < 2:
             continue
-        # 这里用"严格等于某个频道名/别名"判断，**不走模糊兜底** —— 模糊规则会把
-        # "回小队""要回小队"这种正常中文尾巴也认成频道名，那就把正文吃掉了。
+        # 只认"严格等于频道名/别名"（别名表里已经含 OCR 常见错字：小际、寸队、战励品…），
+        # **不走模糊兜底** —— 模糊规则是子串匹配，会把 "你好世界"（含"世界"）、
+        # "我要回小队"（含"队"）这种正常中文尾巴也当成频道名，把正文吃掉。
         table = DEFAULT_ALIASES if aliases is None else aliases
         if label not in table:
             continue
