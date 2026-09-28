@@ -121,6 +121,7 @@ def main() -> int:
 
     config_backup = paths_module.read_json(paths_module.CONFIG_PATH, None)
 
+    from app import disclaimer
     from app.pipeline import DisplayItem
     from app.ui.cn2en import CnToEnDialog
     from app.ui.learn import CorrectionDialog, DictionaryDialog, LearningCenterDialog
@@ -134,6 +135,8 @@ def main() -> int:
     def create_main():
         app = MainWindow()
         app.config["check_update"] = False      # 自检不联网（启动检查是后台请求）
+        # 使用须知已经同意过了：这一关单独用下面的步骤测（否则会弹出来挡住后面的步骤）
+        app.config["agreement_version"] = disclaimer.DISCLAIMER_VERSION
         app.root.withdraw()
         app.root.update_idletasks()
         holder["app"] = app
@@ -150,6 +153,53 @@ def main() -> int:
             app.root.update_idletasks()
 
     step("事件循环（轮询/首次提示）", lambda: pump(3))
+
+    def first_run_agreement():
+        """首次启动必须先过"使用须知"：同意才继续，不同意就退出程序。"""
+        app.config["agreement_version"] = 0
+        app.config["agreement_accepted_at"] = ""
+        app.startup_gate()                      # 没同意过 → 应该弹出来
+        pump(2)
+        dialog = app._agreement_dialog
+        if dialog is None:
+            raise AssertionError("首次启动没有弹出使用须知窗口")
+        # 自检里主窗口是 withdraw 的，子窗口跟着报告"未映射"，所以用 is_shown 判断
+        # （它除了 winfo_ismapped 还会看控件有没有被 pack 管理）
+        agree = find_widget(dialog.window, ttk.Button, "我已阅读并同意")
+        if not is_shown(agree):
+            raise AssertionError("使用须知窗口里找不到「我已阅读并同意」")
+        if find_widget(dialog.window, ttk.Button, "不同意，退出") is None:
+            raise AssertionError("使用须知窗口缺少「不同意，退出」")
+        body = find_widget(dialog.window, tk.Text)
+        if body is None or "免责声明" not in body.get("1.0", "end"):
+            raise AssertionError("使用须知窗口里没有条款正文")
+        if app.config["agreement_version"] != 0:
+            raise AssertionError("还没点同意就写进了同意状态")
+        agree.invoke()
+        pump(2)
+        if app.config["agreement_version"] != disclaimer.DISCLAIMER_VERSION:
+            raise AssertionError("点了同意却没有记录条款版本")
+        if not app.config.get("agreement_accepted_at"):
+            raise AssertionError("点了同意却没有记录同意时间")
+        if app._agreement_dialog is not None:
+            raise AssertionError("同意之后窗口没关掉")
+        # 同意过之后再走一次启动流程：不该再弹（否则每次开程序都要点一次）
+        app.startup_gate()
+        pump(1)
+        if app._agreement_dialog is not None:
+            raise AssertionError("同意过了还重复弹使用须知")
+        # 「关于」里的入口：只看，不改同意状态
+        viewer = app.open_agreement()
+        pump(2)
+        close = find_widget(viewer.window, ttk.Button, "关闭")
+        if not is_shown(close):
+            raise AssertionError("回看条款的窗口里找不到「关闭」")
+        if find_widget(viewer.window, ttk.Button, "我已阅读并同意") is not None:
+            raise AssertionError("回看条款时不该再出现「我已阅读并同意」")
+        close.invoke()
+        pump(2)
+
+    step("使用须知：首次启动必须同意（不同意=退出程序）", first_run_agreement)
 
     def render_chat():
         app._render(DisplayItem(1, "chat", "小队", "Sckham",

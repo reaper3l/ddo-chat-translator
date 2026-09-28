@@ -149,6 +149,7 @@ class SettingsDialog:
     def _build_about_tab(self, parent: ttk.Frame) -> None:
         """关于页：版本、引擎、数据位置、快捷键，并可直接打开对应文件。"""
         from .. import paths, update as update_module
+        from .. import disclaimer
         from .. import AUTHOR, HOMEPAGE, __version__
 
         # 公钥指纹：让用户能拿它跟发行页/README 上贴的对一对 —— 万一流传出去的是
@@ -179,6 +180,9 @@ class SettingsDialog:
             % HOMEPAGE.split("//")[-1],
             "签名公钥指纹（可和发行页上贴的核对，对不上就不是官方包）：%s"
             % (fingerprint or "（未配置）"),
+            "使用须知：%s" % ("已同意（%s）" % disclaimer.accepted_at(self.app.config)
+                          if not disclaimer.needs_agreement(self.app.config)
+                          else "尚未确认（下次启动会再问一次）"),
         ):
             ttk.Label(info, text=line, style="SurfaceMuted.TLabel").pack(
                 anchor="w", padx=8, pady=1)
@@ -191,6 +195,8 @@ class SettingsDialog:
         ttk.Button(row, text="打开发行页",
                    command=lambda: update_module.open_page(HOMEPAGE + "/releases")).pack(
             side="left", padx=6)
+        ttk.Button(row, text="使用须知 / 免责声明",
+                   command=self.app.open_agreement).pack(side="left")
 
         row = ttk.Frame(parent)
         row.pack(fill="x", padx=10, pady=6)

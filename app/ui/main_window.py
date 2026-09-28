@@ -15,10 +15,12 @@ from tkinter import messagebox, ttk
 
 from .. import channels
 from .. import config as config_module
+from .. import disclaimer
 from .. import paths, textutil
 from ..glossary import build_glossary
 from ..pipeline import DisplayItem, Pipeline
 from ..store import MemoryStore
+from .agreement import AgreementDialog
 from .cn2en import CnToEnDialog
 from .learn import CorrectionDialog, DictionaryDialog, LearningCenterDialog
 from .region import RegionPicker, show_preview
@@ -81,6 +83,7 @@ class MainWindow:
         self._last_flush = time.time()
         self._dialogs = {}
         self._first_notice_shown = False
+        self._agreement_dialog = None
 
         self._build_ui()
         self._bind_keys()
@@ -95,9 +98,8 @@ class MainWindow:
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
         self._publish_screen_size()
         self.root.after(100, self._poll)
-        self.root.after(400, self._first_run_hint)
-        # 启动几秒后悄悄查一次有没有新版本（后台线程，不挡界面；一天最多一次）
-        self.root.after(4000, self.maybe_check_update)
+        # 程序一开始先过"使用须知"这一关：同意了才提示怎么用、才去查更新
+        self.root.after(200, self.startup_gate)
 
     def _publish_screen_size(self) -> None:
         """把 Tk 的屏幕尺寸告知流水线（用于截图坐标换算）。"""
@@ -1175,6 +1177,34 @@ class MainWindow:
             notes.append("② 点「设置」填 DeepSeek API Key（或把引擎改成 mymemory 免费试用）")
         notes.append("③ 点「▶ 监听」开始实时翻译；翻译不对就选中它按 F10 纠正")
         self.set_status("  ".join(notes))
+
+    # ------------------------------------------------------- 使用须知 / 免责声明
+    def startup_gate(self) -> None:
+        """第一次打开（或条款改版后）先让用户确认使用须知；不同意就退出程序。
+
+        放在启动流程最前面：**同意之前不提示使用步骤、不查更新、不截图**。
+        """
+        if not disclaimer.needs_agreement(self.config):
+            self._after_agreement()
+            return
+        self._agreement_dialog = AgreementDialog(self, on_result=self._on_agreement)
+
+    def _on_agreement(self, accepted: bool) -> None:
+        self._agreement_dialog = None
+        if not accepted:
+            self.set_status("你没有同意使用须知，程序退出", "warn")
+            self.root.after(150, self.quit_app)
+            return
+        self._after_agreement()
+
+    def _after_agreement(self) -> None:
+        """同意之后才做的事：使用提示 + 后台查一次更新（一天最多一次）。"""
+        self.root.after(300, self._first_run_hint)
+        self.root.after(3800, self.maybe_check_update)
+
+    def open_agreement(self) -> None:
+        """从「设置 → 关于」回看使用须知（只看，不改同意状态）。"""
+        return AgreementDialog(self, readonly=True)
 
     def quit_app(self) -> None:
         try:

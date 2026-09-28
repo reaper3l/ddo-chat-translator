@@ -20,6 +20,7 @@ MODULES = [
     "test_config",
     "test_channels",
     "test_replies",
+    "test_disclaimer",
     "test_update",
     "test_ed25519",
     "test_parser",

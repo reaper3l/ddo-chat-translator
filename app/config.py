@@ -111,6 +111,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "update_skipped": "",          # 用户点过"跳过这个版本"的版本号
     # 发布包签名校验：默认**拒绝**安装未签名的包（见 CHANGELOG「发布包签名」）
     "update_allow_unsigned": False,
+    # 使用须知 / 免责声明：首次启动点"同意"才能用；条款改版（版本号 +1）会再问一次。
+    # 记录同意时间既是本地状态，也是"用户确实被告知过"的凭据。
+    "agreement_version": 0,        # 已经同意的条款版本（0 = 还没同意过）
+    "agreement_accepted_at": "",   # 同意的时间（本地时间，字符串）
     # 高级
     "window_pos": None,
     "window_size": [520, 620],
