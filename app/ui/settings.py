@@ -160,6 +160,8 @@ class SettingsDialog:
             groups = fingerprint.split(" ")
             fingerprint = "\n".join(" ".join(groups[i:i + 8])
                                     for i in range(0, len(groups), 8))
+        if len(keys) > 1:                    # 配了备用钥匙就说明一下（免得以为是错的）
+            fingerprint += "（主密钥；另有 %d 把备用）" % (len(keys) - 1)
 
         info = ttk.LabelFrame(parent, text="关于")
         info.pack(fill="x", padx=10, pady=(8, 4))
