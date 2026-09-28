@@ -159,7 +159,7 @@ class AppearanceTab:
         ttk.Label(
             channel_hint, style="Muted.TLabel", justify="left", wraplength=520,
             text="频道名、颜色、要不要翻译、要不要显示小灯，都在「设置 → 频道」里改。\n"
-                 "那里的颜色同时用于这个频道的**前缀、正文（跟随频道色时）和工具条小灯**。"
+                 "那里的颜色同时用于这个频道的前缀、正文（跟随频道色时）和工具条小灯。"
         ).pack(anchor="w", padx=8, pady=6)
         ttk.Button(channel_hint, text="打开「频道」设置",
                    command=self._open_channel_settings).pack(

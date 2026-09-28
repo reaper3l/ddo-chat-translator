@@ -1,4 +1,4 @@
-# DDO 翻译助手 v3.0.14
+# DDO 翻译助手 v3.0.15
 
 **DDO（龙与地下城 Online）游戏聊天实时翻译助手**
 
@@ -9,7 +9,7 @@
 | --- | --- |
 | 作者 | **一键三连**（Gitee：[git55236](https://gitee.com/git55236)） |
 | 项目地址 | https://gitee.com/git55236/ddo-chat-translator |
-| 当前版本 | v3.0.14（2026-09-28） |
+| 当前版本 | v3.0.15（2026-09-28） |
 | 完整手册 | [使用说明.md](使用说明.md) ← **新手先看这个** |
 | 技术栈 | Python 3.11 + tkinter · OCR: RapidOCR(PP-OCRv5) · 翻译: DeepSeek / MyMemory / 离线术语表 |
 
@@ -409,7 +409,7 @@ python tools/ui_smoke.py       # 界面自检：每个窗口真实创建一遍�
 ```
 python -m PyInstaller --noconfirm --clean build.spec
 python tools/verify_build.py                    # 查关键文件 + 跑一次 exe 自检
-DDO翻译助手_v3.0.14.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
+DDO翻译助手_v3.0.15.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
 ```
 
 > 发布发行版时注意：**发行说明（body）别用 curl 的 `--form-string` 传中文** ——
@@ -452,6 +452,6 @@ DDO翻译助手_v3.0.14.exe --self-check             # 用户侧自检（报告�
 
 * **作者**：一键三连
 * **项目主页 / 问题反馈**：https://gitee.com/git55236/ddo-chat-translator
-* **打包版本**：`DDO翻译助手_v3.0.14.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.14.exe`）
+* **打包版本**：`DDO翻译助手_v3.0.15.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.15.exe`）
 * **免责声明**：本工具只在本机读取屏幕、调用你自己配置的翻译接口，不收集也不上传任何游戏或个人信息；
   请遵守游戏服务条款，仅用于帮助理解聊天内容。
