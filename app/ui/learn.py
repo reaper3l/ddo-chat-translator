@@ -26,11 +26,11 @@ class CorrectionDialog:
 
         self.window = tk.Toplevel(app.root)
         self.window.title("纠正这条翻译")
-        self.window.geometry("620x420")
         self.window.transient(app.root)
         self.window.attributes("-topmost", True)
         theme.prepare_window(self.window, app.config)
-        theme.frameless_dialog(self.window, "纠正这条翻译", autofocus=True)
+        theme.frameless_dialog(self.window, "纠正这条翻译", autofocus=True,
+                               size=(620, 420))
         self._build()
 
     def _build(self) -> None:
@@ -105,10 +105,9 @@ class LearningCenterDialog:
         self.memory = app.memory
         self.window = tk.Toplevel(app.root)
         self.window.title("学习中心")
-        self.window.geometry("820x560")
         self.window.transient(app.root)
         theme.prepare_window(self.window, app.config)
-        theme.frameless_dialog(self.window, "学习中心")
+        theme.frameless_dialog(self.window, "学习中心", size=(820, 560))
         self._build()
         self.refresh()
 
@@ -297,10 +296,9 @@ class DictionaryDialog:
         self.app = app
         self.window = tk.Toplevel(app.root)
         self.window.title("词典 / 术语表")
-        self.window.geometry("760x560")
         self.window.transient(app.root)
         theme.prepare_window(self.window, app.config)
-        theme.frameless_dialog(self.window, "词典 / 术语表")
+        theme.frameless_dialog(self.window, "词典 / 术语表", size=(760, 560))
         self._build()
         self.refresh()
 

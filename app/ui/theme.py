@@ -548,11 +548,14 @@ def install_dialog_focus(window: tk.Misc, autofocus: bool = False) -> None:
 
 
 def frameless_dialog(window: tk.Misc, title: str, topmost: bool = True,
-                     on_close=None, autofocus: bool = False):
+                     on_close=None, autofocus: bool = False, size=None):
     """把对话框变成"无边框 + 自绘深色标题栏"。
 
     返回 (标题栏控件, FramelessWindow 实例)；标题栏本身就是拖动区域。
     原来的白色系统标题栏会和暗色主题打架，所以对话框统一走这里。
+
+    `size=(宽, 高)`：顺便把窗口摆到**父窗口旁边**（放在屏幕左上角太远了，
+    主窗口一般贴在游戏角落）。不传 size 就按控件自然大小估一个位置。
     """
     try:
         window.overrideredirect(True)
@@ -580,8 +583,138 @@ def frameless_dialog(window: tk.Misc, title: str, topmost: bool = True,
     helper = FramelessWindow(window, drag_handles=[header, label],
                              min_size=(360, 240))
     helper.set_enabled(True)
+    place_near(window, size)
     install_dialog_focus(window, autofocus=autofocus)
     return header, helper
+
+
+def _top_window(widget: tk.Misc):
+    """顺着 master 往上找最外层窗口（主窗口）。"""
+    node = widget
+    seen = 0
+    while node is not None and seen < 20:
+        if isinstance(node, tk.Tk):
+            return node
+        node = getattr(node, "master", None)
+        seen += 1
+    return None
+
+
+def _all_toplevels(node: tk.Misc, found=None):
+    """递归收集所有 Toplevel（对话框可能挂在别的对话框下面）。"""
+    if found is None:
+        found = []
+    try:
+        for child in node.winfo_children():
+            if isinstance(child, tk.Toplevel):
+                found.append(child)
+            _all_toplevels(child, found)
+    except Exception:
+        pass
+    return found
+
+
+def place_near(window: tk.Misc, size=None, gap: int = 14) -> None:
+    """把对话框摆到父窗口旁边，并且尽量不压住主窗口和父窗口。
+
+    依次尝试这些位置，取第一个"完全在桌面内、又不压住主窗口/父窗口"的：
+        父窗口右侧 → 父窗口左侧 → 主窗口右侧 → 主窗口左侧 → 桌面右/左侧
+    上下与父窗口顶部对齐（超出就夹在桌面内）。
+
+    为什么要这么绕：设置分类页（560 宽）从"设置中心"弹出来时，右边常常放不下，
+    直接翻到左边就会盖住主窗口 —— 用户要的是"在主窗口旁边"，不是"盖住它"。
+    """
+    parent = getattr(window, "master", None)
+    if parent is not None and not isinstance(parent, (tk.Tk, tk.Toplevel)):
+        parent = None
+    try:
+        window.update_idletasks()
+        if size:
+            width, height = int(size[0]), int(size[1])
+        else:
+            width = max(360, int(window.winfo_reqwidth()))
+            height = max(240, int(window.winfo_reqheight()))
+        if parent is not None:
+            px, py = parent.winfo_rootx(), parent.winfo_rooty()
+            pw, ph = parent.winfo_width(), parent.winfo_height()
+        else:
+            px, py, pw, ph = 40, 40, 0, 0
+        root = _top_window(window)
+        if root is not None and root is not parent:
+            try:
+                rx, ry = root.winfo_rootx(), root.winfo_rooty()
+                rw, rh = root.winfo_width(), root.winfo_height()
+            except Exception:
+                rx = ry = rw = rh = 0
+        else:
+            rx = ry = rw = rh = 0
+        # 桌面范围：多显示器时 winfo_vroot* 才是整个桌面
+        vx = window.winfo_vrootx() if hasattr(window, "winfo_vrootx") else 0
+        vy = window.winfo_vrooty() if hasattr(window, "winfo_vrooty") else 0
+        vw = window.winfo_vrootwidth() if hasattr(window, "winfo_vrootwidth") \
+            else window.winfo_screenwidth()
+        vh = window.winfo_vrootheight() if hasattr(window, "winfo_vrootheight") \
+            else window.winfo_screenheight()
+
+        protected = [(px, py, pw, ph)]
+        if rw and rh:
+            protected.append((rx, ry, rw, rh))
+        # 已经开着的其它对话框：位置被占就往下/右错开一点（层叠），别整块盖住
+        others = []
+        if root is not None:
+            try:
+                # 注意要**递归**找：设置分类页挂在"设置中心"下面，不是主窗口的直接子窗口
+                for child in _all_toplevels(root):
+                    if child in (window, root, parent):
+                        continue
+                    if not child.winfo_ismapped():
+                        continue
+                    others.append((child.winfo_rootx(), child.winfo_rooty(),
+                                   child.winfo_width(), child.winfo_height()))
+            except Exception:
+                others = []
+
+        def overlaps(x, y, rects):
+            for ox, oy, ow, oh in rects:
+                if ow <= 0 or oh <= 0:
+                    continue
+                if x < ox + ow and ox < x + width and y < oy + oh and oy < y + height:
+                    return True
+            return False
+
+        def fits(x, y):
+            return (vx + 4 <= x and x + width <= vx + vw - 4
+                    and vy + 4 <= y and y + height <= vy + vh - 4)
+
+        base_y = max(vy + 4, min(py, vy + vh - height - 4))
+        candidates = [px + pw + gap, px - width - gap]
+        if rw:
+            candidates += [rx + rw + gap, rx - width - gap]
+        candidates += [vx + vw - width - 4, vx + 4]
+        x = y = None
+        for candidate in candidates:
+            for step in range(5):                  # 位置被别的对话框占了就层叠错开
+                try_x, try_y = candidate + step * 26, base_y + step * 26
+                if not fits(try_x, try_y):
+                    break
+                if overlaps(try_x, try_y, protected):
+                    continue
+                if overlaps(try_x, try_y, others):
+                    continue
+                x, y = try_x, try_y
+                break
+            if x is not None:
+                break
+        if x is None:                              # 都不理想：选个在桌面内的
+            for candidate in candidates:
+                if fits(candidate, base_y):
+                    x, y = candidate, base_y
+                    break
+        if x is None:
+            x, y = max(vx + 4, min(px + pw + gap, vx + vw - width - 4)), base_y
+        window.geometry("%dx%d+%d+%d" % (width, height, x, y))
+    except Exception:
+        pass
 
 
 def install_overlay_styles(root: tk.Misc, key_color: str = KEY_COLOR) -> None:

@@ -37,12 +37,12 @@ class CnToEnDialog:
 
         self.window = tk.Toplevel(app.root)
         self.window.title("中译英 —— 说给外国玩家听")
-        self.window.geometry("560x560")
         self.window.attributes("-topmost", True)
         self.window.transient(app.root)
         theme.prepare_window(self.window, app.config)
         # autofocus：这个窗口打开就是为了打字，所以显示后直接把焦点给输入框
-        theme.frameless_dialog(self.window, "中译英 —— 说给外国玩家听", autofocus=True)
+        theme.frameless_dialog(self.window, "中译英 —— 说给外国玩家听",
+                               autofocus=True, size=(560, 560))
         self._build()
         self._poll()
 

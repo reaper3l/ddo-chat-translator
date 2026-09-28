@@ -86,9 +86,8 @@ def show_preview(parent: tk.Misc, region, image, lines, on_retry=None, info="") 
     window = tk.Toplevel(parent)
     window.title("识别测试 / 框选预览")
     window.attributes("-topmost", True)
-    window.geometry("760x580")
     theme.prepare_window(window)
-    theme.frameless_dialog(window, "识别测试 / 框选预览")
+    theme.frameless_dialog(window, "识别测试 / 框选预览", size=(760, 580))
 
     theme.label(window, "区域：%s" % (region,),
                 font=("Microsoft YaHei", 10)).pack(anchor="w", padx=10, pady=(8, 2))

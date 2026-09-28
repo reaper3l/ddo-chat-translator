@@ -1,4 +1,4 @@
-# DDO 翻译助手 v3.0.16
+# DDO 翻译助手 v3.0.17
 
 **DDO（龙与地下城 Online）游戏聊天实时翻译助手**
 
@@ -9,12 +9,14 @@
 | --- | --- |
 | 作者 | **一键三连**（Gitee：[git55236](https://gitee.com/git55236)） |
 | 项目地址 | https://gitee.com/git55236/ddo-chat-translator |
-| 当前版本 | v3.0.16（2026-09-28） |
+| 当前版本 | v3.0.17（2026-09-28） |
 | 完整手册 | [使用说明.md](使用说明.md) ← **新手先看这个** |
 | 技术栈 | Python 3.11 + tkinter · OCR: RapidOCR(PP-OCRv5) · 翻译: DeepSeek / MyMemory / 离线术语表 |
 
 ### 更新日志
 
+* **v3.0.17**（2026-09-28）弹窗（设置 / 中译英 / 纠错 / 学习中心 / 词典 / 框选预览）
+  都开在**主窗口旁边**（右侧优先，放不下翻左侧；再不够就层叠错开），不再跑到屏幕左上角。
 * **v3.0.16**（2026-09-28）修复"改完设置点保存并关闭有时不生效"：频道开关原来有
   两份（监控页 / 频道页）会互相覆盖，现在只保留「频道」页一份，监控页改成跳转按钮；
   某个输入框填得不合法时不再整单作废，改成弹窗说明并照常保存其它项。
@@ -413,7 +415,7 @@ python tools/ui_smoke.py       # 界面自检：每个窗口真实创建一遍�
 ```
 python -m PyInstaller --noconfirm --clean build.spec
 python tools/verify_build.py                    # 查关键文件 + 跑一次 exe 自检
-DDO翻译助手_v3.0.16.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
+DDO翻译助手_v3.0.17.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
 ```
 
 > 发布发行版时注意：**发行说明（body）别用 curl 的 `--form-string` 传中文** ——
@@ -456,6 +458,6 @@ DDO翻译助手_v3.0.16.exe --self-check             # 用户侧自检（报告�
 
 * **作者**：一键三连
 * **项目主页 / 问题反馈**：https://gitee.com/git55236/ddo-chat-translator
-* **打包版本**：`DDO翻译助手_v3.0.16.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.16.exe`）
+* **打包版本**：`DDO翻译助手_v3.0.17.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.17.exe`）
 * **免责声明**：本工具只在本机读取屏幕、调用你自己配置的翻译接口，不收集也不上传任何游戏或个人信息；
   请遵守游戏服务条款，仅用于帮助理解聊天内容。

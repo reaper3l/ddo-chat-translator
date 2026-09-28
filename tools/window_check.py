@@ -138,6 +138,10 @@ def main() -> int:
                     window.destroy()
             except Exception:
                 pass
+        try:
+            dialog.window.destroy()          # 中译英那个也收掉，免得挡住后面的检查
+        except Exception:
+            pass
 
     # ---------------- 工具条收起/展开的过渡动画 ----------------
     app.config["ui_animation"] = True
@@ -198,6 +202,38 @@ def main() -> int:
     check("窗口失焦（点回游戏）时提示会收掉",
           shown and focus._tip is None,
           "出现过=%s，失焦后还在=%s" % (shown, focus._tip is not None))
+
+    # ---------------- 弹窗要开在主窗口旁边（不是屏幕左上角） ----------------
+    app.root.geometry("414x300+900+520")
+    pump(app, 0.4)
+    mx, my = app.root.winfo_rootx(), app.root.winfo_rooty()
+    mw, mh = app.root.winfo_width(), app.root.winfo_height()
+    opened = []
+    try:
+        from app.ui.settings import SettingsDialog as SettingsDialogCls
+
+        settings = SettingsDialogCls(app)
+        page = settings.open_category("频道")
+        cn2en = CnToEnDialog(app)
+        opened = [cn2en.window, page, settings.window]
+        pump(app, 0.5)
+        for name, window in (("中译英", cn2en.window), ("设置分类页", page),
+                             ("设置中心", settings.window)):
+            x, y = window.winfo_rootx(), window.winfo_rooty()
+            w, h = window.winfo_width(), window.winfo_height()
+            near = (abs(x - (mx + mw)) <= 60 or abs((x + w) - mx) <= 60
+                    or (mx <= x <= mx + mw) or (mx <= x + w <= mx + mw))
+            left_top = x < 8 and y < 8
+            check("%s 开在主窗口旁边（不在屏幕左上角）" % name,
+                  near and not left_top,
+                  "弹窗 (%d,%d) %dx%d，主窗口 (%d,%d) %dx%d"
+                  % (x, y, w, h, mx, my, mw, mh))
+    finally:
+        for window in opened:
+            try:
+                window.destroy()
+            except Exception:
+                pass
 
     try:
         app.quit_app()

@@ -35,10 +35,9 @@ class SettingsDialog:
         self.window = tk.Toplevel(app.root)
         self.window.title("设置")
         theme.prepare_window(self.window, self.config)
-        self.window.geometry("400x330")
         self.window.minsize(360, 260)
         self.window.transient(app.root)
-        theme.frameless_dialog(self.window, "设置")
+        theme.frameless_dialog(self.window, "设置", size=(400, 330))
         if self.config.get("always_on_top", True):
             try:
                 self.window.attributes("-topmost", True)
@@ -87,12 +86,12 @@ class SettingsDialog:
         window = tk.Toplevel(self.window)
         window.title("设置 · %s" % title)
         theme.prepare_window(window, self.config)
-        theme.frameless_dialog(window, "设置 · %s" % title)
         try:
             height = min(620, max(420, window.winfo_screenheight() - 220))
         except Exception:
             height = 540
-        window.geometry("560x%d" % height)
+        # 分类页摆在"设置中心"旁边
+        theme.frameless_dialog(window, "设置 · %s" % title, size=(560, height))
         window.minsize(460, 340)
         if self.config.get("always_on_top", True):
             try:
