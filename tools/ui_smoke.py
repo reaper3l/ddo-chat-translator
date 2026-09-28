@@ -475,11 +475,15 @@ def main() -> int:
         canvas_bg = str(app._lamp_canvas.cget("bg")).lower()
         if canvas_bg != strip_bg:
             raise AssertionError("小灯画布底色和灯条不一致：%r" % canvas_bg)
-        # 容器不能比画布窄，否则最后一个小灯的圆角会被切掉
-        if app._lamp_canvas.winfo_reqwidth() > app.strip_holder.winfo_width() + 1:
+        # 容器不能比画布窄，否则最后一个小灯的圆角会被切掉。
+        # 这里比的是**配置的**宽度（cget）而不是 winfo_width()：自检里窗口是
+        # withdraw 状态，winfo_width() 不会随 configure 更新，量出来是旧值。
+        configured = int(str(app.strip_holder.cget("width")))
+        needed = app._lamp_canvas.winfo_reqwidth()
+        if needed > configured + 1:
             raise AssertionError(
                 "灯条容器比小灯需要的宽度还窄（会裁切）：容器 %d < 画布 %d"
-                % (app.strip_holder.winfo_width(), app._lamp_canvas.winfo_reqwidth()))
+                % (configured, needed))
         boxes = app._lamp_boxes
         names = [name for _x1, _y1, _x2, _y2, name in boxes]
         if not names:
@@ -517,6 +521,46 @@ def main() -> int:
         app.root.update_idletasks()
 
     step("收起后的频道灯条（点一下开关频道）", channel_strip)
+
+    def window_buttons():
+        """窗口按钮：关闭在最右、最小化在它左边；悬停要有明暗反馈（关闭键变红）。"""
+        from tkinter import ttk as ttk_module
+
+        from app.ui import theme as theme_module
+
+        app.config["frameless"] = True
+        app._apply_frameless()
+        app.root.update_idletasks()
+        if not is_shown(app.min_button):
+            raise AssertionError("无边框模式下最小化按钮没显示")
+        slaves = app.window_buttons.pack_slaves()
+        # 侧边 pack：先 pack 的在最右边 → 关闭键必须在第 0 位
+        if len(slaves) < 2 or slaves[0] is not app.quit_button \
+                or slaves[1] is not app.min_button:
+            raise AssertionError("窗口按钮顺序不对（应该是 最小化 ➜ 关闭）：%s"
+                                 % [w.cget("text") for w in slaves])
+        if str(app.quit_button.cget("style")) != "WindowClose.TButton":
+            raise AssertionError("关闭键没用 WindowClose 样式")
+        if str(app.min_button.cget("style")) != "Window.TButton":
+            raise AssertionError("最小化键没用 Window 样式")
+        style = ttk_module.Style(app.root)
+        close_hover = str(style.lookup("WindowClose.TButton", "background",
+                                      ("active",))).lower()
+        if close_hover != str(theme_module.PALETTE["danger"]).lower():
+            raise AssertionError("关闭键悬停没变红：%r" % close_hover)
+        min_hover = str(style.lookup("Window.TButton", "background",
+                                    ("active",))).lower()
+        if min_hover != str(theme_module.PALETTE["surface_hi"]).lower():
+            raise AssertionError("最小化键悬停没有明暗反馈：%r" % min_hover)
+        base = str(style.lookup("Window.TButton", "background")).lower()
+        if base != str(theme_module.PALETTE["surface"]).lower():
+            raise AssertionError("窗口按钮平时底色的和工具条不一致：%r" % base)
+        app.config["frameless"] = bool(original_frameless)
+        app._apply_frameless()
+        app.root.update_idletasks()
+
+    original_frameless = bool(app.config.get("frameless", False))
+    step("窗口按钮（顺序 / 悬停反馈）", window_buttons)
 
     def body_color_follows_channel():
         """正文颜色要跟随频道色：小队的绿、常规的黄，各是各的。"""

@@ -199,14 +199,17 @@ class MainWindow:
         self.actions = actions
         self._build_actions()
 
+        # 窗口按钮：**关闭在最右、最小化在它左边**（和 Windows 一致）。
+        # 侧边 pack 的顺序决定位置：先 pack 的在最右边，所以先 pack 关闭键。
         window_buttons = ttk.Frame(top, style="Surface.TFrame")
-        window_buttons.pack(side="right", padx=(2, 6))
-        self.quit_button = ttk.Button(window_buttons, text="✕", width=2,
-                                      style="Icon.TButton", command=self.quit_app)
+        window_buttons.pack(side="right", padx=(4, 6))
+        self.quit_button = ttk.Button(window_buttons, text="✕", width=3,
+                                      style="WindowClose.TButton",
+                                      command=self.quit_app)
         self.quit_button.pack(side="right")
         theme.Tooltip(self.quit_button, "退出程序")
-        self.min_button = ttk.Button(window_buttons, text="—", width=2,
-                                     style="Icon.TButton", command=self._minimize)
+        self.min_button = ttk.Button(window_buttons, text="—", width=3,
+                                     style="Window.TButton", command=self._minimize)
         theme.Tooltip(self.min_button, "最小化（无边框模式下会先恢复系统边框，方便从任务栏找回）")
         self.window_buttons = window_buttons
 
@@ -545,6 +548,9 @@ class MainWindow:
         self._lamp_only_on = show_only_on
         self._draw_lamps()
         self._strip_width = self._stage_width(stage)
+        # 顺手把容器宽度也对齐：任何调用方（含自检脚本）单独套档位时都不会出现
+        # "容器比画布窄 → 最后一个小灯被裁"的情况
+        self._sync_strip_width()
         return self._strip_width
 
     def _refresh_channel_strip(self) -> None:
@@ -595,7 +601,9 @@ class MainWindow:
         """
         try:
             if enabled:
-                self.min_button.pack(side="right", before=self.quit_button)
+                # 注意：这里**不能**用 before=quit —— 侧边 pack 里"先 pack 的在最右边"，
+                # 插到 quit 前面会把最小化挤到最右，就变成"✕ —"了（用户反馈要调换）。
+                self.min_button.pack(side="right")
                 self.grip.pack(side="right", before=self.stats_label)
             else:
                 self.min_button.pack_forget()

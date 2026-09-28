@@ -175,6 +175,19 @@ def install(root: tk.Misc, config: Optional[dict] = None) -> ttk.Style:
                     padding=(7, 1), borderwidth=0, focusthickness=0, font=icon_font)
     style.map("IconDanger.TButton",
               background=[("pressed", "#d32f2f"), ("active", "#ff6b68")])
+    # 窗口按钮（— 最小化 / ✕ 关闭）：平时和工具条同底色、低调；悬停才亮起来，
+    # 关闭键悬停变红 —— 这是大家都习惯的暗示，也和暗色主题搭。
+    style.configure("Window.TButton", background=p["surface"], foreground=p["muted"],
+                    padding=(7, 2), borderwidth=0, focusthickness=0, font=icon_font)
+    style.map("Window.TButton",
+              background=[("pressed", p["surface_press"]), ("active", p["surface_hi"])],
+              foreground=[("pressed", p["text"]), ("active", p["text"])])
+    style.configure("WindowClose.TButton", background=p["surface"],
+                    foreground=p["muted"], padding=(7, 2), borderwidth=0,
+                    focusthickness=0, font=icon_font)
+    style.map("WindowClose.TButton",
+              background=[("pressed", "#d32f2f"), ("active", p["danger"])],
+              foreground=[("pressed", "#ffffff"), ("active", "#ffffff")])
     style.map("TButton",
               background=[("disabled", p["surface"]), ("pressed", p["surface_press"]),
                           ("active", p["surface_hi"])],

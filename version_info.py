@@ -3,8 +3,8 @@
 # 因为 PyInstaller 是直接 eval 整个文件内容的。
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 0, 11, 0),
-    prodvers=(3, 0, 11, 0),
+    filevers=(3, 0, 12, 0),
+    prodvers=(3, 0, 12, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -20,12 +20,12 @@ VSVersionInfo(
           [
             StringStruct(u'CompanyName', u'一键三连'),
             StringStruct(u'FileDescription', u'DDO 龙与地下城OL 聊天翻译助手'),
-            StringStruct(u'FileVersion', u'3.0.11.0'),
+            StringStruct(u'FileVersion', u'3.0.12.0'),
             StringStruct(u'InternalName', u'DDOTranslator'),
             StringStruct(u'LegalCopyright', u'Copyright (C) 2026 一键三连'),
-            StringStruct(u'OriginalFilename', u'DDO翻译助手_v3.0.11.exe'),
+            StringStruct(u'OriginalFilename', u'DDO翻译助手_v3.0.12.exe'),
             StringStruct(u'ProductName', u'DDO翻译助手'),
-            StringStruct(u'ProductVersion', u'3.0.11.0'),
+            StringStruct(u'ProductVersion', u'3.0.12.0'),
             StringStruct(u'Comments', u'作者：一键三连　主页：https://gitee.com/git55236/ddo-chat-translator'),
           ]
         )
