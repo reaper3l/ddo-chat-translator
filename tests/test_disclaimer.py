@@ -54,3 +54,34 @@ def test_default_config_has_agreement_keys():
     assert DEFAULT_CONFIG["agreement_version"] == 0
     assert DEFAULT_CONFIG["agreement_accepted_at"] == ""
     assert disclaimer.needs_agreement(DEFAULT_CONFIG) is True
+
+
+class _FakeLogger:
+    """假装成 logging，把写日志的调用记下来（不碰真的 app.log）。"""
+
+    def __init__(self):
+        self.lines = []
+
+    def info(self, template, *args):
+        self.lines.append(template % args if args else template)
+
+    def warning(self, template, *args):
+        self.lines.append(template % args if args else template)
+
+
+def test_agreement_is_written_to_log():
+    """同意的时间和条款版本要进日志：config.json 可能被删，日志是按时间追加的。"""
+    logger = _FakeLogger()
+    disclaimer.log_acceptance("2026-09-28 21:05:00", logger=logger)
+    assert len(logger.lines) == 1, logger.lines
+    line = logger.lines[0]
+    assert "2026-09-28 21:05:00" in line
+    assert "条款版本 %d" % disclaimer.DISCLAIMER_VERSION in line
+    assert "同意" in line
+
+
+def test_decline_is_written_to_log():
+    logger = _FakeLogger()
+    disclaimer.log_decline(logger=logger)
+    assert logger.lines and "未同意" in logger.lines[0]
+    assert "条款版本 %d" % disclaimer.DISCLAIMER_VERSION in logger.lines[0]

@@ -77,6 +77,7 @@ class AgreementDialog:
     def agree(self) -> None:
         """记住"用户同意了这一版条款"，然后回调 True。"""
         stamp = disclaimer.accept(self.app.config)
+        disclaimer.log_acceptance(stamp)          # 日志里也留一条（含时间）
         try:
             config_module.save_config(self.app.config)
         except Exception:
@@ -86,6 +87,8 @@ class AgreementDialog:
 
     def decline(self) -> None:
         """不同意 / 直接关窗口：在必须同意的场景下等于退出程序。"""
+        if not self.readonly:
+            disclaimer.log_decline()              # 留痕：没同意就退了，程序什么都没做
         self._finish(False)
 
     def close(self) -> None:

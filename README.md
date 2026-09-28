@@ -507,6 +507,10 @@ DDO翻译助手_v3.0.21.exe --self-check             # 用户侧自检（报告�
 * **自己验证一个包**：对一下发行说明里的 sha256
   （`Get-FileHash "DDO翻译助手_v3.0.21.zip" -Algorithm SHA256`），
   或者跑 `python tools\sign_release.py verify "DDO翻译助手_v3.0.21.zip"`。
+* **想更进一步**：可以再买一张 **代码签名证书（Authenticode）**给 exe 签名 ——
+  文件属性里会显示"签名者 = 作者"、Windows 不再报"未知发布者"，别人也能独立验证。
+  工具已经写好：`python tools\sign_exe.py check / sign / verify`（选型、价格、材料见
+  [安全与验证说明.md](安全与验证说明.md)）。发版顺序：**签 exe → 压缩 → 签 zip**。
 * **发版流程 / 私钥保管 / 账号防护 / 被人冒充怎么办**：见
   [安全与验证说明.md](安全与验证说明.md)。
 

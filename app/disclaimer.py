@@ -93,3 +93,29 @@ def accept(config: dict, now: Optional[datetime] = None) -> str:
 def accepted_at(config: Mapping[str, Any]) -> str:
     """已同意的时间（没同意过返回空串）。"""
     return str(config.get("agreement_accepted_at") or "")
+
+
+# ---------------------------------------------------------------------- 留痕
+# 同意状态写在 config.json 里，但配置文件可能被用户删掉/覆盖；日志（data\logs\app.log）
+# 是按时间追加、不会被程序重写的，所以同意的**时间点**再往日志里记一条 ——
+# 将来真要举证"用户在什么时候被告知并同意了哪一版条款"，日志是更稳的那份证据。
+def log_acceptance(stamp: str, version: int = DISCLAIMER_VERSION, logger=None) -> None:
+    """记下"用户同意了第 N 版条款"，以及同意的时间。"""
+    import logging
+
+    from . import __version__
+
+    (logger or logging).info(
+        "使用须知：用户同意条款版本 %d（同意时间 %s，程序版本 v%s）", version, stamp,
+        __version__)
+
+
+def log_decline(logger=None) -> None:
+    """记下"用户没同意、程序退出"（同样是留痕：说明程序没做任何事就关了）。"""
+    import logging
+
+    from . import __version__
+
+    (logger or logging).warning(
+        "使用须知：用户未同意条款版本 %d，程序退出（未做任何截图/翻译，程序版本 v%s）",
+        DISCLAIMER_VERSION, __version__)
