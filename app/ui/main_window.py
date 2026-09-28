@@ -38,8 +38,13 @@ LAMP_BAR_HEIGHT = 24
 LAMP_DOT_WIDTH = 12          # 窗口很窄时只画一个圆点
 LAMP_MIN_WIDTH = 26
 LAMP_GAP = 2
+LAMP_LEFT = 1               # 画布左边留 1px，圆角才不会被切
+STRIP_PAD = 6               # 灯条左右的呼吸空间（算进容器宽度里，别让小灯被裁）
 # 工具条上除灯条之外那些东西占的宽度（品牌字 + 监听按钮 + 两个窗口按钮 + 内边距）
-TOOLBAR_OTHER_PADDING = 24
+TOOLBAR_OTHER_PADDING = 20
+# 工具条那一行用的是"面板色"（Surface.TFrame = PALETTE["surface"]）。
+# 灯条容器必须用同一个颜色，否则会出现一块比工具条更暗的方块（用户反馈"突界"）
+TOOLBAR_BG = theme.PALETTE["surface"]
 # 工具条收起/展开的过渡动画
 TOOLBAR_HEIGHT = 32
 ANIMATION_STEPS = 8
@@ -184,7 +189,7 @@ class MainWindow:
         self.separator.pack(side="left", fill="y", padx=4, pady=6)
 
         # 功能按钮放在一个"宽度可变"的容器里：收起/展开时按帧改宽度，就有了滑动动画
-        actions_holder = tk.Frame(top, bg=theme.PALETTE["bg"],
+        actions_holder = tk.Frame(top, bg=TOOLBAR_BG,
                                   width=0, height=TOOLBAR_HEIGHT)
         actions_holder.pack(side="left")
         actions_holder.pack_propagate(False)
@@ -207,7 +212,7 @@ class MainWindow:
 
         # 灯条容器放在最后 pack：右边那两个窗口按钮要先占住地方，
         # 免得窗口很窄时灯条把它们挤出去（✕ 都点不到就麻烦了）
-        strip_holder = tk.Frame(top, bg=theme.PALETTE["bg"],
+        strip_holder = tk.Frame(top, bg=TOOLBAR_BG,
                                 width=0, height=TOOLBAR_HEIGHT)
         strip_holder.pack(side="left")
         strip_holder.pack_propagate(False)
@@ -317,7 +322,7 @@ class MainWindow:
     def _build_channel_strip(self, holder, toolbar) -> None:
         """holder：宽度可变的容器（动画用）；toolbar：整条工具条（量可用宽度用）。"""
         parent = holder
-        strip = tk.Frame(parent, bg=theme.PALETTE["bg"])
+        strip = tk.Frame(parent, bg=TOOLBAR_BG)
         self._top_container = toolbar
         self.channel_strip = strip
         self._channel_activity = {}
@@ -328,8 +333,9 @@ class MainWindow:
         self._lamp_font = tkfont.Font(family=family, size=8)
         self._lamp_canvas = tk.Canvas(strip, height=LAMP_BAR_HEIGHT, bd=0,
                                       highlightthickness=0,
-                                      bg=theme.PALETTE["bg"], cursor="hand2")
-        self._lamp_canvas.pack(side="left")
+                                      bg=TOOLBAR_BG, cursor="hand2")
+        self._lamp_canvas.pack(side="left",
+                               pady=max(0, (TOOLBAR_HEIGHT - LAMP_BAR_HEIGHT) // 2))
         # 一个提示窗给所有小灯共用：悬停时换文字（每个灯单独建提示太浪费）
         self._lamp_tooltip = theme.Tooltip(self._lamp_canvas, "")
         self._lamp_canvas.bind("<Motion>", self._on_lamp_motion)
@@ -337,15 +343,10 @@ class MainWindow:
                                lambda _e: self._set_lamp_hover(""))
         self._lamp_canvas.bind("<Button-1>", self._on_lamp_click)
 
-        self.strip_stats = tk.Label(strip, text="", bd=0, padx=0, pady=0,
-                                    bg=theme.PALETTE["bg"],
-                                    fg=theme.PALETTE["muted"],
-                                    font=(family, 8))
-        self.strip_stats.pack(side="left", padx=(6, 0))
         self._strip_stage = None
         self._lamp_compact = False
         self._refresh_channel_strip()
-        # 窗口变窄时逐级"瘦身"：先藏计数，再让小灯变成纯色点，最后整条藏起来
+        # 窗口变窄时逐级"瘦身"：带名字 → 只留开着的 → 纯色点 → 整条藏起来
         toolbar.bind("<Configure>", lambda _e: self._fit_channel_strip(), add="+")
 
     # ------------------------------------------------------------ 小灯的绘制
@@ -369,22 +370,24 @@ class MainWindow:
         return max(LAMP_MIN_WIDTH, text_width + 7)
 
     # 档位：从"信息最全"到"最能省地方"，按顺序试，第一个放得下就用它
-    STRIP_STAGES = ("full", "no_stats", "on_names", "dots", "on_dots", "hidden")
+    STRIP_STAGES = ("all_names", "on_names", "dots", "on_dots", "hidden")
 
     def _stage_width(self, stage: str) -> int:
-        """某一档需要多宽（纯计算，不改界面 —— 免得试档位时把画面弄乱）。"""
+        """某一档需要多宽（纯计算，不改界面 —— 免得试档位时把画面弄乱）。
+
+        宽度 = 左右呼吸空间 + 画布起点 + 每个小灯（含间隙）。
+        必须把这些都算上：容器窄 1px，最后一个小灯的圆角就会被切掉。
+        """
         if stage == "hidden":
             return 0
         compact = stage in ("dots", "on_dots", "hidden")
         only_on = stage in ("on_names", "on_dots")
-        width = 0
+        width = STRIP_PAD + LAMP_LEFT
         for entry in self._channel_items():
             if only_on and not bool(entry["enabled"]):
                 continue
             label = "" if compact else channels.short_name(str(entry["name"]))
             width += self._lamp_width(label, compact) + LAMP_GAP
-        if stage == "full":
-            width += self._lamp_font.measure("译 000 · 滤 000") + 8
         return max(1, width)
 
     def _draw_lamps(self) -> None:
@@ -392,10 +395,10 @@ class MainWindow:
         canvas = self._lamp_canvas
         canvas.delete("all")
         self._lamp_boxes = []
-        base = theme.PALETTE["bg"]
+        base = TOOLBAR_BG
         now = time.time()
         compact = self._lamp_compact
-        x = 1
+        x = LAMP_LEFT
         for entry in self._channel_items():
             name = str(entry["name"])
             color = str(entry["color"])
@@ -519,30 +522,24 @@ class MainWindow:
         """套用某一级布局，返回它需要多宽（像素）。
 
         五级"瘦身"（窗口越窄越往后）：
-            full      全部频道（带名字）+ 计数
-            no_stats  全部频道（带名字）
+            all_names 全部频道（带名字）
             on_names  只画开着的频道（带名字）—— 地方刚够时最有用的形态
             dots      全部频道（纯色圆点，鼠标悬停看名字）
             on_dots   只画开着的频道（纯色圆点）
             hidden    整条藏起来（窗口小到放不下时）
         """
-        with_stats = stage == "full"
+        if stage not in self.STRIP_STAGES:       # 兜底：不认识的档位按"全部带名字"
+            stage = "all_names"
         compact = stage in ("dots", "on_dots", "hidden")
         show_only_on = stage in ("on_names", "on_dots")
-        if stage not in self.STRIP_STAGES:       # 兜底：不认识的档位按"带名字"处理
-            stage = "no_stats"
-
-        if with_stats:
-            if not self.strip_stats.winfo_manager():
-                self.strip_stats.pack(side="left", padx=(6, 0))
-        else:
-            self.strip_stats.pack_forget()
 
         if stage == "hidden":
             self.channel_strip.pack_forget()
             return 0
         if not self.channel_strip.winfo_manager():
-            self.channel_strip.pack(side="left", padx=(2, 4))
+            # 注意：这里**不能**给灯条加 padx —— 容器宽度是照着"灯需要的宽度"设的，
+            # 再扣掉内边距就会把最后一个小灯的圆角切掉（用户反馈的"裁切"）
+            self.channel_strip.pack(side="left", fill="both")
 
         self._lamp_compact = compact
         self._lamp_only_on = show_only_on
@@ -667,7 +664,7 @@ class MainWindow:
             self.actions_holder.configure(width=0)
             self.actions.pack_forget()            # 功能按钮撤掉（容器留着给动画用）
             if not self.channel_strip.winfo_manager():
-                self.channel_strip.pack(side="left", padx=(2, 4))
+                self.channel_strip.pack(side="left", fill="both")
             self._strip_stage = None
             self._fit_channel_strip()
             if not getattr(self, "_strip_width", 0):
@@ -682,7 +679,7 @@ class MainWindow:
         if not self.actions.winfo_manager():
             self.actions.pack(side="left", fill="y")
         if not self.channel_strip.winfo_manager():
-            self.channel_strip.pack(side="left", padx=(2, 4))
+            self.channel_strip.pack(side="left", fill="both")
         self._strip_stage = None
         self._fit_channel_strip()
         self._draw_lamps()
@@ -880,17 +877,11 @@ class MainWindow:
                stats.get("skipped_frame", 0),
                stats.get("api_errors", 0))
         )
-        # 收起时那条留白：两个关键计数（运行状态看左边的监听按钮就够；频道小灯另见
-        # _refresh_channel_strip）
+        # 收起时那条留白只有频道小灯（用户明确说不要"译/滤"计数；跑没跑看左边的
+        # 监听按钮、计数看底部状态栏）。这里只负责让小灯"刚说话闪一下"。
         now = time.time()
         if hasattr(self, "channel_strip") and now - self._strip_refreshed > 0.25:
             self._strip_refreshed = now
-            try:
-                self.strip_stats.configure(
-                    text="译 %d · 滤 %d" % (stats.get("translated", 0),
-                                           stats.get("filtered", 0)))
-            except Exception:
-                pass
             if self.channel_strip.winfo_manager():
                 self._refresh_channel_strip()
 

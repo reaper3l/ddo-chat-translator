@@ -377,14 +377,13 @@ def main() -> int:
         # 是 withdraw 状态，改 geometry 不会真的生效，所以不能靠量窗口宽度）。
         enabled = app.config.get("channels_enabled") or {}
         widths = [(stage, app._apply_strip_stage(stage))
-                  for stage in ("full", "no_stats", "on_names", "dots", "on_dots")]
+                  for stage in ("all_names", "on_names", "dots", "on_dots")]
         by_stage = dict(widths)
         # 档位是"按偏好排的"，不要求严格递窄（只留开着的频道就可能比纯色点还窄），
         # 但整体必须越来越省地方，"只留开着的频道"也不能比"全部频道"还宽
-        if not (by_stage["full"] > by_stage["no_stats"] > by_stage["dots"]
-                > by_stage["on_dots"]):
+        if not (by_stage["all_names"] > by_stage["dots"] > by_stage["on_dots"]):
             raise AssertionError("灯条分级没有越缩越窄：%s" % widths)
-        if by_stage["on_names"] > by_stage["no_stats"]:
+        if by_stage["on_names"] > by_stage["all_names"]:
             raise AssertionError("「只留开着的频道」不该比全部频道还宽：%s" % widths)
         app._apply_strip_stage("on_names")
         on_names = [box[4] for box in app._lamp_boxes]
@@ -461,6 +460,20 @@ def main() -> int:
             raise AssertionError("收起工具条后没显示频道灯条")
         if is_shown(app.actions):
             raise AssertionError("收起后功能按钮还显示着")
+        # 底色要和工具条一致（面板色），否则会出现一块比工具条更暗的方块
+        from app.ui import theme as theme_module
+
+        strip_bg = str(app.channel_strip.cget("bg")).lower()
+        if strip_bg != str(theme_module.PALETTE["surface"]).lower():
+            raise AssertionError("灯条底色和工具条不一致（看着像黑块）：%r" % strip_bg)
+        canvas_bg = str(app._lamp_canvas.cget("bg")).lower()
+        if canvas_bg != strip_bg:
+            raise AssertionError("小灯画布底色和灯条不一致：%r" % canvas_bg)
+        # 容器不能比画布窄，否则最后一个小灯的圆角会被切掉
+        if app._lamp_canvas.winfo_reqwidth() > app.strip_holder.winfo_width() + 1:
+            raise AssertionError(
+                "灯条容器比小灯需要的宽度还窄（会裁切）：容器 %d < 画布 %d"
+                % (app.strip_holder.winfo_width(), app._lamp_canvas.winfo_reqwidth()))
         boxes = app._lamp_boxes
         names = [name for _x1, _y1, _x2, _y2, name in boxes]
         if not names:
@@ -488,6 +501,11 @@ def main() -> int:
             raise AssertionError("点频道小灯没有切换频道开关")
         app._toggle_channel(target)                  # 还原
         channels_module.sync(app.config, original_items)
+        # 一定要落盘还原：_toggle_channel 会把开关写进用户的 config.json，
+        # 上面只是改了内存里的表（自检不该留下任何痕迹）
+        from app import config as config_module
+
+        config_module.save_config(app.config)
         app.config["toolbar_collapsed"] = original_collapsed
         app._apply_toolbar_collapsed()
         app.root.update_idletasks()

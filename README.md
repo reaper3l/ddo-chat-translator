@@ -1,4 +1,4 @@
-# DDO 翻译助手 v3.0.10
+# DDO 翻译助手 v3.0.11
 
 **DDO（龙与地下城 Online）游戏聊天实时翻译助手**
 
@@ -9,12 +9,15 @@
 | --- | --- |
 | 作者 | **一键三连**（Gitee：[git55236](https://gitee.com/git55236)） |
 | 项目地址 | https://gitee.com/git55236/ddo-chat-translator |
-| 当前版本 | v3.0.10（2026-09-28） |
+| 当前版本 | v3.0.11（2026-09-28） |
 | 完整手册 | [使用说明.md](使用说明.md) ← **新手先看这个** |
 | 技术栈 | Python 3.11 + tkinter · OCR: RapidOCR(PP-OCRv5) · 翻译: DeepSeek / MyMemory / 离线术语表 |
 
 ### 更新日志
 
+* **v3.0.11**（2026-09-28）灯条三处修正：去掉右边的"译/滤"计数；修掉窄窗口下
+  最后一个小灯被裁掉（容器宽度没算呼吸空间）；修掉灯条/画布底色与工具条不一致
+  造成的"黑块"（统一用面板色）。
 * **v3.0.10**（2026-09-28）小灯左右内边距 9→7px、工具条预留 30→24px：
   **414px 的窗口也能显示全部频道**（带名字 208px，可用 214px），不会再只剩一个小灯。
 * **v3.0.9**（2026-09-28）修复 v3.0.8 的迁移 bug（老配置里关掉的频道会被默认值冲成开）；
@@ -398,7 +401,7 @@ python tools/ui_smoke.py       # 界面自检：每个窗口真实创建一遍�
 ```
 python -m PyInstaller --noconfirm --clean build.spec
 python tools/verify_build.py                    # 查关键文件 + 跑一次 exe 自检
-DDO翻译助手_v3.0.10.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
+DDO翻译助手_v3.0.11.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
 ```
 
 ---
@@ -435,6 +438,6 @@ DDO翻译助手_v3.0.10.exe --self-check             # 用户侧自检（报告�
 
 * **作者**：一键三连
 * **项目主页 / 问题反馈**：https://gitee.com/git55236/ddo-chat-translator
-* **打包版本**：`DDO翻译助手_v3.0.10.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.10.exe`）
+* **打包版本**：`DDO翻译助手_v3.0.11.zip`（onedir，解压后双击 `DDO翻译助手_v3.0.11.exe`）
 * **免责声明**：本工具只在本机读取屏幕、调用你自己配置的翻译接口，不收集也不上传任何游戏或个人信息；
   请遵守游戏服务条款，仅用于帮助理解聊天内容。
