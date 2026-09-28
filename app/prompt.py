@@ -146,6 +146,69 @@ def build_zh2en_system_prompt(memory=None) -> str:
 """
 
 
+def build_reply_system_prompt(memory=None) -> str:
+    """「根据聊天内容推荐回复」用的提示词（输出中英对照的几条建议）。"""
+    hints = ""
+    if memory is not None:
+        terms = memory.prompt_terms(limit=20)
+        if terms:
+            pairs = "，".join("%s=%s" % (i["zh"], i["text"]) for i in terms)
+            hints = f"\n【我的用词习惯（中文→英文）】{pairs}\n"
+    return f"""你是 DDO（龙与地下城 Online）玩家身边的聊天助手。
+游戏里刚有外国玩家说话，我要**接着聊**。请根据聊天上下文，替我准备 4 条"我可能想说的话"，
+每条都要有中文和对应的英文（英文要能直接粘进游戏聊天框，老外一眼看懂）。
+
+【怎么挑这 4 条】
+- 先看有没有人在问我 / 等我回应：如果有，第 1 条就是最自然的回答（是/不是/马上到/等一下/抱歉）；
+- 再给"推进配合"的话：报位置、问去哪、要不要共享任务、要不要重开、注意危险；
+- 再给 1 条缓和气氛或确认的短句（ty / np / gl / hf / my bad 这类按语境挑）；
+- 如果上下文太少，就给通用寒暄 + 询问下一步该做什么。
+
+【英文要求】
+1. 短、口语、能直接用：OMW=马上到，BRB=马上回来，AFK=暂离，TY=谢谢，NP=不客气，
+   GL=祝好运，HF=玩得开心，GG=打得好，REZ=复活我，SHRINE=去神龛，SHARE=共享任务，
+   ABANDON=放弃任务，ELITE=精英难度，R1/R2=死神难度1/2，POP=位面监狱；
+2. 不要书面语、不要长句、不要加句号；能一个缩写解决就用缩写；
+3. 人名、任务名、道具名保持原样，不要硬翻。
+
+【输出格式（很重要）】
+只输出 4 行，每行一条，格式固定为：
+中文 | English
+不要编号，不要 Markdown，不要解释，不要空行，不要额外文字。
+{hints}"""
+
+
+def build_reply_messages(system_prompt: str,
+                         context: Sequence[Tuple[str, str, str]],
+                         system_events: Sequence[str],
+                         draft: str = "") -> List[Dict[str, str]]:
+    """组装"推荐回复"的 messages。
+
+    context 是 [(说话人, 英文原文, 中文译文), ...]，按时间从早到晚。
+    draft 是我已经打了一半的中文（有就先按它润色）。
+    """
+    lines: List[str] = []
+    if system_events:
+        joined = "；".join(event for event in system_events if event)
+        if joined:
+            lines.append("【系统提示】" + joined[:200])
+    if context:
+        lines.append("【刚才的聊天（英文原文 → 中文译文）】")
+        for speaker, source, translated in context:
+            who = ("%s: " % speaker) if speaker else ""
+            lines.append("%s%s → %s" % (who, source, translated))
+    else:
+        lines.append("【刚才的聊天】暂时没有采集到内容。")
+    if draft.strip():
+        lines.append("【我打算说的（先按这个润色成第 1 条）】" + draft.strip())
+    lines.append("请按约定格式给出 4 条。")
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "\n".join(lines)},
+    ]
+
+
 def build_messages(system_prompt: str,
                    context: Sequence[Tuple[str, str]],
                    system_events: Sequence[str],

@@ -23,6 +23,8 @@ class TranslationResult:
 
 class BaseEngine:
     name = "base"
+    # 能不能"跟模型对话"（推荐回复、按上下文润色需要它；纯翻译接口做不到）
+    supports_chat = False
 
     def available(self) -> bool:
         return False
@@ -52,6 +54,7 @@ class OfflineEngine(BaseEngine):
 
 class DeepSeekEngine(BaseEngine):
     name = "deepseek"
+    supports_chat = True
     URL = "https://api.deepseek.com/v1/chat/completions"
 
     def __init__(self, api_key: str = "", model: str = "deepseek-chat") -> None:

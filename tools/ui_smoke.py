@@ -587,6 +587,48 @@ def main() -> int:
 
     step("设置保存：坏值不阻塞 + 频道只此一处", settings_save_is_reliable)
 
+    def cn2en_reply_suggestions():
+        """中译英窗口的"根据上下文推荐回复"：中英对照、点一行复制英文、双击填中文。
+
+        这里不联网：直接把假数据喂给显示逻辑，验证接线（真实生成由用户按需触发）。
+        """
+        from app.ui.cn2en import CnToEnDialog
+
+        dialog = CnToEnDialog(app, auto_suggest=False)     # 自检里不许偷偷调接口
+        try:
+            dialog.window.update_idletasks()
+            dialog._show_suggestions([("马上到", "omw"), ("谢谢", "ty")])
+            dialog.window.update_idletasks()
+            rows = dialog.suggest_list.get_children()
+            if len(rows) != 2:
+                raise AssertionError("建议列表没填进去：%s" % (rows,))
+            first = rows[0]
+            values = dialog.suggest_list.item(first, "values")
+            if tuple(values[:2]) != ("马上到", "omw"):
+                raise AssertionError("建议列表内容不对：%s" % (values,))
+
+            dialog.suggest_list.selection_set(first)
+            dialog.suggest_list.focus(first)
+            dialog._on_suggest_click()                     # 点一行 → 复制英文
+            try:
+                copied = app.root.clipboard_get()
+            except Exception:
+                copied = ""
+            if copied != "omw":
+                raise AssertionError("点建议没复制英文，剪贴板是 %r" % copied)
+
+            dialog._on_suggest_double()                    # 双击 → 中文进输入框
+            text = dialog.input.get("1.0", "end").strip()
+            if text != "马上到":
+                raise AssertionError("双击建议没把中文填进输入框：%r" % text)
+        finally:
+            try:
+                dialog.window.destroy()
+            except Exception:
+                pass
+
+    step("中译英：上下文推荐回复（中英对照 / 点击复制）", cn2en_reply_suggestions)
+
     def window_buttons():
         """窗口按钮：关闭在最右、最小化在它左边；悬停要有明暗反馈（关闭键变红）。"""
         from tkinter import ttk as ttk_module

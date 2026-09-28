@@ -20,6 +20,7 @@ def test_boolean_switches_used_by_settings_exist():
         "toolbar_collapsed", "show_status_bar", "use_glossary",
         "use_extra_glossary", "skip_identical_frame", "band_ocr",
         "low_priority", "idle_backoff", "merge_same_row", "ui_animation",
+        "cn2en_auto_suggest",
     )
     for key in switches:
         assert key in DEFAULT_CONFIG, "默认配置缺少开关：%s" % key

@@ -131,6 +131,8 @@ class Pipeline:
         self._recent: Deque[Tuple[float, str]] = deque(maxlen=80)
         self._recent_lock = threading.Lock()
         self._history: Deque[Tuple[str, str]] = deque(maxlen=12)
+        # 给"根据上下文推荐回复"用的：带说话人的最近聊天
+        self._recent_chat: Deque[Tuple[str, str, str]] = deque(maxlen=20)
         self._system_events: Deque[str] = deque(maxlen=6)
         self._cache: Dict[str, str] = {}
         self._cache_dirty = False
@@ -337,6 +339,18 @@ class Pipeline:
             "dedup_size": len(self.deduper),
             "stats": stats,
         }
+
+    # ------------------------------------------------- 给"推荐回复"用的上下文
+    def recent_context(self, limit: int = 8) -> List[Tuple[str, str, str]]:
+        """最近几条玩家发言：[(说话人, 英文原文, 中文译文), ...]（从早到晚）。"""
+        items = list(self._recent_chat)
+        return items[-max(1, int(limit)):] if items else []
+
+    def recent_system_events(self, limit: int = 4) -> List[str]:
+        """最近的系统提示（组队/生死这类），作为推荐回复的补充上下文。"""
+        self._drain_system_events()
+        items = list(self._system_events)
+        return items[-max(1, int(limit)):]
 
     # ------------------------------------------------------------ 缓存
     def _load_cache(self) -> None:
@@ -801,6 +815,11 @@ class Pipeline:
 
         if not error:
             self._history.append((source, translated))
+            # 带说话人的记录只留给"推荐回复"用（翻译提示词那条 history 结构别动）
+            try:
+                self._recent_chat.append((job.speaker or "", source, translated))
+            except Exception:
+                pass
             self.stats["translated"] += 1
             if not textutil.has_cjk(translated) and textutil.has_latin(translated):
                 # 模型原样返回英文 = 没翻出来，记一笔供"学习中心"分析

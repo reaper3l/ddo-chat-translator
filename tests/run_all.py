@@ -19,6 +19,7 @@ MODULES = [
     "test_textutil",
     "test_config",
     "test_channels",
+    "test_replies",
     "test_parser",
     "test_dedup",
     "test_glossary",
