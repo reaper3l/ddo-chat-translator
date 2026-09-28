@@ -377,10 +377,15 @@ def main() -> int:
         # 是 withdraw 状态，改 geometry 不会真的生效，所以不能靠量窗口宽度）。
         enabled = app.config.get("channels_enabled") or {}
         widths = [(stage, app._apply_strip_stage(stage))
-                  for stage in ("full", "no_stats", "on_names", "dots")]
-        values = [width for _stage, width in widths]
-        if values != sorted(values, reverse=True):
+                  for stage in ("full", "no_stats", "on_names", "dots", "on_dots")]
+        by_stage = dict(widths)
+        # 档位是"按偏好排的"，不要求严格递窄（只留开着的频道就可能比纯色点还窄），
+        # 但整体必须越来越省地方，"只留开着的频道"也不能比"全部频道"还宽
+        if not (by_stage["full"] > by_stage["no_stats"] > by_stage["dots"]
+                > by_stage["on_dots"]):
             raise AssertionError("灯条分级没有越缩越窄：%s" % widths)
+        if by_stage["on_names"] > by_stage["no_stats"]:
+            raise AssertionError("「只留开着的频道」不该比全部频道还宽：%s" % widths)
         app._apply_strip_stage("on_names")
         on_names = [box[4] for box in app._lamp_boxes]
         if any(not enabled.get(name, True) for name in on_names):

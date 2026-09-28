@@ -97,3 +97,44 @@ def test_pipeline_only_shows_configured_channels():
     assert enabled_for(config, "战利品") is False
     assert enabled_for(config, "小队") is True
     assert enabled_for(config, "还没登记的频道") is True
+
+
+def test_default_config_has_no_channel_list():
+    """回归：默认配置里**不能**预先塞一个 channels 列表。
+
+    踩过的坑：默认配置带了列表以后，effective() 看到"已有列表"就不会去读用户
+    旧配置里的 channels_enabled —— 用户关掉的频道会被默认值（全开）冲掉。
+    """
+    from app.config import DEFAULT_CONFIG
+
+    assert "channels" not in DEFAULT_CONFIG
+
+
+def test_load_config_migrates_user_switches():
+    """真正走一遍 load_config：用户关掉的频道必须活下来。"""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from app import config as config_module
+    from app import paths
+
+    folder = Path(tempfile.mkdtemp(prefix="ddo_cfg_"))
+    file_path = folder / "config.json"
+    file_path.write_text(json.dumps({
+        "channel_colors": {"小队": "#112233", "公会": "#445566"},
+        "channels_enabled": {"小队": True, "公会": False, "战利品": False},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    original = paths.CONFIG_PATH
+    paths.CONFIG_PATH = file_path
+    try:
+        config = config_module.load_config()
+    finally:
+        paths.CONFIG_PATH = original
+
+    enabled = channels.enabled_map(config)
+    assert enabled["小队"] is True
+    assert enabled["公会"] is False            # 关键：用户关掉的不能被冲成开
+    assert channels.color_map(config)["小队"] == "#112233"
+    assert "队伍" not in enabled

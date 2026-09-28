@@ -194,13 +194,6 @@ class MainWindow:
         self.actions = actions
         self._build_actions()
 
-        strip_holder = tk.Frame(top, bg=theme.PALETTE["bg"],
-                                width=0, height=TOOLBAR_HEIGHT)
-        strip_holder.pack(side="left")
-        strip_holder.pack_propagate(False)
-        self.strip_holder = strip_holder
-        self._build_channel_strip(strip_holder, top)
-
         window_buttons = ttk.Frame(top, style="Surface.TFrame")
         window_buttons.pack(side="right", padx=(2, 6))
         self.quit_button = ttk.Button(window_buttons, text="✕", width=2,
@@ -211,6 +204,15 @@ class MainWindow:
                                      style="Icon.TButton", command=self._minimize)
         theme.Tooltip(self.min_button, "最小化（无边框模式下会先恢复系统边框，方便从任务栏找回）")
         self.window_buttons = window_buttons
+
+        # 灯条容器放在最后 pack：右边那两个窗口按钮要先占住地方，
+        # 免得窗口很窄时灯条把它们挤出去（✕ 都点不到就麻烦了）
+        strip_holder = tk.Frame(top, bg=theme.PALETTE["bg"],
+                                width=0, height=TOOLBAR_HEIGHT)
+        strip_holder.pack(side="left")
+        strip_holder.pack_propagate(False)
+        self.strip_holder = strip_holder
+        self._build_channel_strip(strip_holder, top)
 
         # ---------------- 底部状态栏（先占位，免得被显示区挤掉） ----------------
         status_bar = ttk.Frame(self.root)
@@ -367,14 +369,14 @@ class MainWindow:
         return max(LAMP_MIN_WIDTH, text_width + 9)
 
     # 档位：从"信息最全"到"最能省地方"，按顺序试，第一个放得下就用它
-    STRIP_STAGES = ("full", "no_stats", "on_names", "dots", "hidden")
+    STRIP_STAGES = ("full", "no_stats", "on_names", "dots", "on_dots", "hidden")
 
     def _stage_width(self, stage: str) -> int:
         """某一档需要多宽（纯计算，不改界面 —— 免得试档位时把画面弄乱）。"""
         if stage == "hidden":
             return 0
-        compact = stage in ("dots", "hidden")
-        only_on = stage == "on_names"
+        compact = stage in ("dots", "on_dots", "hidden")
+        only_on = stage in ("on_names", "on_dots")
         width = 0
         for entry in self._channel_items():
             if only_on and not bool(entry["enabled"]):
@@ -477,10 +479,16 @@ class MainWindow:
                     self._top_container.after(60, self._fit_channel_strip)
                 return
             self._fit_retries = 0
-            reserved = (self.brand.winfo_reqwidth() + self.monitor_button.winfo_reqwidth()
-                        + self.window_buttons.winfo_reqwidth()
-                        + TOOLBAR_OTHER_PADDING)
-            space = top_width - reserved
+            # 用**实际**宽度算剩余空间：窗口很窄时 Tk 会裁别的控件，
+            # 拿 reqwidth 算会把可用空间估大，灯条就压到 ✕ 上去了
+            used = 0
+            for widget, padding in ((self.brand, 16), (self.monitor_button, 2),
+                                    (self.window_buttons, 8)):
+                width = widget.winfo_width()
+                if width <= 1:
+                    width = widget.winfo_reqwidth()
+                used += width + padding
+            space = max(0, top_width - used - TOOLBAR_OTHER_PADDING)
             # 先算宽度（不动界面），选好档位再一次性套用
             chosen = None
             for stage in self.STRIP_STAGES:
@@ -515,11 +523,12 @@ class MainWindow:
             no_stats  全部频道（带名字）
             on_names  只画开着的频道（带名字）—— 地方刚够时最有用的形态
             dots      全部频道（纯色圆点，鼠标悬停看名字）
+            on_dots   只画开着的频道（纯色圆点）
             hidden    整条藏起来（窗口小到放不下时）
         """
         with_stats = stage == "full"
-        compact = stage in ("dots", "hidden")
-        show_only_on = stage == "on_names"
+        compact = stage in ("dots", "on_dots", "hidden")
+        show_only_on = stage in ("on_names", "on_dots")
         if stage not in self.STRIP_STAGES:       # 兜底：不认识的档位按"带名字"处理
             stage = "no_stats"
 

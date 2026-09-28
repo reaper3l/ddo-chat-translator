@@ -76,24 +76,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "timestamp": {"family": "", "size": -2, "weight": "normal", "slant": "roman",
                       "color": "#98a1ab", "bg": "", "border": 0, "follow_channel": False},
     },
-    # 频道表（可自定义：游戏更新加了频道、或频道名变了，在这里改）
-    # 结构：[{"name": "小队", "color": "#22bb2e", "enabled": true}, ...]
-    # 下面两个字典是从它派生出来的（界面和流水线还在读），改频道请改上面的表。
-    "channels": [
-        {"name": "小队", "color": "#22bb2e", "enabled": True},
-        {"name": "公会", "color": "#79c0ff", "enabled": True},
-        {"name": "常规", "color": "#ffd866", "enabled": True},
-        {"name": "公共", "color": "#ffa657", "enabled": True},
-        {"name": "悄悄话", "color": "#ff9ecd", "enabled": True},
-        {"name": "战利品", "color": "#a9b1ba", "enabled": False},
-    ],
+    # 频道表（可自定义，见 app/channels.py）**故意不在这里给默认值**：
+    # 一旦默认配置里就有 channels 列表，老配置里用户的频道开关就永远迁移不过来了
+    # （effective() 看到已经有列表就不会去读旧的 channels_enabled）。默认表在
+    # app/channels.py 的 DEFAULT_CHANNELS 里。下面两个字典是它的派生视图。
     "channel_colors": {
-        "小队": "#7ee787",
+        "小队": "#22bb2e",
         "公会": "#79c0ff",
         "常规": "#ffd866",
         "公共": "#ffa657",
         "悄悄话": "#ff9ecd",
-        "战利品": "#8b949e",
+        "战利品": "#a9b1ba",
     },
     "channels_enabled": {
         "小队": True,
@@ -118,7 +111,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 def load_config() -> Dict[str, Any]:
     config = dict(DEFAULT_CONFIG)
-    config["channels"] = [dict(item) for item in DEFAULT_CONFIG["channels"]]
     config["channel_colors"] = dict(DEFAULT_CONFIG["channel_colors"])
     config["channels_enabled"] = dict(DEFAULT_CONFIG["channels_enabled"])
     user = paths.read_json(paths.CONFIG_PATH, {})
