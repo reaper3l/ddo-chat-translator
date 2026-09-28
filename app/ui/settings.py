@@ -27,7 +27,6 @@ class SettingsDialog:
         self.config = app.config
         self.queue: "queue.Queue[str]" = queue.Queue()
         self.vars = {}
-        self.channel_vars = {}
         self.channel_rows = []           # 「频道」页里的行（可增删）
         self.pages = {}                  # 分类名 -> 该分类的窗口
         self.appearance = None
@@ -292,6 +291,16 @@ class SettingsDialog:
         theme.label(tab, "关掉上面这项会把战利品/宝箱面板也显示出来（OCR 错字版本会刷屏）。",
                     muted=True, anchor="w", wraplength=520, justify="left").pack(
             fill="x", pady=(0, 4))
+        self._choice_labeled(tab, "capture_backend", "截图方式",
+                             [("auto", "自动（优先只抓区域，更快；不一致自动回退）"),
+                              ("pillow", "始终用系统截图（最稳，稍慢）")])
+
+        # 频道开关不在这里再放一份了：和「频道」页的勾选框是同一个东西，
+        # 两份一起写会互相覆盖（"改了保存没生效"就是这么来的）。
+        theme.label(tab, "频道（名字 / 颜色 / 翻不翻 / 小灯）都在「频道」页里改：",
+                    muted=True, anchor="w").pack(fill="x", pady=(8, 2))
+        ttk.Button(tab, text="打开「频道」设置",
+                   command=lambda: self.open_category("频道")).pack(anchor="w")
 
     def _build_channel_tab(self, _parent) -> None:
         """频道页：增删频道、改名、改颜色、开关显示。
@@ -444,7 +453,18 @@ class SettingsDialog:
         self.region_label.config(text=self._region_text())
 
     def save(self, close_window: tk.Misc = None) -> bool:
-        """把已打开过页面里的设置写回配置并立即生效。"""
+        """把已打开过页面里的设置写回配置并立即生效。
+
+        两个教训（用户反馈"改了设置点保存并关闭没生效"）：
+
+        1. **以前只要有一个输入框填得不合法，就整单 return False** —— 其它设置
+           全都没保存，而且提示写的是"最后打开的那个页面"的状态栏，你多半看不到。
+           现在改成：坏值挑出来用弹窗列清楚，**其它设置照常保存生效**。
+        2. **频道开关以前有两份**（监控页的勾选框 + 频道页的行），两边都往
+           `channels_enabled` 写，后写的把先写的覆盖掉 → 看着就是"改完保存没生效"。
+           现在只有「频道」页一份。
+        """
+        bad = []
         for key, (kind, var, extra) in list(self.vars.items()):
             try:
                 if kind == "bool":
@@ -459,12 +479,7 @@ class SettingsDialog:
                 else:
                     self.config[key] = str(var.get()).strip()
             except Exception:
-                self.status.set("「%s」填的值不对" % key)
-                return False
-        if self.channel_vars:              # 只有打开过「监控」页才有这些勾选
-            self.config["channels_enabled"] = {
-                channel: bool(var.get()) for channel, var in self.channel_vars.items()
-            }
+                bad.append(key)            # 这一项跳过，其它照常保存
         if self.channel_rows:              # 只有打开过「频道」页才有这些行
             items = []
             for record in self.channel_rows:
@@ -479,16 +494,29 @@ class SettingsDialog:
                 channels_module.sync(self.config, items)
         if self.appearance is not None:
             self.appearance.save()
-        # 「外观」页改的频道颜色、「监控」页改的开关，最后都并回同一份频道表
+        # 「外观」页改的东西和频道表最后并一次（频道表是颜色的唯一来源）
         channels_module.apply_legacy(self.config)
         self.app.apply_settings()
-        self.status.set("已保存并生效")
+        if bad:
+            names = "、".join(bad)
+            self.status.set("「%s」填的值不对，这一项没保存" % names)
+            # 弹窗才看得见（状态栏在另一个页面上，用户常常看不到）
+            try:
+                messagebox.showwarning(
+                    "有项目没保存",
+                    "这些项填的值不对，已经跳过：\n%s\n\n其它设置已经保存并生效。\n"
+                    "改好这几项再点一次「保存并关闭」即可。" % names,
+                    parent=close_window)
+            except Exception:
+                pass
+        else:
+            self.status.set("已保存并生效")
         if close_window is not None:
             try:
                 close_window.destroy()
             except Exception:
                 pass
-        return True
+        return not bad
 
     def test_connection(self) -> None:
         if not self.save():

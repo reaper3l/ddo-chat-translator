@@ -542,6 +542,51 @@ def main() -> int:
 
     step("收起后的频道灯条（点一下开关频道）", channel_strip)
 
+    def settings_save_is_reliable():
+        """保存必须"该生效的都生效"：
+
+        * 某个输入框填坏 → 只跳过那一项，其它照常保存（以前是整单作废，
+          而且提示写在别的页面上，看着就是"点了保存并关闭没反应"）；
+        * 频道开关只有「频道」页一份（以前监控页也有一份，互相覆盖）。
+        """
+        from app import channels as channels_module
+        from app.ui.settings import SettingsDialog as Dialog
+
+        dialog = Dialog(app)
+        monitor = dialog.open_category("监控")
+        monitor.update_idletasks()
+        if hasattr(dialog, "channel_vars"):
+            raise AssertionError("监控页不该再有频道勾选（会和频道页打架）")
+        if find_widget(monitor, ttk.Button, "打开「频道」设置") is None:
+            raise AssertionError("监控页没有跳转到频道页的按钮")
+
+        before_interval = app.config.get("interval_ms")
+        before_notes = bool(app.config.get("show_notes", False))
+        channel_items = channels_module.effective(app.config)
+        target = channel_items[-1]["name"] if channel_items else ""
+        before_target = channels_module.enabled_map(app.config).get(target, True)
+
+        # 1) 故意把一个数字框填坏，同时改别的设置 + 翻一个频道
+        dialog.open_category("显示与学习")      # 先建页面，才有 show_notes 这个变量
+        dialog.vars["interval_ms"][1].set("")
+        dialog.vars["show_notes"][1].set(not before_notes)
+        dialog.open_category("频道")
+        for record in dialog.channel_rows:
+            if str(record["name"].get()) == target:
+                record["enabled"].set(not before_target)
+        ok = dialog.save()
+        if ok:
+            raise AssertionError("有坏值时 save() 应该返回 False")
+        if app.config.get("interval_ms") != before_interval:
+            raise AssertionError("坏值那项不该被写进配置")
+        if bool(app.config.get("show_notes")) == before_notes:
+            raise AssertionError("坏值之外的设置没保存上")
+        if channels_module.enabled_map(app.config).get(target) == before_target:
+            raise AssertionError("频道开关没保存上（被别的页面覆盖了？）")
+        dialog.window.destroy()
+
+    step("设置保存：坏值不阻塞 + 频道只此一处", settings_save_is_reliable)
+
     def window_buttons():
         """窗口按钮：关闭在最右、最小化在它左边；悬停要有明暗反馈（关闭键变红）。"""
         from tkinter import ttk as ttk_module
