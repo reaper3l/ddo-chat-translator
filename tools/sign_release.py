@@ -133,6 +133,33 @@ def cmd_verify(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_fingerprint(args) -> int:
+    """看某个私钥文件对应哪把公钥 / 指纹对不对（备份完用它核对）。
+
+    只打印**由私钥推导出来的公钥**和指纹 —— 公钥本来就是公开的，私钥本身不显示。
+    """
+    key_file = Path(args.key) if args.key else DEFAULT_KEY_FILE
+    if not key_file.exists():
+        raise SystemExit("找不到私钥文件：%s" % key_file)
+    seed = _read_key(key_file)
+    public = ed25519.publickey(seed).hex()
+    print("私钥文件：%s" % key_file)
+    print("对应公钥：%s" % public)
+    print("指纹　　：%s" % update.pubkey_fingerprint(public))
+    configured = update.pubkeys()
+    if not configured:
+        print("状态　　：app/update.py 里还没配置公钥")
+        return 0
+    if public in configured:
+        index = configured.index(public) + 1
+        which = "主密钥" if index == 1 else "备用密钥 #%d" % index
+        print("状态　　：√ 和 app/update.py 里第 %d 把公钥一致（%s）" % (index, which))
+        return 0
+    print("状态　　：× 这把私钥对应的公钥**不在** app/update.py 里 ——"
+          "用它签的包，程序不会自动安装")
+    return 1
+
+
 def _guess_version(filename: str) -> str:
     import re
 
@@ -167,6 +194,11 @@ def main() -> int:
     p_verify.add_argument("--pubkey", help="公钥 hex（默认用 app/update.py 里那把）")
     p_verify.add_argument("--version", help="版本号（默认从文件名里猜）")
     p_verify.set_defaults(func=cmd_verify)
+
+    p_fingerprint = sub.add_parser("fingerprint",
+                                   help="看私钥文件对应的公钥/指纹（核对备份用）")
+    p_fingerprint.add_argument("--key", help="私钥路径（默认 %s）" % DEFAULT_KEY_FILE)
+    p_fingerprint.set_defaults(func=cmd_fingerprint)
 
     args = parser.parse_args()
     return args.func(args)
