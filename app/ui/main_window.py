@@ -39,7 +39,7 @@ LAMP_DOT_WIDTH = 12          # 窗口很窄时只画一个圆点
 LAMP_MIN_WIDTH = 26
 LAMP_GAP = 2
 # 工具条上除灯条之外那些东西占的宽度（品牌字 + 监听按钮 + 两个窗口按钮 + 内边距）
-TOOLBAR_OTHER_PADDING = 30
+TOOLBAR_OTHER_PADDING = 24
 # 工具条收起/展开的过渡动画
 TOOLBAR_HEIGHT = 32
 ANIMATION_STEPS = 8
@@ -366,7 +366,7 @@ class MainWindow:
         if compact:
             return LAMP_DOT_WIDTH
         text_width = self._lamp_font.measure(label) if label else 0
-        return max(LAMP_MIN_WIDTH, text_width + 9)
+        return max(LAMP_MIN_WIDTH, text_width + 7)
 
     # 档位：从"信息最全"到"最能省地方"，按顺序试，第一个放得下就用它
     STRIP_STAGES = ("full", "no_stats", "on_names", "dots", "on_dots", "hidden")
