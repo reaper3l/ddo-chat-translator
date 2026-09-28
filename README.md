@@ -404,6 +404,12 @@ python tools/verify_build.py                    # 查关键文件 + 跑一次 ex
 DDO翻译助手_v3.0.11.exe --self-check             # 用户侧自检（报告写到 data\selfcheck.txt）
 ```
 
+> 发布发行版时注意：**发行说明（body）别用 curl 的 `--form-string` 传中文** ——
+> PowerShell 5.1 会把它拆成多个参数，curl 会把碎片当 URL（报 "Could not resolve host"），
+> 结果正文被截断。用 `Invoke-RestMethod -Method Post/Patch -ContentType
+> 'application/x-www-form-urlencoded; charset=utf-8' -Body @{access_token=…; tag_name=…;
+> name=…; body=(Get-Content -Raw -Encoding UTF8 notes.md)}`；PATCH 时 tag_name / name 必须一起给。
+
 ---
 
 ## 七、相对旧版修掉了什么（都是旧版真实存在的坑）
