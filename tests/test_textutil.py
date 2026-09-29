@@ -121,3 +121,13 @@ def test_ocr_similar_is_order_sensitive():
     b = "my dear repair man ate seven pears on the road"
     assert textutil.similar(textutil.fingerprint(a), textutil.fingerprint(b)) > 0.6
     assert textutil.ocr_similar(a, b) < 0.6
+
+
+def test_detect_direction_for_manual_translation():
+    """手动翻译窗口靠它决定翻哪边（中→英 / 英→中）。"""
+    assert textutil.detect_direction("马上到，等我一下") == "zh2en"
+    assert textutil.detect_direction("omw, be right there") == "en2zh"
+    assert textutil.detect_direction("") == "en2zh"          # 空输入按英文兜底
+    assert textutil.detect_direction("halo nihao") == "en2zh"   # 拼音也当英文（翻成中文）
+    assert textutil.detect_direction("我要 go to 市场") == "zh2en"  # 中文为主
+    assert textutil.detect_direction("hello there 好") == "en2zh"   # 字母为主

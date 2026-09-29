@@ -1,4 +1,7 @@
-"""中译英窗口：我要说的话 → 外国玩家习惯的英文（自动复制到剪贴板）。
+"""手动翻译窗口（中英互译，**方向自动识别**）。
+
+* 输入中文 → 翻成外国玩家习惯的英文（自动复制到剪贴板，直接粘进游戏）；
+* 输入英文（含拼音、缩写）→ 翻成中文（看懂别人说了什么，或者验证自己要发的话）。
 
 还会读**最近采集到的聊天上下文**，自动推荐几条"我可能想说的话"（中文 + 可直接粘贴的
 游戏英文），点一行就复制英文、双击把中文放进输入框 —— 不会英文也能接着聊。
@@ -11,8 +14,9 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .. import config as config_module
-from ..prompt import (build_reply_messages, build_reply_system_prompt,
-                      build_zh2en_system_prompt)
+from .. import textutil
+from ..prompt import (build_en2zh_system_prompt, build_reply_messages,
+                      build_reply_system_prompt, build_zh2en_system_prompt)
 from ..replies import parse_suggestions
 from . import theme
 
@@ -43,17 +47,18 @@ class CnToEnDialog:
         self.busy = False
         self.suggest_busy = False
         self.suggestions = []          # [(中文, 英文), ...]
+        self.direction = "zh2en"       # 当前识别出来的翻译方向
         if auto_suggest is None:
             auto_suggest = bool(self.app.config.get("cn2en_auto_suggest", True))
         self.auto_suggest = auto_suggest
 
         self.window = tk.Toplevel(app.root)
-        self.window.title("中译英 —— 说给外国玩家听")
+        self.window.title("中英互译 —— 说给外国玩家 / 看懂外国玩家")
         self.window.attributes("-topmost", True)
         self.window.transient(app.root)
         theme.prepare_window(self.window, app.config)
         # autofocus：这个窗口打开就是为了打字，所以显示后直接把焦点给输入框
-        theme.frameless_dialog(self.window, "中译英 —— 说给外国玩家听",
+        theme.frameless_dialog(self.window, "中英互译 —— 说给外国玩家 / 看懂外国玩家",
                                autofocus=True, size=(620, 720))
         self._build()
         if self.auto_suggest:
@@ -61,8 +66,11 @@ class CnToEnDialog:
         self._poll()
 
     def _build(self) -> None:
-        theme.label(self.window, "我要说（中文）", anchor="w").pack(
-            fill="x", padx=12, pady=(10, 2))
+        head = ttk.Frame(self.window)
+        head.pack(fill="x", padx=12, pady=(10, 2))
+        theme.label(head, "要翻译的内容", anchor="w").pack(side="left")
+        self.direction_label = theme.label(head, "", muted=True)
+        self.direction_label.pack(side="right")
         self.input = theme.text_widget(self.window, height=3, wrap="word",
                                        font=(self.app.config.get("font_family",
                                                                  "Microsoft YaHei"), 11))
@@ -72,6 +80,7 @@ class CnToEnDialog:
         self.input.focus_set()
         self.input.bind("<Control-Return>", self._on_enter)
         self.input.bind("<Return>", self._on_enter)
+        self.input.bind("<KeyRelease>", lambda _e: self._refresh_direction())
 
         row = ttk.Frame(self.window)
         row.pack(fill="x", padx=12, pady=6)
@@ -124,12 +133,36 @@ class CnToEnDialog:
                        command=lambda value=en: self._copy(value)).grid(
                 row=index // 4, column=index % 4, padx=2, pady=2, sticky="we")
 
-        theme.label(self.window, "英文（可直接框选复制）", muted=True, anchor="w").pack(
-            fill="x", padx=12, pady=(10, 2))
+        self.output_label = theme.label(self.window, "译文（可直接框选复制）",
+                                        muted=True, anchor="w")
+        self.output_label.pack(fill="x", padx=12, pady=(10, 2))
         self.output = theme.text_widget(self.window, height=5, wrap="word",
                                         font=("Consolas", 12),
                                         fg=theme.PALETTE["ok"])
         self.output.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        self._refresh_direction()        # 放在最后：这时候方向提示/译文标签都已经建好了
+
+    # ---------------------------------------------------------------- 方向识别
+    def _refresh_direction(self) -> None:
+        """输入框内容一变就更新"中文→英文 / 英文→中文"的提示。"""
+        try:
+            text = self.input.get("1.0", "end").strip()
+        except Exception:
+            text = ""
+        self.direction = textutil.detect_direction(text)
+        if not text:
+            hint = "中文 → 英文（英文 → 中文）自动识别"
+            target = "译文（可直接框选复制）"
+        elif self.direction == "zh2en":
+            hint = "识别为中文 → 翻成英文"
+            target = "英文（可直接粘贴进游戏）"
+        else:
+            hint = "识别为英文 → 翻成中文"
+            target = "中文（可直接框选复制）"
+        for widget, text in ((getattr(self, "direction_label", None), hint),
+                             (getattr(self, "output_label", None), target)):
+            if widget is not None:
+                widget.configure(text=text)
 
     def _on_enter(self, _event=None):
         self.translate()
@@ -207,8 +240,11 @@ class CnToEnDialog:
         text = self.input.get("1.0", "end").strip()
         if not text or self.busy:
             return
+        # 方向按内容自动判断：中文 → 英文；英文/拼音 → 中文（用户不用选）
+        self._refresh_direction()
+        direction = self.direction
         self.busy = True
-        self.status.set("翻译中…")
+        self.status.set("翻译中（%s）…" % ("中→英" if direction == "zh2en" else "英→中"))
         engine = self.app.pipeline.engine
         memory = self.app.memory
 
@@ -217,13 +253,15 @@ class CnToEnDialog:
                 self.queue.put(("error", "当前引擎不可用（DeepSeek 需要填 API Key）"))
                 return
             try:
+                prompt = (build_zh2en_system_prompt(memory) if direction == "zh2en"
+                          else build_en2zh_system_prompt(memory))
                 messages = [
-                    {"role": "system", "content": build_zh2en_system_prompt(memory)},
+                    {"role": "system", "content": prompt},
                     {"role": "user", "content": text},
                 ]
                 result = engine.translate(text, messages, timeout=20)
                 if result.ok:
-                    self.queue.put(("ok", result.text))
+                    self.queue.put(("ok", result.text, direction))
                 else:
                     self.queue.put(("error", result.error or "翻译失败"))
             except Exception as exc:
@@ -234,12 +272,14 @@ class CnToEnDialog:
     def _poll(self) -> None:
         try:
             while True:
-                kind, payload = self.queue.get_nowait()
+                message = self.queue.get_nowait()
+                kind, payload = message[0], message[1]
                 if kind == "ok":
                     self.busy = False
                     self.output.delete("1.0", "end")
                     self.output.insert("1.0", payload)
-                    self.status.set("好了")
+                    direction = message[2] if len(message) > 2 else self.direction
+                    self.status.set("好了（%s）" % ("中→英" if direction == "zh2en" else "英→中"))
                     if self.auto_copy.get():
                         self._copy(payload)
                 elif kind == "suggest":

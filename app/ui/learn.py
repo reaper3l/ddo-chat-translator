@@ -10,7 +10,9 @@ from __future__ import annotations
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from pathlib import Path
 
+from .. import glossary_io
 from . import theme
 
 
@@ -315,6 +317,9 @@ class DictionaryDialog:
             side="left", padx=6)
         ttk.Button(row, text="删除选中的用户词", command=self.delete_term).pack(
             side="left", padx=6)
+        ttk.Button(row, text="导出…", command=self.export_terms).pack(side="left")
+        ttk.Button(row, text="导入…", command=self.import_terms).pack(
+            side="left", padx=6)
 
         self.tree = ttk.Treeview(self.window, columns=("term", "zh", "source"),
                                  show="headings", height=18)
@@ -329,6 +334,8 @@ class DictionaryDialog:
         bottom.pack(fill="x", padx=10, pady=8)
         self.count_label = theme.label(bottom, "", muted=True)
         self.count_label.pack(side="left")
+        theme.label(bottom, "导出的是整份术语表；导入只写入新增/改动过的词",
+                    muted=True).pack(side="left", padx=10)
         ttk.Button(bottom, text="关闭", command=self.window.destroy).pack(side="right")
 
     def refresh(self) -> None:
@@ -378,3 +385,70 @@ class DictionaryDialog:
             self.refresh()
         else:
             messagebox.showinfo("提示", "内置词不能删除，只能用同名的用户词覆盖它")
+
+    # -------------------------------------------------------------- 导出 / 导入
+    def export_terms(self) -> None:
+        """把当前整份术语表（内置 + 我的）导出成 JSON 或 CSV，方便备份、分享给队友。"""
+        terms = self.app.glossary.terms()
+        if not terms:
+            messagebox.showinfo("提示", "现在术语表是空的，没什么可导出的", parent=self.window)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self.window, title="导出术语表", defaultextension=".json",
+            initialfile="ddo术语表.json",
+            filetypes=[("JSON（推荐，可导入回来）", "*.json"),
+                       ("CSV / 表格（方便 Excel 编辑）", "*.csv"),
+                       ("所有文件", "*.*")])
+        if not path:
+            return
+        fmt = "csv" if str(path).lower().endswith((".csv", ".txt")) else "json"
+        try:
+            Path(path).write_text(glossary_io.dump_terms(terms, fmt), encoding="utf-8-sig"
+                                  if fmt == "csv" else "utf-8")
+        except Exception as exc:
+            messagebox.showwarning("导出失败", str(exc), parent=self.window)
+            return
+        self.app.set_status("已导出 %d 条术语到 %s" % (len(terms), path), "ok")
+        messagebox.showinfo(
+            "导出完成",
+            "已导出 %d 条术语：\n%s\n\n把文件发给队友，他们用「导入…」就能直接用。"
+            % (len(terms), path), parent=self.window)
+
+    def import_terms(self) -> None:
+        """从 JSON/CSV 导入术语；只写入新增或改过译法的词。"""
+        path = filedialog.askopenfilename(
+            parent=self.window, title="导入术语表",
+            filetypes=[("术语表（JSON / CSV）", "*.json *.csv *.txt"),
+                       ("所有文件", "*.*")])
+        if not path:
+            return
+        try:
+            incoming = glossary_io.load_terms(
+                Path(path).read_text(encoding="utf-8-sig", errors="replace"), path)
+        except Exception as exc:
+            messagebox.showwarning("导入失败", "读不出这个文件：%s" % exc, parent=self.window)
+            return
+        to_write, unchanged = glossary_io.plan_import(self.app.glossary.terms(), incoming)
+        if not to_write:
+            messagebox.showinfo(
+                "没有需要导入的",
+                "文件里 %d 条术语和现在的译法一模一样，不用导入。" % unchanged,
+                parent=self.window)
+            return
+        if not messagebox.askyesno(
+                "确认导入",
+                "文件里共 %d 条：\n· 新增/改动 %d 条（会覆盖同名译法）\n· 和现在相同 %d 条（跳过）\n\n"
+                "继续导入吗？（内置词不会被删掉，只会被你的同名译法覆盖）"
+                % (len(incoming), len(to_write), unchanged), parent=self.window):
+            return
+        for term, zh in to_write.items():
+            self.app.memory.set_term(term, zh, source="import")
+        self.app.memory.flush(force=True)
+        self.app.rebuild_glossary()
+        self.refresh()
+        self.app.set_status("已导入 %d 条术语（跳过 %d 条相同的）"
+                            % (len(to_write), unchanged), "ok")
+        messagebox.showinfo(
+            "导入完成",
+            "已导入 %d 条（跳过 %d 条和现有译法相同的）。" % (len(to_write), unchanged),
+            parent=self.window)

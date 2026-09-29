@@ -173,7 +173,7 @@ class SettingsDialog:
             "数据目录：%s" % paths.DATA_DIR,
             "　配置 config.json　学习库 memory.json　缓存 cache.json　日志 logs\\app.log",
             "",
-            "快捷键：F8 开始/停止　F9 剪贴板中译英　F10 纠错　F5 测试识别",
+            "快捷键：F8 开始/停止　F9 剪贴板中英互译　F10 纠错　F5 测试识别",
             "术语表：assets\\glossary.json（可直接编辑，也可在「词典」里改）",
             "",
             "运行方式：%s" % ("打包版（可以自动升级）" if update_module.can_self_update()

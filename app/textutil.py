@@ -62,6 +62,23 @@ def has_latin(text: str) -> bool:
     return bool(LATIN_RE.search(text or ""))
 
 
+def detect_direction(text: str) -> str:
+    """判断这段话该往哪边翻：'zh2en'（中文→英文）或 'en2zh'（英文→中文）。
+
+    给"手动翻译"窗口用：用户不用先选方向，粘进来直接翻。
+    规则故意做得简单可预期：
+      * 一个汉字都没有 → 当英文（拼音、缩写也算，翻成中文正好）；
+      * 有汉字 → 汉字数量不少于拉丁字母的 1/3 就当"中文为主"（"我要 go to 市场" 也算中文）；
+      * 汉字很少、字母很多（"omw 马上"）→ 当英文。
+    """
+    body = text or ""
+    cjk = len(CJK_RE.findall(body))
+    if cjk == 0:
+        return "en2zh"
+    latin = len(LATIN_RE.findall(body))
+    return "zh2en" if cjk * 3 >= latin else "en2zh"
+
+
 def has_latin_outside_marks(text: str) -> bool:
     """判断"去掉占位符之后"还剩不剩英文字母。
 

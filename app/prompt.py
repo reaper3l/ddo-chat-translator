@@ -146,6 +146,28 @@ def build_zh2en_system_prompt(memory=None) -> str:
 """
 
 
+def build_en2zh_system_prompt(memory=None) -> str:
+    """英文→中文：把外国玩家说的话翻成中文（"手动翻译"窗口的另一半）。"""
+    hints = ""
+    if memory is not None:
+        terms = memory.prompt_terms(limit=20)
+        if terms:
+            pairs = "，".join("%s=%s" % (i["text"], i["zh"]) for i in terms)
+            hints = f"\n【我的用词习惯（英文→中文）】{pairs}"
+    return f"""你是 DDO 玩家的聊天翻译助手。把外国玩家说的游戏英文，翻成中国玩家一眼就懂的中文口语。
+
+要求：
+1. 游戏缩写按老外的习惯翻，不要逐字母硬译：
+   OMW=马上到，BRB=马上回来，AFK=暂离，LFM=缺人组队，LFG=找队伍，TY=谢谢，
+   NP=不客气，GL=祝好运，HF=玩得开心，GG=打得好，OOM=没蓝了，REZ=复活，
+   SHRINE=神龛，R1/R2=死神难度1/2，ELITE=精英难度，SHARE=共享任务，ABANDON=放弃任务，
+   PoP=位面监狱，FoD=冲突基地，Wiz=法师，Rog=盗贼。
+2. 说人话：短句、口语，别书面语，别逐词硬译（"在重置吗?"、"稍等" 这种）。
+3. 只输出中文本身，不要引号、不要解释、不要保留英文原文。
+4. 人名、公会名、道具名保持原样，不要音译。{hints}
+"""
+
+
 def build_reply_system_prompt(memory=None) -> str:
     """「根据聊天内容推荐回复」用的提示词（输出中英对照的几条建议）。"""
     hints = ""

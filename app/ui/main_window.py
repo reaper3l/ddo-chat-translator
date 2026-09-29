@@ -57,7 +57,8 @@ ANIMATION_INTERVAL_MS = 16   # 8 × 16ms ≈ 130ms
 ACTION_BUTTONS = (
     ("⊞", "区域", "select_region", "框选游戏聊天框；框完会自动抓一帧给你确认"),
     ("◎", "测试", "test_region", "抓一帧看看识别到什么（F5）"),
-    ("⇄", "中译英", "open_cn2en", "把中文翻成老外习惯的英文；F9 直接翻译剪贴板"),
+    ("⇄", "互译", "open_cn2en",
+     "中英互译（自动识别方向）：中文→英文、英文→中文；F9 直接翻译剪贴板"),
     ("✎", "纠错", "fix_selected", "选中一条译文后改成正确的中文（F10）"),
     ("▤", "词典", "open_dictionary", "术语表：这里面的词会被保护，不让模型乱翻"),
     ("✦", "学习", "open_learning", "待学习词 / 已学习 / 纠错历史"),
@@ -274,7 +275,7 @@ class MainWindow:
         self.menu.add_command(label="纠正这条翻译 (F10)", command=self.fix_selected)
         self.menu.add_command(label="复制选中内容", command=self.copy_selection)
         self.menu.add_separator()
-        self.menu.add_command(label="中译英 (Ctrl+Enter 发送)", command=self.open_cn2en)
+        self.menu.add_command(label="中英互译 (Ctrl+Enter 发送)", command=self.open_cn2en)
         self.menu.add_command(label="显示/隐藏英文原文", command=self.toggle_original)
         self.menu.add_separator()
         self.menu.add_command(label="词典", command=self.open_dictionary)

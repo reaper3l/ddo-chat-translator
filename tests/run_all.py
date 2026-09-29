@@ -27,6 +27,8 @@ MODULES = [
     "test_parser",
     "test_dedup",
     "test_glossary",
+    "test_glossary_io",
+    "test_prompt",
     "test_store",
     "test_pipeline",
     "test_style",

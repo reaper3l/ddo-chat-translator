@@ -828,6 +828,43 @@ def main() -> int:
     step("学习中心", lambda: open_and_close(lambda: LearningCenterDialog(app)))
     step("词典窗口", lambda: open_and_close(lambda: DictionaryDialog(app)))
 
+    def dictionary_export_import():
+        """词典的导出/导入接线：导出成 json 再读回来，导入不应该炸。"""
+        import tempfile
+        from pathlib import Path
+
+        from app import glossary_io
+
+        dialog = DictionaryDialog(app)
+        dialog.window.update_idletasks()
+        target = Path(tempfile.mkdtemp(prefix="ddo_dict_")) / "glossary.json"
+        original_save = filedialog.asksaveasfilename
+        original_open = filedialog.askopenfilename
+        try:
+            filedialog.asksaveasfilename = lambda *a, **k: str(target)
+            export_button = find_widget(dialog.window, ttk.Button, "导出…")
+            if export_button is None:
+                raise AssertionError("词典窗口没有「导出…」按钮")
+            export_button.invoke()
+            if not target.exists():
+                raise AssertionError("点了导出却没有生成文件")
+            terms = glossary_io.load_terms(target.read_text(encoding="utf-8"), str(target))
+            if len(terms) < 10:
+                raise AssertionError("导出的术语太少（%d 条）" % len(terms))
+            # 再导入同一份文件：应该提示"没有需要导入的"，而不是报错
+            filedialog.askopenfilename = lambda *a, **k: str(target)
+            import_button = find_widget(dialog.window, ttk.Button, "导入…")
+            if import_button is None:
+                raise AssertionError("词典窗口没有「导入…」按钮")
+            import_button.invoke()
+            dialog.refresh()
+        finally:
+            filedialog.asksaveasfilename = original_save
+            filedialog.askopenfilename = original_open
+            dialog.window.destroy()
+
+    step("词典：导出 / 导入术语表", dictionary_export_import)
+
     def preview():
         region = app.config.get("region") or [0, 0, 100, 50]
         show_preview(app.root, region, None, ["(小队)Alice: hello there", "系统消息"])
