@@ -317,9 +317,17 @@ class DictionaryDialog:
             side="left", padx=6)
         ttk.Button(row, text="删除选中的用户词", command=self.delete_term).pack(
             side="left", padx=6)
-        ttk.Button(row, text="导出…", command=self.export_terms).pack(side="left")
-        ttk.Button(row, text="导入…", command=self.import_terms).pack(
+
+        io_row = ttk.Frame(self.window)
+        io_row.pack(fill="x", padx=10, pady=(0, 4))
+        ttk.Button(io_row, text="导出全部…",
+                   command=lambda: self.export_terms(only_mine=False)).pack(side="left")
+        ttk.Button(io_row, text="只导出我的…",
+                   command=lambda: self.export_terms(only_mine=True)).pack(
             side="left", padx=6)
+        ttk.Button(io_row, text="导入…", command=self.import_terms).pack(side="left")
+        theme.label(io_row, "导出 JSON / CSV；导入只写入新增或改动过的词",
+                    muted=True).pack(side="left", padx=10)
 
         self.tree = ttk.Treeview(self.window, columns=("term", "zh", "source"),
                                  show="headings", height=18)
@@ -334,8 +342,6 @@ class DictionaryDialog:
         bottom.pack(fill="x", padx=10, pady=8)
         self.count_label = theme.label(bottom, "", muted=True)
         self.count_label.pack(side="left")
-        theme.label(bottom, "导出的是整份术语表；导入只写入新增/改动过的词",
-                    muted=True).pack(side="left", padx=10)
         ttk.Button(bottom, text="关闭", command=self.window.destroy).pack(side="right")
 
     def refresh(self) -> None:
@@ -387,15 +393,30 @@ class DictionaryDialog:
             messagebox.showinfo("提示", "内置词不能删除，只能用同名的用户词覆盖它")
 
     # -------------------------------------------------------------- 导出 / 导入
-    def export_terms(self) -> None:
-        """把当前整份术语表（内置 + 我的）导出成 JSON 或 CSV，方便备份、分享给队友。"""
-        terms = self.app.glossary.terms()
+    def export_terms(self, only_mine: bool = False) -> None:
+        """导出术语表。
+
+        only_mine=True 时只导出"我的词条"（自己加的 / 学习到的 / 纠错来的），
+        不含内置表 —— 自己备份、换电脑搬的时候更干净；默认导出整份，方便分享给队友。
+        """
+        if only_mine:
+            terms = glossary_io.user_terms(self.app.memory.term_list())
+            title = "只导出我的词条"
+            default_name = "ddo术语表_我的.json"
+        else:
+            terms = self.app.glossary.terms()
+            title = "导出全部术语"
+            default_name = "ddo术语表_全部.json"
         if not terms:
-            messagebox.showinfo("提示", "现在术语表是空的，没什么可导出的", parent=self.window)
+            messagebox.showinfo(
+                "提示",
+                "你的词条还是空的（内置词条不算「我的词条」）。\n"
+                "可以在学习中心收编生词，或者用「新增/覆盖」自己加。" if only_mine
+                else "现在术语表是空的，没什么可导出的", parent=self.window)
             return
         path = filedialog.asksaveasfilename(
-            parent=self.window, title="导出术语表", defaultextension=".json",
-            initialfile="ddo术语表.json",
+            parent=self.window, title=title, defaultextension=".json",
+            initialfile=default_name,
             filetypes=[("JSON（推荐，可导入回来）", "*.json"),
                        ("CSV / 表格（方便 Excel 编辑）", "*.csv"),
                        ("所有文件", "*.*")])
@@ -408,11 +429,17 @@ class DictionaryDialog:
         except Exception as exc:
             messagebox.showwarning("导出失败", str(exc), parent=self.window)
             return
-        self.app.set_status("已导出 %d 条术语到 %s" % (len(terms), path), "ok")
+        self.app.set_status("已导出 %d 条%s到 %s"
+                            % (len(terms), "" if only_mine else "术语", path), "ok")
         messagebox.showinfo(
             "导出完成",
-            "已导出 %d 条术语：\n%s\n\n把文件发给队友，他们用「导入…」就能直接用。"
-            % (len(terms), path), parent=self.window)
+            "已导出 %d 条%s：\n%s\n\n%s"
+            % (len(terms),
+               "我的词条" if only_mine else "术语（内置 + 我的）",
+               path,
+               "这份只包含你自己加的词，适合备份。"
+               if only_mine else "发给队友，他们用「导入…」就能直接用。"),
+            parent=self.window)
 
     def import_terms(self) -> None:
         """从 JSON/CSV 导入术语；只写入新增或改过译法的词。"""

@@ -131,3 +131,13 @@ def test_detect_direction_for_manual_translation():
     assert textutil.detect_direction("halo nihao") == "en2zh"   # 拼音也当英文（翻成中文）
     assert textutil.detect_direction("我要 go to 市场") == "zh2en"  # 中文为主
     assert textutil.detect_direction("hello there 好") == "en2zh"   # 字母为主
+
+
+def test_resolve_direction_can_be_forced():
+    """窗口里的"方向"下拉：自动 / 强制翻成英文 / 强制翻成中文。"""
+    assert textutil.resolve_direction("omw", "auto") == "en2zh"
+    assert textutil.resolve_direction("马上到", "auto") == "zh2en"
+    # 强制之后，内容是什么都不改方向（用户说了算）
+    assert textutil.resolve_direction("马上到", "en2zh") == "en2zh"
+    assert textutil.resolve_direction("omw", "zh2en") == "zh2en"
+    assert textutil.resolve_direction("", "zh2en") == "zh2en"

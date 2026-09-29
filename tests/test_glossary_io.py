@@ -56,3 +56,17 @@ def test_plan_import_is_case_insensitive_about_terms():
     assert to_write == {} and unchanged == 1
     to_write, _ = glossary_io.plan_import({"Reaper": "死神"}, {"reaper": "收割者"})
     assert to_write == {"reaper": "收割者"}
+
+
+def test_user_terms_only_takes_mine():
+    """只导出我的词条：从 memory.term_list() 那种结构取词，脏数据跳过。"""
+    items = [
+        {"text": "shrine", "zh": "神龛", "count": 3},
+        {"text": "  ", "zh": "空词条"},
+        {"text": "notrans", "zh": ""},
+        {"not": "a term"},
+        "garbage",
+    ]
+    assert glossary_io.user_terms(items) == {"shrine": "神龛"}
+    assert glossary_io.user_terms([]) == {}
+    assert glossary_io.user_terms(None) == {}

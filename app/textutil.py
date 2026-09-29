@@ -79,6 +79,16 @@ def detect_direction(text: str) -> str:
     return "zh2en" if cjk * 3 >= latin else "en2zh"
 
 
+def resolve_direction(text: str, mode: str = "auto") -> str:
+    """按"手动翻译"窗口的设置决定方向：mode = auto / zh2en / en2zh。
+
+    `zh2en` 表示"翻成英文"、`en2zh` 表示"翻成中文"（用户可以在窗口里强制指定）。
+    """
+    if mode in ("zh2en", "en2zh"):
+        return mode
+    return detect_direction(text)
+
+
 def has_latin_outside_marks(text: str) -> bool:
     """判断"去掉占位符之后"还剩不剩英文字母。
 

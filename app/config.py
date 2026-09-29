@@ -38,6 +38,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "translate_mode": "quality", # quality | fast
     # 中译英窗口：打开时自动按最近聊天生成几条"我可能想说的话"（每次消耗一次接口调用）
     "cn2en_auto_suggest": True,
+    # 这个窗口的翻译方向：auto=按内容自动判断；zh2en=强制翻成英文；en2zh=强制翻成中文
+    "cn2en_direction": "auto",
     "context_turns": 5,          # 送给模型的上文条数
     "timeout_seconds": 20,
     "max_queue": 30,

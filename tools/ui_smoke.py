@@ -680,6 +680,46 @@ def main() -> int:
 
     step("中译英：上下文推荐回复（中英对照 / 点击复制）", cn2en_reply_suggestions)
 
+    def cn2en_direction_switch():
+        """互译窗口的"方向"下拉：自动识别，也能强制翻成英文 / 翻成中文。"""
+        from app.ui.cn2en import CnToEnDialog
+
+        dialog = CnToEnDialog(app, auto_suggest=False)
+        try:
+            dialog.input.delete("1.0", "end")
+            dialog.input.insert("1.0", "马上到")
+            dialog.direction_var.set("自动（看内容）")
+            dialog._refresh_direction()
+            if dialog.direction != "zh2en":
+                raise AssertionError("自动模式下中文应识别为 中→英")
+            dialog.input.delete("1.0", "end")
+            dialog.input.insert("1.0", "omw")
+            dialog._refresh_direction()
+            if dialog.direction != "en2zh":
+                raise AssertionError("自动模式下英文应识别为 英→中")
+            # 强制翻成中文：输入是中文也按"英→中"，提示里要写明"强制"
+            dialog.input.delete("1.0", "end")
+            dialog.input.insert("1.0", "马上到")
+            dialog.direction_var.set("翻成中文")
+            dialog._refresh_direction()
+            if dialog.direction != "en2zh":
+                raise AssertionError("强制翻成中文没有生效")
+            if "强制" not in dialog.direction_label.cget("text"):
+                raise AssertionError("强制方向时提示里应该写明")
+            dialog.direction_var.set("翻成英文")
+            dialog._refresh_direction()
+            if dialog.direction != "zh2en":
+                raise AssertionError("强制翻成英文没有生效")
+            # 选回自动，别把设置留在"强制"上
+            dialog.direction_var.set("自动（看内容）")
+            dialog._on_direction_changed()
+            if app.config.get("cn2en_direction") != "auto":
+                raise AssertionError("方向选择没有写回配置")
+        finally:
+            dialog.window.destroy()
+
+    step("互译：方向自动识别 / 可强制", cn2en_direction_switch)
+
     def update_dialog_smoke():
         """「发现新版本」窗口的接线（不联网：喂一个假的 UpdateInfo）。"""
         from app import update as update_module
@@ -842,15 +882,20 @@ def main() -> int:
         original_open = filedialog.askopenfilename
         try:
             filedialog.asksaveasfilename = lambda *a, **k: str(target)
-            export_button = find_widget(dialog.window, ttk.Button, "导出…")
+            export_button = find_widget(dialog.window, ttk.Button, "导出全部…")
             if export_button is None:
-                raise AssertionError("词典窗口没有「导出…」按钮")
+                raise AssertionError("词典窗口没有「导出全部…」按钮")
             export_button.invoke()
             if not target.exists():
                 raise AssertionError("点了导出却没有生成文件")
             terms = glossary_io.load_terms(target.read_text(encoding="utf-8"), str(target))
             if len(terms) < 10:
                 raise AssertionError("导出的术语太少（%d 条）" % len(terms))
+            # "只导出我的词条"：没有自建词条时会提示（自检里对话框被静音），不能报错
+            mine_button = find_widget(dialog.window, ttk.Button, "只导出我的…")
+            if mine_button is None:
+                raise AssertionError("词典窗口没有「只导出我的…」按钮")
+            mine_button.invoke()
             # 再导入同一份文件：应该提示"没有需要导入的"，而不是报错
             filedialog.askopenfilename = lambda *a, **k: str(target)
             import_button = find_widget(dialog.window, ttk.Button, "导入…")

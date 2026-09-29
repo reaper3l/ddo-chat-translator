@@ -39,6 +39,13 @@ QUICK_PHRASES = [
     ("我先下线了", "cya"),
 ]
 
+# "方向"下拉的选项：显示文字 → 内部值（写进配置）
+DIRECTION_CHOICES = (
+    ("自动（看内容）", "auto"),
+    ("翻成英文", "zh2en"),
+    ("翻成中文", "en2zh"),
+)
+
 
 class CnToEnDialog:
     def __init__(self, app, auto_suggest=None) -> None:
@@ -69,8 +76,18 @@ class CnToEnDialog:
         head = ttk.Frame(self.window)
         head.pack(fill="x", padx=12, pady=(10, 2))
         theme.label(head, "要翻译的内容", anchor="w").pack(side="left")
+        # 从右往左依次 pack（side="right" 时，先 pack 的在最右边）：
+        # 最终一行是  [要翻译的内容] … [方向:] [下拉] [识别结果]
         self.direction_label = theme.label(head, "", muted=True)
-        self.direction_label.pack(side="right")
+        self.direction_label.pack(side="right", padx=(6, 0))
+        self.direction_var = tk.StringVar(value=self._mode_label(
+            self.app.config.get("cn2en_direction", "auto")))
+        combo = ttk.Combobox(head, state="readonly", width=12,
+                             textvariable=self.direction_var,
+                             values=[label for label, _value in DIRECTION_CHOICES])
+        combo.pack(side="right")
+        combo.bind("<<ComboboxSelected>>", lambda _e: self._on_direction_changed())
+        theme.label(head, "方向:", muted=True).pack(side="right", padx=(8, 2))
         self.input = theme.text_widget(self.window, height=3, wrap="word",
                                        font=(self.app.config.get("font_family",
                                                                  "Microsoft YaHei"), 11))
@@ -143,21 +160,57 @@ class CnToEnDialog:
         self._refresh_direction()        # 放在最后：这时候方向提示/译文标签都已经建好了
 
     # ---------------------------------------------------------------- 方向识别
+    @staticmethod
+    def _mode_label(mode: str) -> str:
+        for label, value in DIRECTION_CHOICES:
+            if value == mode:
+                return label
+        return DIRECTION_CHOICES[0][0]
+
+    @staticmethod
+    def _mode_value(label: str) -> str:
+        for text, value in DIRECTION_CHOICES:
+            if text == label:
+                return value
+        return "auto"
+
+    def _direction_mode(self) -> str:
+        """当前选的模式（auto / zh2en / en2zh）。"""
+        try:
+            return self._mode_value(self.direction_var.get())
+        except Exception:
+            return "auto"
+
+    def _on_direction_changed(self) -> None:
+        """换方向：记住选择，并立刻刷新提示。"""
+        self.app.config["cn2en_direction"] = self._direction_mode()
+        config_module.save_config(self.app.config)
+        self._refresh_direction()
+
     def _refresh_direction(self) -> None:
-        """输入框内容一变就更新"中文→英文 / 英文→中文"的提示。"""
+        """输入框内容一变就更新方向提示（强制方向时以设置为准）。"""
         try:
             text = self.input.get("1.0", "end").strip()
         except Exception:
             text = ""
-        self.direction = textutil.detect_direction(text)
-        if not text:
+        mode = self._direction_mode()
+        detected = textutil.detect_direction(text)
+        self.direction = textutil.resolve_direction(text, mode)
+        if mode == "zh2en":
+            hint = "强制：翻成英文" + ("（内容看着像英文）" if detected == "en2zh" else "")
+        elif mode == "en2zh":
+            hint = "强制：翻成中文" + ("（内容看着像中文）" if detected == "zh2en" else "")
+        elif not text:
             hint = "中文 → 英文（英文 → 中文）自动识别"
-            target = "译文（可直接框选复制）"
         elif self.direction == "zh2en":
             hint = "识别为中文 → 翻成英文"
-            target = "英文（可直接粘贴进游戏）"
         else:
             hint = "识别为英文 → 翻成中文"
+        if not text:
+            target = "译文（可直接框选复制）"
+        elif self.direction == "zh2en":
+            target = "英文（可直接粘贴进游戏）"
+        else:
             target = "中文（可直接框选复制）"
         for widget, text in ((getattr(self, "direction_label", None), hint),
                              (getattr(self, "output_label", None), target)):

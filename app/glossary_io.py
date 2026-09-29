@@ -115,3 +115,19 @@ def plan_import(current: Dict[str, str],
             continue
         to_write[term] = zh
     return to_write, unchanged
+
+
+def user_terms(items) -> Dict[str, str]:
+    """把 `memory.term_list()` 那种结构（[{text, zh, ...}, ...]）变成 {术语: 中文}。
+
+    "只导出我的词条"用它 —— 不含内置精选表和旧版扩展表，方便自己备份、换电脑搬。
+    """
+    result: Dict[str, str] = {}
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        term = str(item.get("text") or "").strip()
+        zh = str(item.get("zh") or "").strip()
+        if term and zh:
+            result[term] = zh
+    return result
