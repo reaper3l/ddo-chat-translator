@@ -25,6 +25,7 @@ MODULES = [
     "test_update",
     "test_ed25519",
     "test_parser",
+    "test_zh_regression",
     "test_dedup",
     "test_glossary",
     "test_glossary_io",

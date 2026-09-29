@@ -263,7 +263,8 @@ _LABEL_WRAP = "()[]{}（）【】<>《》"
 _LABEL_TAIL_TRIM = " \t。，,、;；…·-—"
 
 
-def _strip_trailing_channel_label(text: str, channel: str, aliases) -> str:
+def _strip_trailing_channel_label(text: str, channel: str, aliases,
+                                  cache: Optional[Dict[str, Tuple[set, list]]] = None) -> str:
     """去掉正文末尾那个"频道标签"尾巴。
 
     只摘**和这一行自己的频道相同**的尾巴（游戏右边画的就是本行频道名）：
@@ -281,27 +282,32 @@ def _strip_trailing_channel_label(text: str, channel: str, aliases) -> str:
         return text
     table = DEFAULT_ALIASES if aliases is None else aliases
 
-    def same_channel(label: str) -> bool:
-        # 标签必须**严格等于**别名表里的某个写法（大小写不敏感）——不能走
-        # normalize_channel 的模糊兜底，那会把 "要回小队""回小队" 这种正文也认成频道名。
-        if label in table:
-            return table[label] == channel
-        lowered = label.lower()
-        for alias, canonical in table.items():
-            if alias.lower() == lowered:
-                return canonical == channel
-        return False
+    # 这个频道在别名表里的所有写法（小写，方便大小写不敏感地比）。
+    # 只试"这几个写法本身的长度（再给括号留 1~2 个字符）"，而不是从 1 逐个试到 8 ——
+    # 后者每行要对着整张别名表扫好几遍，中文语料实测会慢 35%（33 → 44 µs/行）。
+    variants, sizes = (None, None)
+    if cache is not None and channel in cache:
+        variants, sizes = cache[channel]
+    if variants is None:
+        variants = {str(name).lower() for name, value in table.items()
+                    if value == channel and len(str(name)) >= 2}
+        sizes = sorted({len(name) + pad for name in variants for pad in (0, 1, 2)
+                        if len(name) + pad <= 8})
+        if cache is not None:
+            cache[channel] = (variants, sizes)      # 每个频道只算一次，别每行都扫别名表
+    if not variants:
+        return text
 
-    # 尾巴最多取 8 个字（自定义频道名够用）；模糊兜底只给"真实标签长度"（≤4）用，
-    # 否则 "我要回小队" 这种整句会被当成一个长标签匹配掉。
-    for size in range(1, min(9, len(candidate) + 1)):
+    for size in sizes:
+        if size > len(candidate):
+            continue
         raw = candidate[-size:]
         if any(ch.isspace() for ch in raw):
             break                       # 标签里不会有空格，越界了就别再往前试
         label = raw.strip(_LABEL_WRAP).strip()
-        if len(label) < 2:
-            continue
-        if not same_channel(label):
+        # 标签必须**严格等于**别名表里的某个写法（大小写不敏感）——不能走
+        # normalize_channel 的模糊兜底，那会把 "要回小队""回小队" 这种正文也认成频道名。
+        if label.lower() not in variants:
             continue
         before = candidate[: len(candidate) - size]
         if before and textutil.has_cjk(before[-1:]):
@@ -320,8 +326,12 @@ def _split_whisper(rest: str) -> Optional[Tuple[str, str]]:
     英文客户端那两种写法（"X tells you, '…'" / "You tell X, '…'"）统一成同样的中文主语，
     这样中英客户端的显示看着一致。
     """
-    for pattern, outgoing in ((WHISPER_OUT_RE, True), (WHISPER_IN_RE, False),
-                              (WHISPER_OUT_EN_RE, True), (WHISPER_IN_EN_RE, False)):
+    patterns = [(WHISPER_OUT_RE, True), (WHISPER_IN_RE, False)]
+    # 英文那两条只有正文里出现 "tell" 才可能命中（"X tells you," / "You tell X,"），
+    # 先做个便宜的字符串判断，中文语料就不用白跑两个正则了。
+    if "tell" in rest[:60].lower():
+        patterns += [(WHISPER_OUT_EN_RE, True), (WHISPER_IN_EN_RE, False)]
+    for pattern, outgoing in patterns:
         match = pattern.match(rest)
         if not match:
             continue
@@ -480,6 +490,8 @@ class ChatParser:
         # 传 None 时用内置那套（单测和老工具用）。
         self.aliases = dict(DEFAULT_ALIASES) if aliases is None else dict(aliases)
         self.infer_channel_from_previous = infer_channel_from_previous
+        # "正文尾巴上的频道标签"用的缓存：频道名 → (写法集合, 要试的长度)
+        self._label_cache: Dict[str, Tuple[set, list]] = {}
 
     # ---------------------------------------------------------------- 主入口
     def parse(self, lines: Sequence[str]) -> List[Event]:
@@ -504,7 +516,8 @@ class ChatParser:
         channel = channels[0] if channels else ""
         rest = (line[spans[-1][1]:] if spans else line).strip()
         # 游戏聊天框右侧那一次频道名会被 OCR 并进正文尾部 → 先摘掉
-        rest = _strip_trailing_channel_label(rest, channel, self.aliases)
+        rest = _strip_trailing_channel_label(rest, channel, self.aliases,
+                                             self._label_cache)
 
         # ---- 有频道前缀 ----
         if spans:
@@ -578,7 +591,7 @@ class ChatParser:
         name, body = _split_speaker(line)
         if name and last_chat is not None:
             body = _clean_chat_body(_strip_trailing_channel_label(
-                body, last_chat.channel, self.aliases))
+                body, last_chat.channel, self.aliases, self._label_cache))
             if textutil.is_noise(body):
                 return last_chat
             event = Event(KIND_CHAT, body,
@@ -589,8 +602,8 @@ class ChatParser:
 
         # 续行：接到上一条聊天消息后面
         if last_chat is not None and not textutil.is_noise(line):
-            tail = textutil.clean_body(
-                _strip_trailing_channel_label(line, last_chat.channel, self.aliases))
+            tail = textutil.clean_body(_strip_trailing_channel_label(
+                line, last_chat.channel, self.aliases, self._label_cache))
             if tail:
                 last_chat.text = textutil.normalize(last_chat.text + " " + tail)
             return last_chat
