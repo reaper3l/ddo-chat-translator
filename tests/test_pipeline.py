@@ -444,6 +444,20 @@ def test_trailing_channel_label_variant_shown_once():
     assert _drain_jobs(pipeline) == []                   # 去重后不再排一次
 
 
+def test_same_sentence_from_two_players_is_shown_twice():
+    """不同的人说同一句话（"ty"、"ok" 很常见），两条都要显示。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines([
+        "(小队):[小队] Huzi-2: ty",
+        "(小队):[小队] Medics: ty",
+    ])
+    jobs = _drain_jobs(pipeline)
+    assert [(job.speaker, job.source) for job in jobs] == [("Huzi-2", "ty"), ("Medics", "ty")]
+    # 但同一个人重复说同一句，仍然只显示一次
+    pipeline._handle_lines(["(小队):[小队] Huzi-2: ty"])
+    assert _drain_jobs(pipeline) == []
+
+
 def test_long_line_read_short_is_not_shown_twice():
     pipeline = make_pipeline(EchoEngine())
     pipeline._handle_lines(["(小队):[小队] Beruthiell:there is something like thisinArtofWar"])

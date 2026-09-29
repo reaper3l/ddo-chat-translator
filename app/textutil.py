@@ -248,6 +248,30 @@ SAME_MESSAGE_RATIO = 0.85
 SAME_MESSAGE_MIN_LENGTH = 6
 
 
+def _whole_word_replaced(first: str, second: str) -> bool:
+    """两句长度相同、词数相同，但某**一个整词**被换掉了？
+
+    用来区分"意思真的不同"和"OCR 认花几个字母"：
+      * "Medics has logged on" vs "Medics has logged off" → 换了一整个词 → 不是同一条；
+      * "lgotone-shotbyittoday" vs "Igotone-shotbyittoday" → 只有一个字母不同 → 是同一条。
+    英文客户端上线/下线提示只差 on/off，字符相似度高达 0.9，不特判就会被去重掉一条。
+    """
+    words_a = re.findall(r"[a-z0-9']+", (first or "").lower())
+    words_b = re.findall(r"[a-z0-9']+", (second or "").lower())
+    if len(words_a) != len(words_b) or len(words_a) < 2:
+        return False
+    for left, right in zip(words_a, words_b):
+        if left == right or len(left) < 2 or len(right) < 2:
+            continue
+        # 只在两个词**长度接近**时才算"换词"：长度差很多说明是"长句被读短了"
+        # （"...thisinArtofWar" vs "his"），那种要按同一条处理。
+        if abs(len(left) - len(right)) > 2:
+            continue
+        if difflib.SequenceMatcher(None, left, right, autojunk=False).ratio() < 0.6:
+            return True
+    return False
+
+
 def same_ocr_message(first: str, second: str) -> bool:
     """两段 OCR 文本是不是**同一条消息**的不同读法。
 
@@ -262,6 +286,8 @@ def same_ocr_message(first: str, second: str) -> bool:
         return False
     if a == b:
         return True
+    if _whole_word_replaced(first, second):
+        return False        # 换的是整个词 → 两条不同的消息（"logged on" / "logged off"）
     if min(len(a), len(b)) < SAME_MESSAGE_MIN_LENGTH:
         return False
     if ocr_similar(a, b) >= SAME_MESSAGE_RATIO:

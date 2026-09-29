@@ -100,6 +100,9 @@ class Pipeline:
         "you are now the", "has disconnected", "connection lost",
         "you have joined", "has been removed", "removed from the party",
     )
+    # 英文系统提示超过这个长度就不送翻译了：正常一条提示没那么长，
+    # 多半是 OCR 把好几行挤成一条（真送过去，模型会把里面的频道名也一起翻掉）。
+    SYSTEM_TRANSLATE_MAX = 240
 
 
     def __init__(self, config: dict, memory, glossary: Glossary,
@@ -138,7 +141,7 @@ class Pipeline:
         # 最近显示过的内容（原文 + 译文），用于"模糊去重"和"别把自己显示的内容又识别一遍"。
         # OCR 每帧会把同一句读得略有不同（lgotone / |gotone / Igotone），精确指纹拦不住；
         # 而主窗口又贴在游戏上，被 OCR 读回来的自己的译文也要挡住，否则会自我循环。
-        self._recent: Deque[Tuple[float, str]] = deque(maxlen=80)
+        self._recent: Deque[Tuple[float, str, str]] = deque(maxlen=80)   # (时间, 原文, 说话人)
         self._recent_lock = threading.Lock()
         self._history: Deque[Tuple[str, str]] = deque(maxlen=12)
         # 给"根据上下文推荐回复"用的：带说话人的最近聊天
@@ -529,8 +532,10 @@ class Pipeline:
                     self._system_events_queue.put(text)
                     if self.config.get("show_system", True) and (
                             not event.channel or enabled.get(event.channel, True)):
-                        if textutil.has_cjk(text):
+                        if textutil.has_cjk(text) or len(text) > self.SYSTEM_TRANSLATE_MAX:
                             # 中文客户端的系统提示本来就是中文 → 原样显示，不花接口
+                            # （太长的英文提示也不翻：多半是 OCR 把多行挤成一条，
+                            #   翻了会把频道名一起翻掉，宁可原样显示）
                             self._ready_queue.put(DisplayItem(
                                 seq=self._next_seq(), kind="system",
                                 channel=event.channel, speaker="", source=text,
@@ -566,16 +571,23 @@ class Pipeline:
             if self.is_panel_text(event.text):
                 self._count_filtered()
                 continue
+            # 指纹带上说话人（放前面）：**不同的人说同一句话要各显示一条**
+            # （"ty"、"ok" 这种短句很常见），但同一个人被 OCR 读花/读短时照样去重
+            # —— Deduper 的"前缀相同""只差一个字"两条规则都是按前缀比的，
+            # 说话人放在前面正好不影响它们。
             fingerprint = textutil.fingerprint(event.text)
+            if event.speaker:
+                fingerprint = "%s|%s" % (textutil.fingerprint(event.speaker),
+                                         fingerprint)
             if not fingerprint or self.deduper.check(fingerprint):
                 continue
             # 文字没变但 OCR 每帧读得略有不同时，精确指纹拦不住，用模糊比对补一刀
             # （实测：同一句 "I got one-shot by it today" 被读成三种写法，窗口里显示三遍）
-            if self._seen_recently(event.text):
+            if self._seen_recently(event.text, event.speaker):
                 self._count_filtered()
                 continue
             # 立刻记下来（不等翻译完）：同一句在翻译这一两秒里还会被 OCR 读到好几次
-            self._remember(event.text)
+            self._remember(event.text, speaker=event.speaker)
 
             self.stats["messages"] += 1
             job = Job(seq=self._next_seq(), channel=event.channel,
@@ -635,12 +647,16 @@ class Pipeline:
         self._notice("有没登记的频道：%s（设置 → 频道 里加一行就能显示/翻译）"
                      % "、".join(recent[:3]), "warn", min_gap=30.0)
 
-    def _seen_recently(self, text: str) -> bool:
+    def _seen_recently(self, text: str, speaker: str = "") -> bool:
         """这条内容最近是不是已经出现过（允许 OCR 读花几个字）。
 
         比较对象包括**已经显示出去的原文和译文** —— 主窗口就贴在游戏上，
         万一被框选区域盖住，OCR 会把我们自己的译文读回来，那就是无限循环了。
         时间窗跟"同一句多久内不重复翻译"（dedup_ttl_seconds，默认 90 秒）一致。
+
+        `speaker` 也参与判断：**不同的人说同一句话要各显示一条**
+        （"Huzi-2告诉你: halo nihao" 和 "你对 Huzi-2说: halo nihao" 是两条）。
+        说话人自己也允许 OCR 读花（"S Sinoke" / "Sinoke" 仍算同一个人）。
         """
         if not text or len(text.strip()) < 2:
             return False
@@ -649,9 +665,13 @@ class Pipeline:
         with self._recent_lock:
             while self._recent and now - self._recent[0][0] > window:
                 self._recent.popleft()
-            for _stamp, old in self._recent:
-                if textutil.same_ocr_message(text, old):
-                    return True
+            for _stamp, old, old_speaker in self._recent:
+                if not textutil.same_ocr_message(text, old):
+                    continue
+                if speaker and old_speaker and speaker != old_speaker \
+                        and not textutil.same_ocr_message(speaker, old_speaker):
+                    continue          # 说话人明显不同 → 这是另一个人说的同一句话
+                return True
         return False
 
     def _dedup_window(self) -> float:
@@ -665,13 +685,13 @@ class Pipeline:
         with self._recent_lock:
             self._recent.clear()
 
-    def _remember(self, *texts: str) -> None:
+    def _remember(self, *texts: str, speaker: str = "") -> None:
         """把"已经显示出去的内容"记下来，供 _seen_recently 比对。"""
         now = time.time()
         with self._recent_lock:
             for text in texts:
                 if text and len(text.strip()) >= 2:
-                    self._recent.append((now, text))
+                    self._recent.append((now, text, speaker))
 
     @classmethod
     def is_panel_text(cls, text: str) -> bool:

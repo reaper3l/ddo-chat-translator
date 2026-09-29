@@ -141,3 +141,17 @@ def test_resolve_direction_can_be_forced():
     assert textutil.resolve_direction("马上到", "en2zh") == "en2zh"
     assert textutil.resolve_direction("omw", "zh2en") == "zh2en"
     assert textutil.resolve_direction("", "zh2en") == "zh2en"
+
+
+def test_whole_word_change_is_not_the_same_message():
+    """英文上/下线只差 on/off，不能被当成"同一条的两种读法"去重掉。"""
+    assert not textutil.same_ocr_message("Medics has logged on",
+                                         "Medics has logged off")
+    assert not textutil.same_ocr_message("Medics has joined your party",
+                                         "Medics has left your party")
+    # 标点/大小写差异仍算同一条
+    assert textutil.same_ocr_message("A party chat room has been created!",
+                                     "a party chat room has been created")
+    # OCR 错字仍算同一条（只有一个字母不同）
+    assert textutil.same_ocr_message("l got one shot by it today",
+                                     "I got one shot by it today")

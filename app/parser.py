@@ -58,6 +58,11 @@ DEFAULT_ALIASES: Dict[str, str] = {
     "tell": "悄悄话", "whisper": "悄悄话", "private": "悄悄话",
     "trade": "公共", "advice": "公共", "world": "公共", "public": "公共",
     "loot": "战利品", "lootbox": "战利品",
+    # 英文客户端其它几个标签页：错误提示/战斗日志/默认页
+    # （错误提示按"常规"归类，战斗日志归到默认关掉的"战利品"里，免得刷屏）
+    "error": "常规", "errors": "常规",
+    "combat": "战利品",
+    "def": "常规", "default": "常规", "def1": "常规", "default1": "常规",
 }
 
 # 模糊兜底规则：(子串, 频道名)，按顺序取第一个命中
@@ -414,34 +419,73 @@ def split_merged_line(line: str, aliases=None) -> List[str]:
     真实遇到的样子（文字全挤在一起、空格丢失）：
         (小队):[小队]Dorqeth:gi(小队):[小队]Dorqeth:eliteright?
         (小队):[小队]Guihuo:堡垒? 错误):你的队友已经锁定了冒险难度
-    判断依据：行内出现新的"频道前缀"，且它前面那一段已经是一条完整消息
-    （含 `玩家名:` 或者是有中文的系统消息），就认为是下一条消息的开头。
+
+    判断依据（两条）：
+    1. 行内出现 **2 个以上**"频道前缀"→ 一定是 OCR 把多条消息挤在一起了，直接在前缀处切开
+       （游戏里一条消息只会有一个频道标签）；
+    2. 只多出 1 个前缀时保守一点：只有前面那段"像一条完整消息"
+       （`玩家名:` / 有中文 / 悄悄话格式 / 英文整句）才切。
+
+    第 1 条是英文客户端反馈后加的：OCR 把整块聊天读成一条长文本时，
+    英文系统提示（"Medics has logged on."）既没有 `名字:` 也没有汉字，
+    按老规则一处都切不开，整块就被当成"一条系统消息"送去翻译 ——
+    模型会把里面的频道名也一起翻了（实测截图就是这样）。
     """
     cuts = []
+    prefix_spans = []
     for match in PREFIX_RE.finditer(line):
         if normalize_channel(match.group(1), aliases):
             cuts.append(match.start())
+            prefix_spans.append((match.start(), match.end()))
     for match in LABEL_SPLIT_RE.finditer(line):
         label = match.group("label")
-        if textutil.has_cjk(label) or normalize_channel(label, aliases):
-            cuts.append(match.start())
+        if not (textutil.has_cjk(label) or normalize_channel(label, aliases)):
+            continue
+        # "(Guild:):" 这种带括号的前缀，LABEL_SPLIT_RE 会从括号**里面**开始匹配
+        # （它本来是为了认 "(错误):" 这种丢了左括号的尾巴），那种切点要丢掉，
+        # 否则会把 "(Guild:)" 切成 "(" + "Guild:)"。
+        if any(start < match.start() < end for start, end in prefix_spans):
+            continue
+        cuts.append(match.start())
     if not cuts:
         return [line]
 
+    ordered = sorted(set(cuts))
+    inner = [cut for cut in ordered if cut > 0]
+    force = len(inner) >= 2               # 2 个以上内部前缀 → 无条件切
     segments: List[str] = []
     cursor = 0
-    for cut in sorted(set(cuts)):
+    for cut in inner:
         if cut <= cursor:
             continue                          # 行首那个前缀属于本段，不算分隔
         head = _strip_leading_prefixes(line[cursor:cut], aliases)
         if not head:
             continue                          # 前面只有前缀，说明这是同一条消息的第二个前缀
-        name, _body = _split_speaker(head)
-        if name or textutil.has_cjk(head):
+        if force or _looks_like_message(head, aliases):
             segments.append(line[cursor:cut].strip())
             cursor = cut
     segments.append(line[cursor:].strip())
     return [segment for segment in segments if segment]
+
+
+def _looks_like_message(head: str, aliases=None) -> bool:
+    """这一小段像不像"一条完整的消息"（决定能不能在这里切开）。
+
+    认得四种：`玩家名: 正文`、含中文（中文系统提示）、悄悄话格式（"X告诉你:"/"你对 X说，"
+    以及英文的 "X tells you," / "You tell X,"）、英文整句（"Medics has logged on."）。
+    """
+    text = (head or "").strip()
+    if not text:
+        return False
+    if textutil.has_cjk(text):
+        return True
+    name, _body = _split_speaker(text)
+    if name:
+        return True
+    if _split_whisper(text) is not None:
+        return True
+    words = re.findall(r"[A-Za-z][A-Za-z0-9'\-]*", text)
+    return len(words) >= 2 and text[-1] in ".!?…'\"”’)"
 
 
 class ChatParser:
