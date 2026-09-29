@@ -157,7 +157,54 @@ class CnToEnDialog:
                                         font=("Consolas", 12),
                                         fg=theme.PALETTE["ok"])
         self.output.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        self._install_edit_menu(self.input)
+        self._install_edit_menu(self.output)
         self._refresh_direction()        # 放在最后：这时候方向提示/译文标签都已经建好了
+
+    # ------------------------------------------------------------ 右键编辑菜单
+    def _install_edit_menu(self, widget: tk.Text) -> None:
+        """给文本框加右键菜单。
+
+        Ctrl+V / Ctrl+A / Ctrl+C 本来就管用（Tk 自带），但**右键粘贴**默认没有 ——
+        大家习惯右键粘一段聊天进来，所以补上（主窗口的聊天框也是这个做法）。
+        """
+        menu = tk.Menu(self.window, tearoff=0,
+                       bg=theme.PALETTE["surface"], fg=theme.PALETTE["text"],
+                       activebackground=theme.PALETTE["accent"],
+                       activeforeground=theme.PALETTE["on_accent"],
+                       bd=0, activeborderwidth=0)
+        menu.add_command(label="粘贴",
+                         command=lambda: self._edit(widget, "<<Paste>>"))
+        menu.add_command(label="复制选中",
+                         command=lambda: self._edit(widget, "<<Copy>>"))
+        menu.add_command(label="剪切",
+                         command=lambda: self._edit(widget, "<<Cut>>"))
+        menu.add_separator()
+        menu.add_command(label="全选", command=lambda: self._select_all(widget))
+        widget.bind("<Button-3>",
+                    lambda event, m=menu: self._popup_menu(event, m), add="+")
+
+    def _popup_menu(self, event, menu: tk.Menu) -> None:
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    @staticmethod
+    def _edit(widget: tk.Text, event_name: str) -> None:
+        """只读的译文框也能"复制选中"，所以先放开 state 再触发。"""
+        state = str(widget.cget("state"))
+        if state != "normal":
+            widget.configure(state="normal")
+            try:
+                widget.event_generate(event_name)
+            finally:
+                widget.configure(state=state)
+        else:
+            widget.event_generate(event_name)
+
+    def _select_all(self, widget: tk.Text) -> None:
+        self._edit(widget, "<<SelectAll>>")
 
     # ---------------------------------------------------------------- 方向识别
     @staticmethod

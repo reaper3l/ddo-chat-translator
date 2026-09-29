@@ -720,6 +720,40 @@ def main() -> int:
 
     step("互译：方向自动识别 / 可强制", cn2en_direction_switch)
 
+    def cn2en_paste_support():
+        """互译窗口的输入框要能直接粘贴：Ctrl+V 靠 Tk 的 Text 类绑定，右键另有编辑菜单。
+
+        注意：自检里主窗口是 withdraw 的，而 Tk 的粘贴需要窗口可见（实测隐藏窗口下
+        <<Paste>> 静默无效），所以这一步只查"接线"对不对；真实的粘贴/复制行为在
+        可见窗口下另测（tools 里的临时脚本跑过：Ctrl+V、Ctrl+A、Ctrl+C、右键粘贴都正常）。
+        """
+        from app.ui.cn2en import CnToEnDialog
+
+        dialog = CnToEnDialog(app, auto_suggest=False)
+        try:
+            widget = dialog.input
+            paste_binding = (widget.bind_class("Text", "<<Paste>>")
+                             or widget.bind_class("Text", "<Control-v>")
+                             or widget.bind_class("Text", "<Control-Key-v>"))
+            if not paste_binding:
+                raise AssertionError("输入框没有 Ctrl+V 绑定（Tk 默认绑定丢了？）")
+            if not (widget.bind("<Button-3>") or widget.bind("<Button-2>")):
+                raise AssertionError("输入框没有绑定右键菜单")
+            menus = [child for child in dialog.window.winfo_children()
+                     if isinstance(child, tk.Menu)]
+            if len(menus) < 2:
+                raise AssertionError("输入框/译文框应有各自的右键菜单")
+            labels = [menus[0].entrycget(index, "label")
+                      for index in range(menus[0].index("end") + 1)
+                      if menus[0].type(index) == "command"]
+            for wanted in ("粘贴", "复制选中", "剪切", "全选"):
+                if wanted not in labels:
+                    raise AssertionError("右键菜单缺少「%s」" % wanted)
+        finally:
+            dialog.window.destroy()
+
+    step("互译：输入框可直接粘贴（Ctrl+V / 右键）", cn2en_paste_support)
+
     def update_dialog_smoke():
         """「发现新版本」窗口的接线（不联网：喂一个假的 UpdateInfo）。"""
         from app import update as update_module
