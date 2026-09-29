@@ -1,5 +1,5 @@
 """DDO 聊天翻译助手 —— 重构版。"""
 
-__version__ = "3.0.25"
+__version__ = "3.0.26"
 AUTHOR = "一键三连"
 HOMEPAGE = "https://gitee.com/git55236/ddo-chat-translator"
