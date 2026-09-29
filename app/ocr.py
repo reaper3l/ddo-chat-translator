@@ -122,6 +122,22 @@ class OcrEngine:
         self._engine = None
         self._error = ""
         self._lock = threading.Lock()
+        # 低于这个置信度的识别结果直接丢掉（0 = 不过滤）。
+        # 背景花时 OCR 会吐出"像字其实是噪点"的行，或者把同一行读成各种错字版本。
+        self._min_score = 0.5
+        self._dropped_low_score = 0
+
+    def set_min_score(self, value: float) -> None:
+        """设置置信度门槛（0~1；0 表示不过滤）。"""
+        try:
+            self._min_score = max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            self._min_score = 0.5
+
+    @property
+    def dropped_low_score(self) -> int:
+        """被"置信度太低"丢掉的行数（给状态栏/自检看）。"""
+        return self._dropped_low_score
 
     @property
     def error(self) -> str:
@@ -174,9 +190,17 @@ class OcrEngine:
         if self._engine is None and not self.load():
             return []
         try:
-            from PIL import Image, ImageEnhance
+            from PIL import Image, ImageEnhance, ImageOps
 
             rgb = image.convert("RGB")
+            # DDO 的聊天框背景是半透明的：背后景物一动，同一行字的明暗就变了，
+            # OCR 会读出细微差异（于是被当成新消息 / 重复消息）。
+            # 先做自动对比度归一化，让"文字 vs 背景"的相对关系稳定下来，
+            # 识别结果就稳定多了（成本很低，就一次 min/max 拉伸）。
+            try:
+                rgb = ImageOps.autocontrast(rgb, cutoff=1)
+            except Exception:
+                pass
             rgb = ImageEnhance.Contrast(rgb).enhance(1.2)
             if upscale and abs(upscale - 1.0) > 0.01:
                 rgb = rgb.resize((max(1, int(rgb.width * upscale)),
@@ -193,6 +217,16 @@ class OcrEngine:
             text = str(row[1]).strip()
             if not text:
                 continue
+            # 置信度：背景花的时候 OCR 会吐出一些"看着像字其实是噪点"的行，
+            # 它们会被当成新消息（或者同一行的另一个读法）显示出来。低于阈值直接丢。
+            if self._min_score > 0:
+                try:
+                    score = float(row[2]) if len(row) > 2 else 1.0
+                except (TypeError, ValueError):
+                    score = 1.0
+                if score < self._min_score:
+                    self._dropped_low_score += 1
+                    continue
             items.append((text, row[0]))
         return sort_by_position(items)
 

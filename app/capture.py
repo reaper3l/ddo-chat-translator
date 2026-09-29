@@ -342,14 +342,25 @@ def frame_signature(image, size: int = 48) -> bytes:
 
     聊天框大部分时间是静止的；先用这个（约 2300 字节比较）判断有没有变化，
     没变化就完全跳过 OCR —— 这是监听时最省 CPU 的一招。
+
+    **先做自动对比度归一化**：DDO 的聊天框背景是半透明的，背后的景物/特效一亮一暗，
+    原始灰度指纹整片都会跟着变，于是每帧都被判成"变了"（白跑 OCR，还会把同一行
+    读出细微差异、变成重复消息）。归一化之后指纹反映的是"文字与背景的相对关系"，
+    背景整体亮度变化基本不影响它，只有真的多了/少了文字行才会变。
     """
     if image is None:
         return b""
     try:
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         resample = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
-        return image.convert("L").resize((size, size), resample).tobytes()
+        gray = image.convert("L")
+        try:
+            # cutoff=1：掐掉最亮的 1% / 最暗的 1%（抗噪点），再把区间拉到 0~255
+            gray = ImageOps.autocontrast(gray, cutoff=1)
+        except Exception:
+            pass
+        return gray.resize((size, size), resample).tobytes()
     except Exception:
         return b""
 

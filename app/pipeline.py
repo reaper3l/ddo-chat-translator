@@ -258,6 +258,11 @@ class Pipeline:
             return 2
 
     def _ensure_ocr(self) -> bool:
+        # 置信度门槛跟着设置走（背景花时把"像字其实是噪点"的行丢掉）
+        try:
+            self.ocr.set_min_score(float(self.config.get("ocr_min_score", 0.5)))
+        except Exception:
+            pass
         if self.ocr.available():
             return True
         return self.ocr.load(self._ocr_threads())

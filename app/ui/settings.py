@@ -312,6 +312,10 @@ class SettingsDialog:
         self._choice_labeled(tab, "ocr_upscale", "OCR 放大倍数（越大越准但越吃 CPU）",
                              [("auto", "自动（推荐）"), ("1", "1（最快）"),
                               ("1.25", "1.25"), ("1.5", "1.5"), ("2", "2（最准最费 CPU）")])
+        self._choice_labeled(tab, "ocr_min_score", "OCR 置信度门槛（太低就丢掉，防背景花）",
+                             [("0", "不过滤"), ("0.4", "0.4（宽松）"),
+                              ("0.5", "0.5（推荐）"), ("0.6", "0.6"),
+                              ("0.7", "0.7（严格，可能漏字）")])
         self._check(tab, "merge_same_row", "同一行被切开时自动拼接")
         self._spin(tab, "dedup_ttl_seconds", "同一句多久内不重复翻译（秒）", 0, 600)
         self._check(tab, "show_system", "把系统消息也显示到主界面")

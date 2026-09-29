@@ -18,6 +18,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "merge_same_row": True,        # 同一行被 OCR 切成两段时拼回去
     # OCR 前放大图片：auto=小图自动放大 2 倍（推荐）；也可以填 1 / 2 / 3
     "ocr_upscale": "auto",
+    # OCR 置信度门槛：低于这个分数的识别结果直接丢掉（0=不过滤）。
+    # 聊天框背景是半透明的，背景一花 OCR 会吐出"像字其实是噪点"的行，
+    # 或者把同一行读成各种错字版本 —— 那些会被当成新消息/重复消息。
+    "ocr_min_score": 0.5,
     "ocr_threads": 2,            # OCR 用几个线程（别吃满核心，否则游戏会卡）
     "idle_backoff": True,        # 一直没新消息时自动放慢截图频率
     "band_ocr": True,            # 只识别"变化的那几行"，其余沿用上一帧结果
