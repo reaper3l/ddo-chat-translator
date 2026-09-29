@@ -10,6 +10,7 @@ from app.config import DEFAULT_CONFIG
 from app import channels
 from app.engines import BaseEngine, TranslationResult
 from app.glossary import Glossary
+from app.parser import ChatParser
 from app.pipeline import DisplayItem, Pipeline
 from app.store import MemoryStore
 
@@ -72,6 +73,16 @@ def make_pipeline(engine) -> Pipeline:
     glossary = Glossary({"need heals": "需要治疗", "shroud": "幽影堡", "omw": "马上到"})
     pipeline = Pipeline(config, memory, glossary, queue.Queue())
     pipeline.engine = engine
+    return pipeline
+
+
+def make_english_pipeline(engine=None) -> Pipeline:
+    """模拟英文客户端的玩家：把游戏里的英文频道名加进「设置 → 频道」。"""
+    pipeline = make_pipeline(engine or EchoEngine())
+    config = pipeline.config
+    config["channels"] = [{"name": name, "color": "#8b949e", "enabled": True}
+                          for name in ("Guild", "Party", "Tell", "Standard", "Error")]
+    pipeline.parser = ChatParser(channels.alias_table(config))
     return pipeline
 
 
@@ -326,6 +337,12 @@ def test_loot_line_never_reaches_the_translator():
     pipeline = make_pipeline(engine)
     pipeline._handle_lines(["(聊天): 战利品:你舟5unsone从玉相取正"])
     assert _drain_jobs(pipeline) == []
+    while not pipeline._jobs.empty():
+        pipeline._jobs.get_nowait()
+    pipeline._collect_ready()
+    pipeline._flush_display(force=True)
+    assert pipeline.ui_queue.empty()
+    assert engine.calls == 0
 
 
 def test_whisper_reaches_translator():
@@ -353,8 +370,7 @@ def test_whisper_outgoing_reaches_translator():
 
 def test_english_client_system_notice_is_translated():
     """英文客户端：能看懂的系统提示（上线/离线/队伍）也要翻译，不再是原样丢出来。"""
-    engine = EchoEngine()
-    pipeline = make_pipeline(engine)
+    pipeline = make_english_pipeline()
     pipeline._handle_lines([
         "(Guild:): Medics has logged on.",
         "(Party:): A party chat room has been created!",
@@ -371,23 +387,17 @@ def test_english_client_system_notice_is_translated():
 
 
 def test_english_client_chat_and_whisper_reach_translator():
-    engine = EchoEngine()
-    pipeline = make_pipeline(engine)
+    pipeline = make_english_pipeline()
     pipeline._handle_lines([
         "(Guild:): [Guild] Huzi-2: liao ge zhen zao",
         "(Tell): Huzi-2 tells you, 'halo nihao'",
     ])
     jobs = _drain_jobs(pipeline)
+    # 频道名就该是玩家自己配的那个（Guild / Tell），不会被改名成中文频道
     assert [(job.kind, job.channel, job.speaker) for job in jobs] == [
-        ("chat", "公会", "Huzi-2"),
-        ("chat", "悄悄话", "Huzi-2告诉你"),
+        ("chat", "Guild", "Huzi-2"),
+        ("chat", "Tell", "Huzi-2告诉你"),
     ]
-    while not pipeline._jobs.empty():
-        pipeline._jobs.get_nowait()
-    pipeline._collect_ready()
-    pipeline._flush_display(force=True)
-    assert pipeline.ui_queue.empty()
-    assert engine.calls == 0
 
 
 def test_panel_text_glued_to_chat_body_is_dropped():

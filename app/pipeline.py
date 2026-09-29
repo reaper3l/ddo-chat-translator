@@ -634,7 +634,11 @@ class Pipeline:
         return True          # 没前缀的（续行 / 丢了前缀的名字行）照旧处理
 
     def _notice_unknown_channel(self, label: str) -> None:
-        """提示"有没登记的频道"，同一个频道 60 秒内只说一次。"""
+        """提示"有没登记的频道"，同一个频道 60 秒内只说一次。
+
+        提示里给的是**收拾干净的名字**（"(Guild:): " → "Guild"），
+        英文客户端的玩家可以直接照抄到 设置 → 频道 里加一行。
+        """
         label = " ".join(str(label or "").split())
         if not label:
             return
@@ -644,8 +648,19 @@ class Pipeline:
                      if now - when > 60]:
             self._unknown_channels.pop(name, None)
         recent = sorted(self._unknown_channels)
-        self._notice("有没登记的频道：%s（设置 → 频道 里加一行就能显示/翻译）"
-                     % "、".join(recent[:3]), "warn", min_gap=30.0)
+        names = "、".join(self._clean_channel_label(item) or item
+                         for item in recent[:3])
+        self._notice("有没登记的频道：%s（设置 → 频道 里按这个名字加一行，就能显示/翻译）"
+                     % names, "warn", min_gap=30.0)
+
+    @staticmethod
+    def _clean_channel_label(label: str) -> str:
+        """把 "(Guild:): " 这种原始前缀收拾成能直接照抄的频道名 "Guild"。"""
+        text = " ".join(str(label or "").split())
+        if not text:
+            return ""
+        first = text.split(" ")[0]          # "(Guild:): [Guild]" → 取第一段
+        return first.strip("()[]{}（）【】<>《》:：;；").strip()
 
     def _seen_recently(self, text: str, speaker: str = "") -> bool:
         """这条内容最近是不是已经出现过（允许 OCR 读花几个字）。

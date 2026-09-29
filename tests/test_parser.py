@@ -359,21 +359,42 @@ def test_trailing_label_tolerates_ocr_misread():
 
 # --------------------------------------------------- 英文客户端（游戏语言是英文）
 # 玩家截图：频道标签变成 (Standard)/(Guild:)/(Party:)/(Tell:)，悄悄话是
-# "X tells you, '…'" 和 "You tell X, '…'"。以前这些都不认。
+# "X tells you, '…'" 和 "You tell X, '…'"。
+# **识别完全跟着玩家自己的频道表走**：配了 Guild 就认 Guild，不会偷偷归到"公会"。
 
-def test_english_client_channels_work_without_config():
-    """不用改设置：英文频道名（含大小写、括号里带冒号）直接认，映射到对应中文频道。"""
-    chats = _chats(["(Guild): [Guild] Huzi-2: liao ge zhen zao"])
+def _english_parser(names=("Guild", "Party", "Tell", "Standard", "Trade")):
+    """模拟"玩家在 设置 → 频道 里把英文频道名加进去"以后的样子。"""
+    from app.channels import alias_table
+    from app.config import DEFAULT_CONFIG
+
+    config = dict(DEFAULT_CONFIG)
+    config["channels"] = [{"name": name, "color": "#8b949e", "enabled": True}
+                          for name in names]
+    return ChatParser(alias_table(config), infer_channel_from_previous=False)
+
+
+def test_english_channels_follow_player_config():
+    """配了英文频道名就按它识别（大小写、括号里带冒号都认）；频道名就是玩家写的那个。"""
+    parser = _english_parser()
+    chats = [e for e in parser.parse(["(Guild): [Guild] Huzi-2: liao ge zhen zao"])
+             if e.is_chat]
     assert (chats[0].channel, chats[0].speaker, chats[0].text) == (
-        "公会", "Huzi-2", "liao ge zhen zao")
-    chats = _chats(["(Guild:): [Guild] Medics: o,huzi zao"])
-    assert chats[0].channel == "公会"
-    chats = _chats(["(GUILD): [Guild] Medics: o,huzi zao"])
-    assert chats[0].channel == "公会"
-    chats = _chats(["(Party): [Party] Huzi-2: hai bu qu shang ban"])
-    assert chats[0].channel == "小队"
-    chats = _chats(["(Standard): Alice: hello there"])
-    assert chats[0].channel == "常规"
+        "Guild", "Huzi-2", "liao ge zhen zao")
+    for line, expected in (("(Guild:): [Guild] Medics: o,huzi zao", "Guild"),
+                           ("(GUILD): [Guild] Medics: o,huzi zao", "Guild"),
+                           ("(Party): [Party] Huzi-2: hai bu qu shang ban", "Party"),
+                           ("(Standard): Alice: hello there", "Standard"),
+                           ("(Trade): Bob: wts ruby", "Trade")):
+        chats = [e for e in parser.parse([line]) if e.is_chat]
+        assert chats and chats[0].channel == expected, line
+
+
+def test_english_channel_is_not_auto_mapped_to_chinese():
+    """没配英文频道时，程序**不会**自作主张把 (Guild) 归到"公会"（作者要求：配什么认什么）。"""
+    events = ChatParser(infer_channel_from_previous=False).parse(
+        ["(Guild): [Guild] Huzi-2: liao ge zhen zao"])
+    assert all(event.channel not in ("公会", "小队", "常规") for event in events), \
+        [(event.kind, event.channel) for event in events]
 
 
 def test_english_whisper_both_directions():
@@ -390,8 +411,12 @@ def test_english_whisper_both_directions():
 
 def test_english_trailing_label_only_when_same_channel():
     """英文正文里 "party/guild" 这种词很常见，只有本行频道名当尾巴时才摘。"""
+    parser = _english_parser(("Guild",))
     # 本行是公会，尾巴 "Guild" 是公会 → 摘
-    assert _chats(["(Guild): [Guild] Huzi-2: out Guild"])[0].text == "out"
+    chats = [e for e in parser.parse(["(Guild): [Guild] Huzi-2: out Guild"])
+             if e.is_chat]
+    assert chats[0].text == "out"
     # 本行是公会，句子正常以 party 结尾 → 不能动
-    assert _chats(["(Guild): [Guild] Huzi-2: looking for party"])[0].text == \
-        "looking for party"
+    chats = [e for e in parser.parse(["(Guild): [Guild] Huzi-2: looking for party"])
+             if e.is_chat]
+    assert chats[0].text == "looking for party"
