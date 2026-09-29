@@ -6,6 +6,39 @@
 
 ---
 
+## 未发布（攒着，等作者说发再发）
+
+**英文客户端支持**（玩家反馈：一部分玩家用英文版游戏，把频道名改成英文后仍然不翻译）。
+
+英文客户端的聊天行长这样（玩家截图）：
+
+```
+(Standard): Your cosmetic weapons do not match your equipped weapons…
+(Guild:): [Guild] Huzi-2: liao ge zhen zao
+(Tell): Huzi-2 tells you, 'halo nihao'
+(Tell): You tell Huzi-2, 'halo nihao'
+(Guild:): Medics has logged on.
+(Party:): A party chat room has been created!
+```
+
+* **频道识别**：内置英文别名（Standard/General→常规、Guild→公会、Party→小队、
+  Tell/Whisper→悄悄话、Trade/Advice/World→公共、Loot→战利品），识别改为**大小写不敏感** ——
+  `(Guild:)`、`(GUILD)`、`[Guild]` 全部认；**英文客户端不用改任何设置**即可，
+  玩家自己把频道名改成英文同样认。
+* **英文悄悄话**：`X tells you, '…'` 和 `You tell X, '…'` 两种都按玩家发言翻译
+  （以前被当成系统消息、只显示英文原文）。显示统一成中文写法：
+  `(Tell): Huzi-2告诉你: <译文>` / `(Tell): 你对 Huzi-2说: <译文>`。
+* **英文系统提示**：以前被中文白名单直接丢掉（"Medics has logged on." 根本不显示）。
+  现在内置英文关键词（logged on/off、has died、has joined/left、party 相关…），
+  并且**英文系统提示也会送翻译**（显示样式仍是系统消息）。中文客户端的系统提示本来就是中文，
+  维持原样显示、不花接口。
+* 顺带把"正文尾巴上的频道名"判断改稳：只摘**与本行频道相同**的标签，
+  英文正文里的 "looking for party" 不会再被误摘。
+
+测试：`tests/test_parser.py` +5 项（英文频道/大小写、英文悄悄话两个方向、英文尾巴判断）、
+`tests/test_pipeline.py` +2 项（英文系统提示要翻译且没用的照旧过滤、英文聊天与悄悄话进翻译队列）；
+全套 197/197。
+
 ## v3.0.25（2026-09-29）
 
 **修好"译文尾巴上多出频道名"**（玩家反馈的截图：译文里多出"小队"两个字，

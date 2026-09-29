@@ -50,25 +50,42 @@ DEFAULT_ALIASES: Dict[str, str] = {
     "公共": "公共", "世界": "公共", "综合": "公共",
     "悄悄话": "悄悄话", "密语": "悄悄话", "私聊": "悄悄话",
     "战利品": "战利品", "战": "战利品", "战励品": "战利品",
+    # 英文客户端（游戏语言切英文时，频道标签是这些）—— 全用小写，
+    # normalize_channel 会做大小写不敏感匹配，所以 "(Guild:)" / "(GUILD)" 都认。
+    "standard": "常规", "general": "常规", "say": "常规",
+    "guild": "公会",
+    "party": "小队", "group": "小队",
+    "tell": "悄悄话", "whisper": "悄悄话", "private": "悄悄话",
+    "trade": "公共", "advice": "公共", "world": "公共", "public": "公共",
+    "loot": "战利品", "lootbox": "战利品",
 }
 
 # 模糊兜底规则：(子串, 频道名)，按顺序取第一个命中
 _FUZZY_RULES: List[Tuple[str, str]] = [
     ("战", "战利品"),
+    ("loot", "战利品"),
     ("公会", "公会"),
     ("工会", "公会"),
+    ("guild", "公会"),
     ("公共", "公共"),
     ("世界", "公共"),
     ("综合", "公共"),
+    ("trade", "公共"),
+    ("advice", "公共"),
     ("悄悄", "悄悄话"),
     ("密语", "悄悄话"),
     ("私聊", "悄悄话"),
+    ("tell", "悄悄话"),
+    ("whisper", "悄悄话"),
     ("常规", "常规"),
     ("普通", "常规"),
     ("常用", "常规"),
+    ("standard", "常规"),
+    ("general", "常规"),
     ("队伍", "队伍"),
     ("团队", "队伍"),
     ("组队", "队伍"),
+    ("party", "小队"),
     ("小", "小队"),
     ("队", "小队"),
 ]
@@ -115,6 +132,20 @@ WHISPER_IN_RE = re.compile(
 WHISPER_OUT_RE = re.compile(
     r"^(?P<junk>.{0,%d}?)你对\s*(?P<name>%s)\s*说\s*[:：，,、]?\s*(?P<body>.*)$"
     % (NAME_JUNK_LIMIT, WHISPER_NAME))
+
+# 英文客户端的悄悄话（截图实测）：
+#     (Tell): Huzi-2 tells you, 'halo nihao'      ← 对方发给我
+#     (Tell): You tell Huzi-2, 'halo nihao'       ← 我发给对方
+# 正文被单引号包着；引号有时被 OCR 认成中文引号，一起认。
+_QUOTES = "'\"‘’“”"
+WHISPER_IN_EN_RE = re.compile(
+    r"^(?P<junk>.{0,%d}?)(?P<name>%s)\s+tells you\s*[:：,]?\s*[%s]?\s*"
+    r"(?P<body>.*?)\s*[%s]?$" % (NAME_JUNK_LIMIT, WHISPER_NAME, _QUOTES, _QUOTES),
+    re.IGNORECASE)
+WHISPER_OUT_EN_RE = re.compile(
+    r"^(?P<junk>.{0,%d}?)you tell\s+(?P<name>%s)\s*[,:：]\s*[%s]?\s*"
+    r"(?P<body>.*?)\s*[%s]?$" % (NAME_JUNK_LIMIT, WHISPER_NAME, _QUOTES, _QUOTES),
+    re.IGNORECASE)
 
 
 @dataclass
@@ -167,6 +198,12 @@ def normalize_channel(raw: str, aliases: Optional[Dict[str, str]] = None,
     table = DEFAULT_ALIASES if aliases is None else aliases
     if name in table:
         return table[name]
+    # 英文客户端：OCR 读出来可能是 "Guild" / "guild" / "GUILD"，大小写不敏感地再找一遍
+    lowered = name.lower()
+    if lowered != name:
+        for alias, canonical in table.items():
+            if alias.lower() == lowered:
+                return canonical
     allowed_set = set(table.values()) if allowed is None else set(allowed)
     # 这个名字会不会其实是"表里没有的另一个频道"？（例如表里没有"队伍"，
     # 而标签是"团队/队伍"）—— 是的话别用模糊规则硬凑到某个频道上，
@@ -178,7 +215,7 @@ def normalize_channel(raw: str, aliases: Optional[Dict[str, str]] = None,
     for token, channel in _FUZZY_RULES:
         if channel not in allowed_set:
             continue
-        if token in name:
+        if token in name or (token.isascii() and token in lowered):
             return channel
     return ""
 
@@ -238,19 +275,35 @@ _LABEL_WRAP = "()[]{}（）【】<>《》"
 _LABEL_TAIL_TRIM = " \t。，,、;；…·-—"
 
 
-def _strip_trailing_channel_label(text: str, aliases) -> str:
+def _strip_trailing_channel_label(text: str, channel: str, aliases) -> str:
     """去掉正文末尾那个"频道标签"尾巴。
 
-    只认**频道表里有的名字**（含内置的 OCR 错字别名），而且至少要两个字，
-    所以像 "战"、"小" 这种单字不会误伤正常内容；整条就只有标签时也不动
+    只摘**和这一行自己的频道相同**的尾巴（游戏右边画的就是本行频道名）：
+    这样 "out 小队"（本行是小队）会摘，而英文正文里的 "looking for party"
+    不会被误伤（本行频道是 Guild，跟 "party" 对不上）。
+
+    另外要求：至少两个字（"战"、"小" 这类单字不动）、整条只有标签时不动
     （免得把消息清成空）。
 
     还有一条：标签**直接粘在中文后面**时不砍 —— "我要回小队" 是正常聊天，
     而 UI 那个标签总是空格隔开、或者粘在英文/标点后面（"out 小队"、"resetting?小队"）。
     """
     candidate = (text or "").rstrip()
-    if not candidate:
+    if not candidate or not channel:
         return text
+    table = DEFAULT_ALIASES if aliases is None else aliases
+
+    def same_channel(label: str) -> bool:
+        # 标签必须**严格等于**别名表里的某个写法（大小写不敏感）——不能走
+        # normalize_channel 的模糊兜底，那会把 "要回小队""回小队" 这种正文也认成频道名。
+        if label in table:
+            return table[label] == channel
+        lowered = label.lower()
+        for alias, canonical in table.items():
+            if alias.lower() == lowered:
+                return canonical == channel
+        return False
+
     # 尾巴最多取 8 个字（自定义频道名够用）；模糊兜底只给"真实标签长度"（≤4）用，
     # 否则 "我要回小队" 这种整句会被当成一个长标签匹配掉。
     for size in range(1, min(9, len(candidate) + 1)):
@@ -260,11 +313,7 @@ def _strip_trailing_channel_label(text: str, aliases) -> str:
         label = raw.strip(_LABEL_WRAP).strip()
         if len(label) < 2:
             continue
-        # 只认"严格等于频道名/别名"（别名表里已经含 OCR 常见错字：小际、寸队、战励品…），
-        # **不走模糊兜底** —— 模糊规则是子串匹配，会把 "你好世界"（含"世界"）、
-        # "我要回小队"（含"队"）这种正常中文尾巴也当成频道名，把正文吃掉。
-        table = DEFAULT_ALIASES if aliases is None else aliases
-        if label not in table:
+        if not same_channel(label):
             continue
         before = candidate[: len(candidate) - size]
         if before and textutil.has_cjk(before[-1:]):
@@ -280,8 +329,11 @@ def _split_whisper(rest: str) -> Optional[Tuple[str, str]]:
 
     主语**照游戏里的写法**留着（"Rockok告诉你" / "你对 Rockok说"），显示时就成了
     `(私聊): Rockok告诉你: 译文` —— 和游戏那一行一模一样，只有消息被翻译过。
+    英文客户端那两种写法（"X tells you, '…'" / "You tell X, '…'"）统一成同样的中文主语，
+    这样中英客户端的显示看着一致。
     """
-    for pattern, outgoing in ((WHISPER_OUT_RE, True), (WHISPER_IN_RE, False)):
+    for pattern, outgoing in ((WHISPER_OUT_RE, True), (WHISPER_IN_RE, False),
+                              (WHISPER_OUT_EN_RE, True), (WHISPER_IN_EN_RE, False)):
         match = pattern.match(rest)
         if not match:
             continue
@@ -296,7 +348,7 @@ def _split_whisper(rest: str) -> Optional[Tuple[str, str]]:
         parts = name.split()
         if len(parts) >= 2 and len(parts[0]) == 1:
             name = " ".join(parts[1:])
-        body = match.group("body").strip()
+        body = match.group("body").strip().strip(_QUOTES).strip()
         subject = "你对 %s说" % name if outgoing else "%s告诉你" % name
         return subject, body
     return None
@@ -425,7 +477,7 @@ class ChatParser:
         channel = channels[0] if channels else ""
         rest = (line[spans[-1][1]:] if spans else line).strip()
         # 游戏聊天框右侧那一次频道名会被 OCR 并进正文尾部 → 先摘掉
-        rest = _strip_trailing_channel_label(rest, self.aliases)
+        rest = _strip_trailing_channel_label(rest, channel, self.aliases)
 
         # ---- 有频道前缀 ----
         if spans:
@@ -498,7 +550,8 @@ class ChatParser:
         # "Name: text" 但前缀丢了 → 按聊天行处理，频道沿用上一条
         name, body = _split_speaker(line)
         if name and last_chat is not None:
-            body = _clean_chat_body(_strip_trailing_channel_label(body, self.aliases))
+            body = _clean_chat_body(_strip_trailing_channel_label(
+                body, last_chat.channel, self.aliases))
             if textutil.is_noise(body):
                 return last_chat
             event = Event(KIND_CHAT, body,
@@ -510,7 +563,7 @@ class ChatParser:
         # 续行：接到上一条聊天消息后面
         if last_chat is not None and not textutil.is_noise(line):
             tail = textutil.clean_body(
-                _strip_trailing_channel_label(line, self.aliases))
+                _strip_trailing_channel_label(line, last_chat.channel, self.aliases))
             if tail:
                 last_chat.text = textutil.normalize(last_chat.text + " " + tail)
             return last_chat

@@ -339,7 +339,10 @@ def test_trailing_channel_label_is_stripped():
 
 
 def test_trailing_label_stripped_in_whisper():
-    assert _chats(["(私聊): Rockok告诉你: need heals 小队"])[0].text == "need heals"
+    # 尾巴上的标签必须是**这一行的频道**才摘（悄悄话行右边画的是"私聊/悄悄话"）
+    assert _chats(["(私聊): Rockok告诉你: need heals 私聊"])[0].text == "need heals"
+    # 别的频道名挂在这一行末尾不算标签，不能动
+    assert _chats(["(私聊): Rockok告诉你: need heals 小队"])[0].text == "need heals 小队"
 
 
 def test_trailing_label_does_not_eat_real_text():
@@ -352,3 +355,43 @@ def test_trailing_label_does_not_eat_real_text():
 def test_trailing_label_tolerates_ocr_misread():
     """标签被 OCR 认花（"小际"）时，只要它跟正文之间有空格，也按标签摘掉。"""
     assert _chats(["(小队):[小队] Bob: out 小际"])[0].text == "out"
+
+
+# --------------------------------------------------- 英文客户端（游戏语言是英文）
+# 玩家截图：频道标签变成 (Standard)/(Guild:)/(Party:)/(Tell:)，悄悄话是
+# "X tells you, '…'" 和 "You tell X, '…'"。以前这些都不认。
+
+def test_english_client_channels_work_without_config():
+    """不用改设置：英文频道名（含大小写、括号里带冒号）直接认，映射到对应中文频道。"""
+    chats = _chats(["(Guild): [Guild] Huzi-2: liao ge zhen zao"])
+    assert (chats[0].channel, chats[0].speaker, chats[0].text) == (
+        "公会", "Huzi-2", "liao ge zhen zao")
+    chats = _chats(["(Guild:): [Guild] Medics: o,huzi zao"])
+    assert chats[0].channel == "公会"
+    chats = _chats(["(GUILD): [Guild] Medics: o,huzi zao"])
+    assert chats[0].channel == "公会"
+    chats = _chats(["(Party): [Party] Huzi-2: hai bu qu shang ban"])
+    assert chats[0].channel == "小队"
+    chats = _chats(["(Standard): Alice: hello there"])
+    assert chats[0].channel == "常规"
+
+
+def test_english_whisper_both_directions():
+    incoming = _chats(["(Tell): Huzi-2 tells you, 'halo nihao'"])[0]
+    assert incoming.channel == "悄悄话"
+    assert incoming.speaker == "Huzi-2告诉你"
+    assert incoming.text == "halo nihao"
+
+    outgoing = _chats(["(Tell): You tell Huzi-2, 'halo nihao'"])[0]
+    assert outgoing.channel == "悄悄话"
+    assert outgoing.speaker == "你对 Huzi-2说"
+    assert outgoing.text == "halo nihao"
+
+
+def test_english_trailing_label_only_when_same_channel():
+    """英文正文里 "party/guild" 这种词很常见，只有本行频道名当尾巴时才摘。"""
+    # 本行是公会，尾巴 "Guild" 是公会 → 摘
+    assert _chats(["(Guild): [Guild] Huzi-2: out Guild"])[0].text == "out"
+    # 本行是公会，句子正常以 party 结尾 → 不能动
+    assert _chats(["(Guild): [Guild] Huzi-2: looking for party"])[0].text == \
+        "looking for party"

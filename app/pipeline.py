@@ -36,6 +36,7 @@ class Job:
     speaker: str
     source: str
     prefix: str = ""
+    kind: str = "chat"        # chat | system（英文客户端的系统提示也要翻译）
     created: float = field(default_factory=time.time)
 
 
@@ -89,6 +90,15 @@ class Pipeline:
         "加入", "已加入", "离开", "退出", "移出", "踢出", "解散", "邀请",
         "死亡", "阵亡", "断线", "掉线", "离线", "上线", "复活", "重连",
         "队长", "锁定", "难度", "组队",
+    )
+    # 英文客户端：系统提示也是英文（"Medics has logged on."），给一组对应的关键词。
+    # 匹配时对英文大小写不敏感（见 is_useful_notice）。
+    NOTICE_TOKENS_EN = (
+        "logged on", "logged off", "has died", "have died", "you died",
+        "has joined", "has left", "left the party", "joined the party",
+        "you invite", "invites you", "party chat room", "party leader",
+        "you are now the", "has disconnected", "connection lost",
+        "you have joined", "has been removed", "removed from the party",
     )
 
 
@@ -519,10 +529,27 @@ class Pipeline:
                     self._system_events_queue.put(text)
                     if self.config.get("show_system", True) and (
                             not event.channel or enabled.get(event.channel, True)):
-                        self._ready_queue.put(DisplayItem(
-                            seq=self._next_seq(), kind="system", channel=event.channel,
-                            speaker="", source=text, translated=text,
-                            note="", prefix=event.prefix_text))
+                        if textutil.has_cjk(text):
+                            # 中文客户端的系统提示本来就是中文 → 原样显示，不花接口
+                            self._ready_queue.put(DisplayItem(
+                                seq=self._next_seq(), kind="system",
+                                channel=event.channel, speaker="", source=text,
+                                translated=text, note="", prefix=event.prefix_text))
+                        else:
+                            # 英文客户端（游戏语言是英文）：系统提示也是英文，用户看不懂 →
+                            # 和聊天一样送翻译；显示仍按"系统消息"的样式（kind 不变）
+                            self.stats["messages"] += 1
+                            job = Job(seq=self._next_seq(), channel=event.channel,
+                                      speaker="", source=text,
+                                      prefix=event.prefix_text, kind="system")
+                            try:
+                                self._jobs.put_nowait(job)
+                            except queue.Full:
+                                try:
+                                    self._jobs.get_nowait()
+                                    self._jobs.put_nowait(job)
+                                except Exception:
+                                    pass
                 continue
 
             if event.kind != KIND_CHAT:
@@ -654,7 +681,11 @@ class Pipeline:
     @classmethod
     def is_useful_notice(cls, text: str) -> bool:
         """是不是值得显示的系统提示（组队/生死/队长…）。"""
-        return any(token in (text or "") for token in cls.NOTICE_TOKENS)
+        body = text or ""
+        if any(token in body for token in cls.NOTICE_TOKENS):
+            return True
+        lowered = body.lower()          # 英文客户端：大小写不敏感
+        return any(token in lowered for token in cls.NOTICE_TOKENS_EN)
 
     def _upscale_for(self, image) -> float:
         """聊天框很小时先把图放大再 OCR，识别质量更好。"""
@@ -689,7 +720,7 @@ class Pipeline:
             try:
                 item = self._process(job)
             except Exception as exc:                     # 兜底：绝不让线程死掉
-                item = DisplayItem(job.seq, "chat", job.channel, job.speaker,
+                item = DisplayItem(job.seq, job.kind, job.channel, job.speaker,
                                    job.source, job.source, error="内部错误：%s" % exc,
                                    prefix=job.prefix)
             self._pending_display[item.seq] = item
@@ -747,14 +778,14 @@ class Pipeline:
 
         # 0) 原文本来就不是英文（玩家说中文）→ 直接显示
         if not textutil.has_latin(source):
-            return DisplayItem(job.seq, "chat", job.channel, job.speaker,
+            return DisplayItem(job.seq, job.kind, job.channel, job.speaker,
                                source, source, note="原文非英文", prefix=job.prefix)
 
         # 1) 句子记忆：你纠正过的句子，直接给结果，不花 API
         remembered = self.memory.phrase(source)
         if remembered:
             self.stats["memory_hits"] += 1
-            return DisplayItem(job.seq, "chat", job.channel, job.speaker,
+            return DisplayItem(job.seq, job.kind, job.channel, job.speaker,
                                source, remembered, note="记忆命中", prefix=job.prefix)
 
         # 2) 先保护 URL，再做术语保护
@@ -831,7 +862,7 @@ class Pipeline:
                 not textutil.has_cjk(translated) and textutil.has_latin(translated))
             self.memory.observe(unknown, source, problem=problem)
 
-        return DisplayItem(job.seq, "chat", job.channel, job.speaker,
+        return DisplayItem(job.seq, job.kind, job.channel, job.speaker,
                            source, translated, note=note, error=error, prefix=job.prefix)
 
     @staticmethod

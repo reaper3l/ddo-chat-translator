@@ -349,6 +349,39 @@ def test_whisper_outgoing_reaches_translator():
     assert job.channel == "悄悄话"
     assert job.speaker == "你对 Rockok说"
     assert job.source == "omw"
+
+
+def test_english_client_system_notice_is_translated():
+    """英文客户端：能看懂的系统提示（上线/离线/队伍）也要翻译，不再是原样丢出来。"""
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines([
+        "(Guild:): Medics has logged on.",
+        "(Party:): A party chat room has been created!",
+        "(Guild:): The guild's Message of the Day is:",   # 没用的提示照样过滤
+    ])
+    jobs = _drain_jobs(pipeline)
+    assert [(job.kind, job.source) for job in jobs] == [
+        ("system", "Medics has logged on"),
+        ("system", "A party chat room has been created!"),
+    ]
+    item = pipeline._process(jobs[0])
+    assert item.kind == "system"                 # 显示样式仍是系统消息
+    assert item.translated.startswith("中:")     # 但内容已经翻译过了
+
+
+def test_english_client_chat_and_whisper_reach_translator():
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines([
+        "(Guild:): [Guild] Huzi-2: liao ge zhen zao",
+        "(Tell): Huzi-2 tells you, 'halo nihao'",
+    ])
+    jobs = _drain_jobs(pipeline)
+    assert [(job.kind, job.channel, job.speaker) for job in jobs] == [
+        ("chat", "公会", "Huzi-2"),
+        ("chat", "悄悄话", "Huzi-2告诉你"),
+    ]
     while not pipeline._jobs.empty():
         pipeline._jobs.get_nowait()
     pipeline._collect_ready()
