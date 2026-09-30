@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import tkinter as tk                          # noqa: E402
-from tkinter import filedialog, messagebox, simpledialog, ttk   # noqa: E402
+from tkinter import filedialog, messagebox, ttk   # noqa: E402
 
 RESULTS = []
 
@@ -46,7 +46,6 @@ def silence_dialogs() -> None:
     messagebox.askyesno = lambda *a, **k: True
     filedialog.askopenfilename = lambda *a, **k: ""
     filedialog.asksaveasfilename = lambda *a, **k: ""
-    simpledialog.askstring = lambda *a, **k: ""
 
 
 def find_widget(root, kind, text=None):
@@ -943,6 +942,72 @@ def main() -> int:
             dialog.window.destroy()
 
     step("词典：导出 / 导入术语表", dictionary_export_import)
+
+    def find_widgets(root, kind):
+        """把控件树里某一类控件全找出来（顺序按遍历顺序）。"""
+        found = []
+        for child in root.winfo_children():
+            if isinstance(child, kind):
+                found.append(child)
+            found.extend(find_widgets(child, kind))
+        return found
+
+    def dictionary_add_term_dialog():
+        """「新增/覆盖」必须弹出**自己的**小输入框。
+
+        以前这里用的是 tkinter.simpledialog：它建出来的是普通窗口，会被无边框+置顶的
+        词典窗口挡在后面（用户看不见），但它是模态的 —— 实测表现就是"点了按钮程序卡死"。
+        """
+        from app.ui.learn import DictionaryDialog
+
+        dialog = DictionaryDialog(app)
+        term = "smoketestterm"
+        try:
+            button = find_widget(dialog.window, ttk.Button, "新增/覆盖")
+            if button is None:
+                raise AssertionError("词典窗口没有「新增/覆盖」按钮")
+            button.invoke()
+            pump(2)
+
+            ask_window = None
+            for child in app.root.winfo_children():
+                if isinstance(child, tk.Toplevel) and child is not dialog.window \
+                        and find_widget(child, ttk.Entry) is not None:
+                    ask_window = child
+            if ask_window is None:
+                raise AssertionError("点了「新增/覆盖」没有弹出输入框（会表现成程序卡死）")
+            if not ask_window.overrideredirect():
+                raise AssertionError("输入框应该和别的窗口一样是无边框的")
+            if str(ask_window.attributes("-topmost")) not in ("1", "true"):
+                raise AssertionError("输入框必须置顶，否则会被词典窗口挡住")
+
+            entries = find_widgets(ask_window, ttk.Entry)
+            if len(entries) < 2:
+                raise AssertionError("输入框应该有「英文术语」和「中文翻译」两项，实际 %d 项"
+                                     % len(entries))
+            entries[0].delete(0, "end")
+            entries[0].insert(0, term)
+            entries[1].delete(0, "end")
+            entries[1].insert(0, "烟测词")
+            ok_button = find_widget(ask_window, ttk.Button, "确定")
+            if ok_button is None:
+                raise AssertionError("输入框没有「确定」按钮")
+            ok_button.invoke()
+            pump(2)
+
+            saved = {item.get("text", "").lower() for item in app.memory.term_list()}
+            if term not in saved:
+                raise AssertionError("点确定之后术语没进学习库")
+        finally:
+            if app.memory.delete_term(term):
+                app.memory.flush(force=True)
+            app.rebuild_glossary()
+            for child in app.root.winfo_children():
+                if isinstance(child, tk.Toplevel) and child is not dialog.window:
+                    child.destroy()
+            dialog.window.destroy()
+
+    step("词典：新增/覆盖会弹出自己的输入框（不再像卡死）", dictionary_add_term_dialog)
 
     def preview():
         region = app.config.get("region") or [0, 0, 100, 50]

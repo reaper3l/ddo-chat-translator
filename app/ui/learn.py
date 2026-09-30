@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
 from .. import glossary_io
+from . import ask
 from . import theme
 
 
@@ -231,10 +232,11 @@ class LearningCenterDialog:
         token = self._selected_candidate()
         if not token:
             return
-        zh = simpledialog.askstring("加入词典", "「%s」应该翻译成什么？" % token,
-                                   parent=self.window)
-        if not zh:
-            return
+        ask.ask_one(self.app, "加入词典", "「%s」应该翻译成什么？" % token,
+                    on_submit=lambda zh: self._save_candidate(token, zh),
+                    hint="填好点确定，就会加进术语表（以后词典里优先用你的译法）")
+
+    def _save_candidate(self, token: str, zh: str) -> None:
         self.memory.set_term(token, zh.strip())
         self.memory.ignore_candidate(token)
         self.memory.flush(force=True)
@@ -367,12 +369,20 @@ class DictionaryDialog:
         self.count_label.config(text="共 %d 条（显示前 1500 条）" % len(rows))
 
     def add_term(self) -> None:
-        term = simpledialog.askstring("新增术语", "英文术语（或缩写）：", parent=self.window)
-        if not term:
-            return
-        zh = simpledialog.askstring("新增术语", "中文翻译：", parent=self.window)
-        if not zh:
-            return
+        # 选中某一行时，把它带进输入框 —— 改一改点确定就是「覆盖」
+        term, zh = "", ""
+        selection = self.tree.selection()
+        if selection:
+            values = self.tree.item(selection[0], "values")
+            if len(values) >= 2:
+                term, zh = str(values[0]), str(values[1])
+        ask.ask_two(
+            self.app, "新增 / 覆盖术语",
+            "英文术语（或缩写）", "中文翻译",
+            first=term, second=zh, hint="同名的词会被覆盖；内置词也能用你自己的译法盖掉",
+            on_submit=self._save_term)
+
+    def _save_term(self, term: str, zh: str) -> None:
         self.app.memory.set_term(term.strip(), zh.strip())
         self.app.memory.flush(force=True)
         self.app.rebuild_glossary()
