@@ -197,6 +197,8 @@ class SettingsDialog:
             side="left", padx=6)
         ttk.Button(row, text="使用须知 / 免责声明",
                    command=self.app.open_agreement).pack(side="left")
+        ttk.Button(row, text="反馈问题（生成反馈包）",
+                   command=self.app.open_bug_report).pack(side="left", padx=6)
 
         row = ttk.Frame(parent)
         row.pack(fill="x", padx=10, pady=6)

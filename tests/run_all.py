@@ -21,6 +21,7 @@ MODULES = [
     "test_channels",
     "test_replies",
     "test_disclaimer",
+    "test_diagnose",
     "test_release_notes",
     "test_update",
     "test_ed25519",

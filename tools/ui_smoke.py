@@ -1009,6 +1009,51 @@ def main() -> int:
 
     step("词典：新增/覆盖会弹出自己的输入框（不再像卡死）", dictionary_add_term_dialog)
 
+    def bug_report_bundle():
+        """「反馈问题」生成的压缩包：要有报告，而且**绝不能带出 API Key**。"""
+        import zipfile
+
+        from app import paths
+
+        dialog = app.open_bug_report()
+        try:
+            dialog.window.update_idletasks()
+            if find_widget(dialog.window, ttk.Button, "生成反馈包") is None:
+                raise AssertionError("反馈窗口没有「生成反馈包」按钮")
+            dialog.problem.insert("1.0", "自检：这条只是测试，不用真的反馈")
+            dialog.with_screen.set(False)        # 自检不往包里塞截图，省得留文件
+            dialog.with_memory.set(False)
+            dialog.generate()
+            app.root.update()
+            bundle = dialog.bundle
+            if bundle is None or not Path(bundle).exists():
+                raise AssertionError("点了「生成反馈包」却没有生成文件")
+            with zipfile.ZipFile(bundle) as archive:
+                names = set(archive.namelist())
+                if "报告.txt" not in names:
+                    raise AssertionError("反馈包里没有 报告.txt")
+                text = archive.read("报告.txt").decode("utf-8")
+            if "自检：这条只是测试" not in text:
+                raise AssertionError("报告里没有带上我写的问题描述")
+            secret = str(app.config.get("deepseek_key") or "").strip()
+            if secret and secret in text:
+                raise AssertionError("反馈包里漏出了 API Key！")
+        finally:
+            try:
+                if dialog.bundle is not None and Path(dialog.bundle).exists():
+                    Path(dialog.bundle).unlink()
+            except Exception:
+                pass
+            dialog.window.destroy()
+            folder = paths.DATA_DIR / "反馈"
+            try:
+                if folder.is_dir() and not any(folder.iterdir()):
+                    folder.rmdir()
+            except Exception:
+                pass
+
+    step("反馈问题：生成反馈包（且不漏 API Key）", bug_report_bundle)
+
     def preview():
         region = app.config.get("region") or [0, 0, 100, 50]
         show_preview(app.root, region, None, ["(小队)Alice: hello there", "系统消息"])

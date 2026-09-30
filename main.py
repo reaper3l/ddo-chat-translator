@@ -108,6 +108,35 @@ def _setup_logging() -> None:
     )
 
 
+def _offer_crash_report() -> None:
+    """程序异常退出时，顺手把反馈包生成好，并告诉用户文件在哪。
+
+    崩溃时用户最需要的就是"把现场交出去" —— 这里自动打包（配置文件里的 API Key 会被
+    自动隐藏），然后弹一个框告诉路径，用户照着发反馈就行。
+    """
+    try:
+        from app import diagnose, paths
+        from app.config import load_config
+
+        report = diagnose.build_report(
+            problem="程序异常退出（这份报告是崩溃时自动生成的）",
+            config=load_config(), records=[], last_lines=[])
+        bundle = diagnose.write_bundle(paths.DATA_DIR / "反馈", report,
+                                       stamp=__import__("datetime").datetime.now()
+                                       .strftime("崩溃_%Y%m%d_%H%M%S"))
+        message = ("程序遇到了一个错误，已经自动把现场打包好：\n%s\n\n"
+                   "可以在「设置 → 关于 → 反馈问题」里把压缩包发到项目反馈页；"
+                   "报告里的 API Key 已经自动隐藏。" % bundle)
+    except Exception as exc:                     # 打包失败也不能挡住原来的报错
+        message = "程序遇到了一个错误（自动打包也失败了：%s）" % exc
+    try:
+        import tkinter.messagebox as messagebox
+
+        messagebox.showwarning("程序遇到错误", message)
+    except Exception:
+        print(message)
+
+
 def main() -> int:
     # 自动升级：由旧版拉起来的"新版本 exe"走这条路 —— 只做文件替换，不开界面、
     # 不设 DPI/优先级，所以必须放在最前面拦下来。
@@ -138,6 +167,7 @@ def main() -> int:
         return 0
     except Exception:
         logging.exception("程序异常退出")
+        _offer_crash_report()
         raise
     finally:
         logging.info("程序退出")

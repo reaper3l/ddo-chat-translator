@@ -136,6 +136,8 @@ class Pipeline:
         self._last_frame_signature = ""
         self._idle_frames = 0
         self._last_lines: List[Tuple[float, float, str]] = []
+        # 最近一次识别到的画面（只给「反馈问题」打包当证据用；就是框选的那一小块）
+        self.last_frame_image = None
         self._frames_since_full = 0
         self._fast_capture_ok = None      # None=还没校验, True/False=已确定
         # 最近显示过的内容（原文 + 译文），用于"模糊去重"和"别把自己显示的内容又识别一遍"。
@@ -439,6 +441,7 @@ class Pipeline:
 
             self.stats["frames"] += 1
             scale = self._upscale_for(image)
+            self.last_frame_image = image      # 留一张给"反馈问题"当证据（只有框选区域）
 
             # 默认只重新识别"变了的那几行"：上面没变的部分直接沿用上一帧的识别结果。
             # 前提是变化发生在中下部、且不是整屏大改；每隔若干帧或变化太大时

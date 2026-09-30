@@ -282,6 +282,8 @@ class MainWindow:
         self.menu.add_command(label="学习中心", command=self.open_learning)
         self.menu.add_command(label="设置", command=self.open_settings)
         self.menu.add_separator()
+        self.menu.add_command(label="反馈问题（自动带上日志/翻译记录）",
+                              command=self.open_bug_report)
         self.menu.add_command(label="清空显示区", command=self.clear_display)
         self.menu.add_command(label="退出", command=self.quit_app)
         self.text.bind("<Button-3>", self._show_menu)
@@ -1135,6 +1137,12 @@ class MainWindow:
 
     def open_settings(self) -> None:
         SettingsDialog(self)
+
+    def open_bug_report(self) -> None:
+        """「反馈问题」：自动收好日志/配置/翻译记录（API Key 自动隐藏）再打包。"""
+        from .report import BugReportDialog
+
+        return BugReportDialog(self)
 
     def open_learning(self) -> None:
         LearningCenterDialog(self)
