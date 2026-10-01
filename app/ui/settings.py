@@ -150,7 +150,7 @@ class SettingsDialog:
         """关于页：版本、引擎、数据位置、快捷键，并可直接打开对应文件。"""
         from .. import paths, update as update_module
         from .. import disclaimer
-        from .. import AUTHOR, HOMEPAGE, __version__
+        from .. import AUTHOR, HOMEPAGE, SUPPORT_URL, __version__
 
         # 公钥指纹：让用户能拿它跟发行页/README 上贴的对一对 —— 万一流传出去的是
         # 别人改过源码重打包的"假官方版"，指纹对不上就能看出来。
@@ -199,6 +199,8 @@ class SettingsDialog:
                    command=self.app.open_agreement).pack(side="left")
         ttk.Button(row, text="反馈问题（生成反馈包）",
                    command=self.app.open_bug_report).pack(side="left", padx=6)
+        ttk.Button(row, text="♥ 支持作者（自愿）",
+                   command=lambda: update_module.open_page(SUPPORT_URL)).pack(side="left")
 
         row = ttk.Frame(parent)
         row.pack(fill="x", padx=10, pady=6)
