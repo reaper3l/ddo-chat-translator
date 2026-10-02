@@ -267,6 +267,8 @@ class Pipeline:
             pass
         # 半透明背景压平也跟着设置走
         self.ocr.set_flatten(self._flatten_enabled())
+        # 检测尺寸限幅（窄条不再被放大十几倍）
+        self.ocr.set_det_cap(bool(self.config.get("ocr_det_cap", True)))
         if self.ocr.available():
             return True
         return self.ocr.load(self._ocr_threads())

@@ -109,3 +109,13 @@ def test_ocr_engine_can_toggle_flatten():
     assert engine._flatten is False
     engine.set_flatten(True)
     assert engine._flatten is True
+
+
+def test_ocr_engine_can_toggle_det_cap():
+    """检测尺寸限幅（只缩不放）也要能开关，默认开。"""
+    from app.ocr import OcrEngine
+
+    engine = OcrEngine()
+    assert engine._det_cap is True
+    engine.set_det_cap(False)
+    assert engine._det_cap is False

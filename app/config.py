@@ -25,6 +25,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # OCR（和"画面变没变"的指纹）之前先把半透明背景压平：
     # 聊天框背后的景物忽明忽暗时，识别结果不会跟着变。默认开。
     "flatten_background": True,
+    # OCR 检测尺寸"只缩不放"：聊天框又宽又矮，默认设置会把窄条放大十几倍
+    # （只识别变化那几行时反而比整帧还慢）。默认开。
+    "ocr_det_cap": True,
     "ocr_threads": 2,            # OCR 用几个线程（别吃满核心，否则游戏会卡）
     "idle_backoff": True,        # 一直没新消息时自动放慢截图频率
     "band_ocr": True,            # 只识别"变化的那几行"，其余沿用上一帧结果

@@ -2,6 +2,13 @@
 
 图像预处理严格保持"只做 1.2 倍对比度增强"——旧版试过 2 倍对比度 + 2 倍锐化，
 会导致文字块 y 坐标错位、短消息跑到第一行，所以这里不动这个参数。
+（识别前的"背景压平"在 app/preprocess.py 里，那是另一回事。）
+
+检测尺寸限幅：OCR 库默认按"短边不足 736 就放大到 736"处理，聊天框这种又宽又矮的
+图会被放大好几倍，**窄条更夸张**（只识别下面几行时能放大十几倍，比整帧还慢）。
+这里改成"只缩不放"（`limit_type=max`），实测真实游戏录像 30 帧：整帧 950→500ms、
+窄条 1190→18ms，识别准确率还略有提升（读法从 20 种降到 9 种）。
+老版本 rapidocr 不认这两个参数时会自动退回原来的构造方式。
 """
 from __future__ import annotations
 
@@ -128,10 +135,16 @@ class OcrEngine:
         self._dropped_low_score = 0
         # 识别前是否做"背景压平"（聊天框半透明、背后景物忽明忽暗时用）
         self._flatten = True
+        # 检测尺寸限幅：默认开（窄条不再被放大十几倍）
+        self._det_cap = True
 
     def set_flatten(self, value: bool) -> None:
         """开/关背景压平（见 app/preprocess.py）。"""
         self._flatten = bool(value)
+
+    def set_det_cap(self, value: bool) -> None:
+        """开/关检测尺寸限幅（见模块开头说明）。"""
+        self._det_cap = bool(value)
 
     def set_min_score(self, value: float) -> None:
         """设置置信度门槛（0~1；0 表示不过滤）。"""
@@ -166,8 +179,18 @@ class OcrEngine:
             if threads and threads > 0:
                 options["intra_op_num_threads"] = int(threads)
                 options["inter_op_num_threads"] = 1
+            cap = {}
+            if self._det_cap:
+                # 只缩不放：聊天框又宽又矮，默认的"短边放大到 736"会把它撑得很大，
+                # 只识别几行的窄条更是被放大十几倍（比整帧还慢）。
+                # 1280 和 1920 在实测里一样快、一样准；取大一点更保守：
+                # 只有特别大的区域才会被缩小，普通尺寸完全不动。
+                cap = {"det_limit_type": "max", "det_limit_side_len": 1920}
             for attempt in (
-                dict(options, det_model_name="PP-OCRv5_mobile_det",
+                dict(options, **cap, det_model_name="PP-OCRv5_mobile_det",
+                     rec_model_name="PP-OCRv5_mobile_rec",
+                     cls_model_name="mobile_cls"),
+                dict(**cap, det_model_name="PP-OCRv5_mobile_det",
                      rec_model_name="PP-OCRv5_mobile_rec",
                      cls_model_name="mobile_cls"),
                 dict(det_model_name="PP-OCRv5_mobile_det",
