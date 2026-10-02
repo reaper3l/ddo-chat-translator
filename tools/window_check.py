@@ -106,6 +106,65 @@ def main() -> int:
     check("点输出框时焦点给输出框（方便框选复制）",
           dialog.window.focus_get() is dialog.output)
 
+    # ---- 用户实测：翻译完成后想接着输入下一段，却发现打不进字 ----
+    # 输入框本身一直是 normal（没有任何地方禁用它），所以问题在焦点：
+    # 无边框窗口 + 异步返回，焦点可能停在按钮/方向下拉上，或者被别的窗口拿走。
+    # 规则：翻译结束（成功或失败）后，只要焦点不在任何文本框上，就把它拉回输入框。
+    class _FakeResult:
+        ok = True
+        error = ""
+        text = "omw - on my way"
+
+    class _FakeEngine:
+        supports_chat = True
+
+        def available(self):
+            return True
+
+        def describe(self):
+            return "假引擎（自检用，不联网）"
+
+        def translate(self, text, messages, timeout=20):
+            return _FakeResult()
+
+    real_engine = app.pipeline.engine
+    try:
+        app.pipeline.engine = _FakeEngine()
+        dialog.input.delete("1.0", "end")
+        dialog.input.insert("end", "我马上到")
+        dialog.output.focus_force()          # 模拟"焦点跑到别的控件上"
+        dialog.translate()
+        for _ in range(60):
+            pump(app, 0.05)
+            if not dialog.busy and dialog.output.get("1.0", "end").strip():
+                break
+        check("翻译完成后焦点自动回到输入框（用户实测：翻完打不了字）",
+              dialog.window.focus_get() is dialog.input
+              and dialog.output.get("1.0", "end").strip() == _FakeResult.text,
+              "焦点=%r，译文=%r" % (dialog.window.focus_get(),
+                                    dialog.output.get("1.0", "end").strip()))
+        before = dialog.input.get("1.0", "end").strip()
+        dialog.input.event_generate("<KeyPress>", keysym="x", when="tail")
+        pump(app, 0.3)
+        check("翻译完成后能直接接着敲字",
+              dialog.input.get("1.0", "end").strip() == before + "x",
+              "%r → %r" % (before, dialog.input.get("1.0", "end").strip()))
+
+        # 连续翻译第二条：确认"翻完就能接着打、再翻也正常"这个循环
+        dialog.input.delete("1.0", "end")
+        dialog.input.insert("end", "谢谢")
+        dialog.output.focus_force()
+        dialog.translate()
+        for _ in range(60):
+            pump(app, 0.05)
+            if not dialog.busy:
+                break
+        check("连续第二次翻译：焦点同样回到输入框",
+              dialog.window.focus_get() is dialog.input,
+              "焦点=%r" % (dialog.window.focus_get(),))
+    finally:
+        app.pipeline.engine = real_engine
+
     settings = None
     try:
         from app.ui.settings import SettingsDialog

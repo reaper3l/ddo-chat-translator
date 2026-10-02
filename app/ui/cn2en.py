@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import tkinter as tk
@@ -273,6 +274,41 @@ class CnToEnDialog:
         self.app.root.clipboard_append(text)
         self.status.set("已复制：%s" % text)
 
+    def _restore_input_focus(self, why: str) -> None:
+        """翻译结束后把键盘焦点拉回输入框。
+
+        背景（用户反馈）："输入完中文、翻译完成后再想输入下一段，输入框不能编辑"。
+        查过了：输入框本身一直是 normal（没有任何地方禁用它），所以问题在**焦点**
+        ——这是个无边框窗口，翻译又是异步返回的，焦点可能落在按钮/方向下拉上，
+        或者干脆被别的窗口拿走，于是敲键盘看起来"没反应"。
+
+        实测复现（tools/window_check.py）：翻译结束时焦点停在**输出框**上，
+        这时敲键盘进的是输出框，输入框看上去就是"打不进字"。
+        所以这里改成：翻译一结束就把焦点放回输入框 —— 用户按完翻译，
+        下一步动作本来就是"接着输入下一段"，不用再手动点一下。
+        顺手写一行诊断日志（前台窗口是谁），万一还有下次，
+        日志里能直接看出是不是被别的窗口抢了焦点。
+        """
+        try:
+            current = self.window.focus_get()
+        except Exception:
+            current = None
+        moved = False
+        if current is not self.input:
+            try:
+                self.input.focus_force()
+                moved = True
+            except Exception:
+                pass
+        try:
+            logging.getLogger("ddo").info(
+                "中英互译：%s → 焦点放回输入框=%s（原本=%r），前台窗口=%s，"
+                "输入框状态=%s",
+                why, moved, current, theme.foreground_window_title(),
+                self.input.cget("state"))
+        except Exception:
+            pass
+
     # ------------------------------------------------- 根据上下文推荐回复
     def _save_auto_suggest(self) -> None:
         self.app.config["cn2en_auto_suggest"] = bool(self.auto_suggest_var.get())
@@ -382,6 +418,7 @@ class CnToEnDialog:
                     self.status.set("好了（%s）" % ("中→英" if direction == "zh2en" else "英→中"))
                     if self.auto_copy.get():
                         self._copy(payload)
+                    self._restore_input_focus("翻译完成")
                 elif kind == "suggest":
                     self.suggest_busy = False
                     self._show_suggestions(payload)
@@ -391,6 +428,7 @@ class CnToEnDialog:
                 else:
                     self.busy = False
                     self.status.set(payload)
+                    self._restore_input_focus("翻译失败")
         except queue.Empty:
             pass
         try:

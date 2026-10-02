@@ -463,6 +463,21 @@ def find_dialog_input(window: tk.Misc):
     return find_first_input(window)
 
 
+def foreground_window_title() -> str:
+    """当前前台窗口的标题（只给诊断日志用；拿不到就返回空串）。"""
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        handle = user32.GetForegroundWindow()
+        length = user32.GetWindowTextLengthW(handle)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(handle, buffer, length + 1)
+        return "%s(%s)" % (buffer.value or "?", handle)
+    except Exception:
+        return ""
+
+
 def set_dialog_input(window: tk.Misc, widget: tk.Misc) -> None:
     """告诉主题"这个窗口的输入框是哪个控件"。
 
