@@ -22,6 +22,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 聊天框背景是半透明的，背景一花 OCR 会吐出"像字其实是噪点"的行，
     # 或者把同一行读成各种错字版本 —— 那些会被当成新消息/重复消息。
     "ocr_min_score": 0.5,
+    # OCR（和"画面变没变"的指纹）之前先把半透明背景压平：
+    # 聊天框背后的景物忽明忽暗时，识别结果不会跟着变。默认开。
+    "flatten_background": True,
     "ocr_threads": 2,            # OCR 用几个线程（别吃满核心，否则游戏会卡）
     "idle_backoff": True,        # 一直没新消息时自动放慢截图频率
     "band_ocr": True,            # 只识别"变化的那几行"，其余沿用上一帧结果

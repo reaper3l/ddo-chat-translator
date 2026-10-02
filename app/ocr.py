@@ -126,6 +126,12 @@ class OcrEngine:
         # 背景花时 OCR 会吐出"像字其实是噪点"的行，或者把同一行读成各种错字版本。
         self._min_score = 0.5
         self._dropped_low_score = 0
+        # 识别前是否做"背景压平"（聊天框半透明、背后景物忽明忽暗时用）
+        self._flatten = True
+
+    def set_flatten(self, value: bool) -> None:
+        """开/关背景压平（见 app/preprocess.py）。"""
+        self._flatten = bool(value)
 
     def set_min_score(self, value: float) -> None:
         """设置置信度门槛（0~1；0 表示不过滤）。"""
@@ -192,16 +198,21 @@ class OcrEngine:
         try:
             from PIL import Image, ImageEnhance, ImageOps
 
-            rgb = image.convert("RGB")
-            # DDO 的聊天框背景是半透明的：背后景物一动，同一行字的明暗就变了，
-            # OCR 会读出细微差异（于是被当成新消息 / 重复消息）。
-            # 先做自动对比度归一化，让"文字 vs 背景"的相对关系稳定下来，
-            # 识别结果就稳定多了（成本很低，就一次 min/max 拉伸）。
-            try:
-                rgb = ImageOps.autocontrast(rgb, cutoff=1)
-            except Exception:
-                pass
-            rgb = ImageEnhance.Contrast(rgb).enhance(1.2)
+            from . import preprocess
+
+            if self._flatten:
+                # DDO 的聊天框是半透明的：背后景物一动，同一行字的明暗就变了。
+                # 自动对比度只能按整张图拉伸，管不了"左边亮右边暗"这种局部差异，
+                # 所以这里改成把背景整体压平成中灰，只留文字笔画（见 preprocess.py）。
+                rgb = preprocess.flatten(image).convert("RGB")
+            else:
+                # 老做法（设置里关掉"背景压平"时用）：整图自动对比度 + 一点点对比度
+                rgb = image.convert("RGB")
+                try:
+                    rgb = ImageOps.autocontrast(rgb, cutoff=1)
+                except Exception:
+                    pass
+                rgb = ImageEnhance.Contrast(rgb).enhance(1.2)
             if upscale and abs(upscale - 1.0) > 0.01:
                 rgb = rgb.resize((max(1, int(rgb.width * upscale)),
                                   max(1, int(rgb.height * upscale))), Image.LANCZOS)

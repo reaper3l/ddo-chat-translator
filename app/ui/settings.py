@@ -306,6 +306,8 @@ class SettingsDialog:
         self._check(tab, "skip_identical_frame",
                     "画面没变化时跳过 OCR（省 CPU，强烈建议开）")
         self._check(tab, "band_ocr", "只识别变化的那几行（更省 CPU，推荐开）")
+        self._check(tab, "flatten_background",
+                    "背景压平（聊天框半透明、背后景物忽明忽暗时更准，推荐开）")
         self._check(tab, "low_priority", "程序用低于游戏的 CPU 优先级（推荐开，游戏更流畅）")
         self._check(tab, "idle_backoff", "长时间没新消息时自动放慢截图频率")
         self._choice_labeled(tab, "ocr_threads", "OCR 线程数（越小越不卡游戏）",

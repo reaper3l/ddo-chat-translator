@@ -35,6 +35,7 @@ MODULES = [
     "test_pipeline",
     "test_style",
     "test_capture",
+    "test_preprocess",
     "test_ocr_filter",
     "test_frame",
     "test_capture_similar",

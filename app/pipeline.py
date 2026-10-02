@@ -265,9 +265,15 @@ class Pipeline:
             self.ocr.set_min_score(float(self.config.get("ocr_min_score", 0.5)))
         except Exception:
             pass
+        # 半透明背景压平也跟着设置走
+        self.ocr.set_flatten(self._flatten_enabled())
         if self.ocr.available():
             return True
         return self.ocr.load(self._ocr_threads())
+
+    def _flatten_enabled(self) -> bool:
+        """是否把聊天框的半透明背景压平（识别和指纹都用这个开关）。"""
+        return bool(self.config.get("flatten_background", True))
 
     def _capture_frame(self, region):
         """抓一帧画面。
@@ -418,7 +424,7 @@ class Pipeline:
 
             # 先用"缩略图比对"判断画面有没有变化：聊天框多数时间是静止的，
             # 没变就整帧跳过 OCR（这是监听时最省 CPU 的一招）。
-            frame_signature = capture.frame_signature(image)
+            frame_signature = capture.frame_signature(image, flatten=self._flatten_enabled())
             changed, first_row, last_row = frame.analyse_frame(
                 frame_signature, self._last_frame_signature)
             if self.config.get("skip_identical_frame", True) and not changed:
