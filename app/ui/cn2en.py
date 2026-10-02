@@ -106,6 +106,10 @@ class CnToEnDialog:
         self.auto_copy = tk.BooleanVar(value=True)
         ttk.Checkbutton(row, text="自动复制结果", variable=self.auto_copy).pack(
             side="left", padx=8)
+        self.clear_after = tk.BooleanVar(
+            value=bool(self.app.config.get("cn2en_clear_after", True)))
+        ttk.Checkbutton(row, text="翻完清空输入框", variable=self.clear_after,
+                        command=self._save_clear_after).pack(side="left", padx=8)
         self.status = tk.StringVar(value="")
         ttk.Label(row, textvariable=self.status, foreground="#080").pack(side="left")
 
@@ -314,6 +318,10 @@ class CnToEnDialog:
         self.app.config["cn2en_auto_suggest"] = bool(self.auto_suggest_var.get())
         config_module.save_config(self.app.config)
 
+    def _save_clear_after(self) -> None:
+        self.app.config["cn2en_clear_after"] = bool(self.clear_after.get())
+        config_module.save_config(self.app.config)
+
     def _on_suggest_click(self, _event=None) -> None:
         """点一行 → 复制它的英文（能直接粘进游戏）。"""
         item = self.suggest_list.focus()
@@ -418,6 +426,10 @@ class CnToEnDialog:
                     self.status.set("好了（%s）" % ("中→英" if direction == "zh2en" else "英→中"))
                     if self.auto_copy.get():
                         self._copy(payload)
+                    if self.clear_after.get():
+                        # 翻完就清空：用户下一步多半是接着打下一段
+                        self.input.delete("1.0", "end")
+                        self._refresh_direction()
                     self._restore_input_focus("翻译完成")
                 elif kind == "suggest":
                     self.suggest_busy = False

@@ -143,12 +143,30 @@ def main() -> int:
               and dialog.output.get("1.0", "end").strip() == _FakeResult.text,
               "焦点=%r，译文=%r" % (dialog.window.focus_get(),
                                     dialog.output.get("1.0", "end").strip()))
+        check("翻译完成后输入框自动清空（接着打下一段）",
+              dialog.input.get("1.0", "end").strip() == "",
+              "输入框=%r" % dialog.input.get("1.0", "end").strip())
         before = dialog.input.get("1.0", "end").strip()
         dialog.input.event_generate("<KeyPress>", keysym="x", when="tail")
         pump(app, 0.3)
         check("翻译完成后能直接接着敲字",
               dialog.input.get("1.0", "end").strip() == before + "x",
               "%r → %r" % (before, dialog.input.get("1.0", "end").strip()))
+
+        # 关掉"翻完清空"时，输入框里的内容要留着（用户可能要改一改再发）
+        dialog.clear_after.set(False)
+        dialog.input.delete("1.0", "end")
+        dialog.input.insert("end", "别清空我")
+        dialog.output.focus_force()
+        dialog.translate()
+        for _ in range(60):
+            pump(app, 0.05)
+            if not dialog.busy:
+                break
+        check("关掉「翻完清空」后，输入框内容保留",
+              dialog.input.get("1.0", "end").strip() == "别清空我",
+              "输入框=%r" % dialog.input.get("1.0", "end").strip())
+        dialog.clear_after.set(True)
 
         # 连续翻译第二条：确认"翻完就能接着打、再翻也正常"这个循环
         dialog.input.delete("1.0", "end")
