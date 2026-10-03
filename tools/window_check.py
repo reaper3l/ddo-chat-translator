@@ -265,10 +265,17 @@ def main() -> int:
     app.config["toolbar_collapsed"] = True
     app._apply_toolbar_collapsed(animate=True)
     samples = []
-    for _ in range(6):
+    # 采"不同的宽度"：每 5ms 采一次、最多 200ms（动画本身约 130ms）。
+    # 以前是 6 次 × 20ms —— 机器一忙，采样全落在动画结束之后，明明动画正常却判失败
+    # （这个自检偶发失败就是这个原因）。
+    for _ in range(40):
         app.root.update()
-        samples.append(app.actions_holder.winfo_width())
-        time.sleep(0.02)
+        width = app.actions_holder.winfo_width()
+        if not samples or samples[-1] != width:
+            samples.append(width)
+        if len(samples) >= 3 and width <= 1:
+            break
+        time.sleep(0.005)
     pump(app, 0.4)
     actions_end = app.actions_holder.winfo_width()
     strip_end = app.strip_holder.winfo_width()

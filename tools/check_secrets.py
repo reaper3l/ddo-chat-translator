@@ -27,19 +27,47 @@ PATTERNS = [
 ]
 SKIP_SUFFIX = {".png", ".jpg", ".ico", ".zip", ".exe", ".dll", ".pyd", ".onnx", ".pyc"}
 
+# 这次实际扫了多少（打印出来，"干净"才有依据）
+STATS = {"files": 0, "history_scans": 0}
 
-def _run(args) -> str:
+# 已知的"测试用假密钥"（见 tests/test_diagnose.py 的脱敏测试）：历史里翻出来属于
+# 预期，不该当成泄漏 —— 但必须写明白、且只认这几个精确字符串，不能默默忽略。
+KNOWN_PLACEHOLDERS = ("sk-abcdefghijklmnopqrstuvwxyz123456",
+                      "tok-1234567890abcdef")
+COMMIT_MARK = "@@COMMIT@@"
+
+
+def _looks_like_placeholder(text: str) -> bool:
+    return any(item in (text or "") for item in KNOWN_PLACEHOLDERS)
+
+
+def _run_checked(args):
+    """跑一条 git 命令，返回 (是否成功, 输出或错误信息)。
+
+    为什么不能"失败了就当没扫到"：这个脚本是防密钥泄漏的闸门。仓库属主不对、
+    git 没装、命令报错时，如果按"没扫到 = 干净"处理就会**静默放行** ——
+    实测踩过：以别的身份跑（git 报 dubious ownership）时它一直说"干净"，
+    换成仓库属主再跑才发现测试里有两条形如密钥的假字符串。
+    """
     try:
         result = subprocess.run(args, cwd=str(ROOT), capture_output=True, text=True,
                                 encoding="utf-8", errors="replace")
-        return result.stdout or ""
-    except Exception:
-        return ""
+    except Exception as exc:                       # noqa: BLE001
+        return False, str(exc)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        return False, (detail[0] if detail else "git 退出码 %d" % result.returncode)
+    return True, result.stdout or ""
 
 
 def scan_tracked_files():
     problems = []
-    for name in _run(["git", "ls-files"]).splitlines():
+    ok, output = _run_checked(["git", "ls-files"])
+    if not ok:
+        return ["读不到受版本控制的文件清单（git 出错：%s）—— 这次**没扫成**，"
+                "不要当成干净" % output]
+    scanned = 0
+    for name in output.splitlines():
         name = name.strip()
         if not name or name == "tools/check_secrets.py":
             continue
@@ -52,20 +80,45 @@ def scan_tracked_files():
             text = path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
+        scanned += 1
         for line_number, line in enumerate(text.splitlines(), 1):
             for pattern, label in PATTERNS:
-                if re.search(pattern, line):
+                if re.search(pattern, line) and not _looks_like_placeholder(line):
                     problems.append("%s:%d  %s" % (name, line_number, label))
+    STATS["files"] = scanned
     return problems
 
 
 def scan_history():
+    """翻 git 历史：找出"哪次提交新增/删过形如密钥的内容"。
+
+    做法：把全部历史的补丁一次拿出来，在本进程里用**同一套** Python 正则扫。
+    以前是把正则丢给 `git log -G`，但 git 用的是 POSIX 正则（`(?i)`、`\-`、`\s`
+    都不认）—— 实测直接报 "Invalid range end"，而错误又被吞掉，整段历史扫描
+    等于空转（这次复验才发现）。用 Python 扫还顺带能把"测试里故意写的假密钥"
+    和真泄漏分开：只报提交号的话，假密钥会一直报警，报到最后没人看，闸门就废了。
+    """
+    ok, output = _run_checked(["git", "log", "--all", "-p",
+                              "--pretty=format:" + COMMIT_MARK + "%h"])
+    if not ok:
+        return ["翻不了 git 历史（git 出错：%s）—— 这次**没扫成**，不要当成干净"
+                % output]
+    STATS["history_scans"] = 1
     problems = []
-    for pattern, label in PATTERNS:
-        output = _run(["git", "log", "--all", "-G", pattern, "--oneline"])
-        for line in output.splitlines():
-            if line.strip():
-                problems.append("历史提交 %s  %s" % (line.strip()[:60], label))
+    commit = ""
+    for line in output.splitlines():
+        if line.startswith(COMMIT_MARK):
+            commit = line[len(COMMIT_MARK):].strip()
+            continue
+        if line[:1] not in "+-":
+            continue
+        body = line[1:]
+        if _looks_like_placeholder(body):
+            continue
+        for pattern, label in PATTERNS:
+            if re.search(pattern, body):
+                problems.append("历史提交 %s  %s | %s"
+                                % (commit or "?", label, body.strip()[:60]))
     return problems
 
 
@@ -94,7 +147,11 @@ def scan_signing_key():
     if not forms:
         return []
     problems = []
-    for name in _run(["git", "ls-files"]).splitlines():
+    ok, output = _run_checked(["git", "ls-files"])
+    if not ok:
+        return ["读不到受版本控制的文件清单（git 出错：%s）—— 私钥那一项**没扫成**"
+                % output]
+    for name in output.splitlines():
         name = name.strip()
         path = ROOT / name
         if not name or not path.exists():
@@ -108,7 +165,11 @@ def scan_signing_key():
         if any(form in text for form in forms):
             problems.append("%s  发布签名私钥被提交进仓库了！" % name)
     for form in forms:
-        output = _run(["git", "log", "--all", "-S", form, "--oneline"])
+        ok, output = _run_checked(["git", "log", "--all", "-S", form, "--oneline"])
+        if not ok:
+            problems.append("翻不了 git 历史查私钥（git 出错：%s）—— 这一项**没扫成**"
+                            % output)
+            continue
         for line in output.splitlines():
             if line.strip():
                 problems.append("历史提交 %s  发布签名私钥出现在 git 历史里！"
@@ -129,10 +190,12 @@ def main() -> int:
               "即使删掉也还能被翻出来）。")
         return 1
     if SIGNING_KEY_FILE.exists():
-        print("干净：受版本控制的文件和全部历史里都没有 API Key / Token，"
-              "发布签名私钥也没有混进去。")
+        print("干净：扫了 %d 个受控文件、%d 轮 git 历史检索，"
+              "没有 API Key / Token，发布签名私钥也没有混进去。"
+              % (STATS["files"], STATS["history_scans"]))
     else:
-        print("干净：受版本控制的文件和全部历史里都没有发现 API Key / Token。")
+        print("干净：扫了 %d 个受控文件、%d 轮 git 历史检索，没有 API Key / Token。"
+              % (STATS["files"], STATS["history_scans"]))
         print("　（本机还没有发布签名私钥，跳过那一项；生成私钥后再跑一次会一并检查）")
     return 0
 

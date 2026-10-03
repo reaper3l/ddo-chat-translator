@@ -31,7 +31,7 @@ from . import style
 from . import theme
 from .frameless import FramelessWindow
 
-from .. import AUTHOR, HOMEPAGE, __version__          # noqa: E402
+from .. import __version__                            # noqa: E402
 
 APP_TITLE = "DDO 翻译助手 v%s" % __version__
 
@@ -1273,8 +1273,6 @@ class MainWindow:
 
         返回是否弹了窗口 —— 自检直接看返回值，不用去猜哪个窗口是它。
         """
-        from .. import __version__
-
         if self.config.get("contribute_enabled"):
             return False
         if not force and self.config.get("contribute_invite_done"):

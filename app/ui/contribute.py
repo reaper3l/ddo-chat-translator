@@ -120,8 +120,6 @@ class ContributionDialog:
     def _payload(self) -> dict:
         if not (self.items["terms"] or self.items["phrases"]):
             return None
-        from .. import __version__
-
         return contribute.build_payload(self.items, version=__version__)
 
     def preview(self) -> None:
@@ -237,7 +235,7 @@ class ContributionInviteDialog:
         """用户点了"愿意"：这时才打开开关（含关闭时自动上传），并打开贡献窗口。"""
         self.app.config["contribute_enabled"] = True
         self.app.config["contribute_auto_send"] = True
-        self._mark(version=__version__)
+        config_module.save_config(self.app.config)
         self.window.destroy()
         callback = self.on_accept or self.app.open_contribution
         try:
@@ -248,19 +246,13 @@ class ContributionInviteDialog:
                             "info")
 
     def later(self) -> None:
-        """点"以后再说"：这一版先不问了，下个版本再提一次。"""
-        self._mark(version=__version__)
+        """点"以后再说"：这一版先不问了 —— "这一版问过了"在弹出时就记下了。"""
         self.window.destroy()
 
     def never(self) -> None:
         """点"不再提醒"：以后永不出现（想参与可以去设置 → 关于）。"""
-        self._mark(version=__version__, done=True)
+        self.app.config["contribute_invite_done"] = True
+        config_module.save_config(self.app.config)
         self.window.destroy()
         self.app.set_status("好的，以后不再提醒（想参与随时可在 设置 → 关于 里打开）",
                             "info")
-
-    def _mark(self, version: str, done: bool = False) -> None:
-        self.app.config["contribute_invite_version"] = version
-        if done:
-            self.app.config["contribute_invite_done"] = True
-        config_module.save_config(self.app.config)

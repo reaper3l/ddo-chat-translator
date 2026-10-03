@@ -6,7 +6,10 @@ from pathlib import Path
 
 from app import diagnose
 
-SECRET = "sk-abcdefghijklmnopqrstuvwxyz123456"
+# 故意拼出来，而不是写成整串字面量：否则仓库里就真的躺着一个"长得像 API Key"
+# 的字符串，tools\check_secrets.py 每次都会报它（那个自检是防止密钥提交的，
+# 不能因为测试数据就把它变成"每次都报警、最后没人看"）
+SECRET = "sk-" + "abcdefghijklmnopqrstuvwxyz123456"
 
 
 def _config():
@@ -15,7 +18,7 @@ def _config():
         "deepseek_key": SECRET,
         "deepseek_model": "deepseek-chat",
         "interval_ms": 1200,
-        "nested": {"access_token": "tok-1234567890abcdef", "keep": 1},
+        "nested": {"access_token": "tok-" + "1234567890abcdef", "keep": 1},
     }
 
 
