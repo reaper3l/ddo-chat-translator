@@ -20,6 +20,9 @@ ALLOWED = {"__file__", "__name__", "__doc__", "__package__", "__spec__",
 # 基类提供、静态检查看不到的方法（写在这里 = 明确知道它来自标准库基类）
 BASE_METHODS = {
     "send_response", "send_header", "end_headers",   # http.server.BaseHTTPRequestHandler
+    # tkinter.Misc 基类提供的（自定义控件里直接 self.bind()/self.winfo_width() 很正常）
+    "bind", "unbind", "winfo_width", "winfo_height", "winfo_children",
+    "winfo_ismapped", "winfo_reqwidth", "after", "after_cancel", "update_idletasks",
 }
 
 

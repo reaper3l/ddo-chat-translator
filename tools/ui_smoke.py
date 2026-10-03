@@ -946,6 +946,10 @@ def main() -> int:
         """「参与改进」对话框：默认关、有预览/复制贡献码按钮（这一步不联网）。"""
         from app.ui.contribute import ContributionDialog
 
+        # 自检要断言"默认关闭"，所以先按默认值来（用户自己可能已经开过这个开关，
+        # 直接读真实配置会让自检结果跟着用户的设置跑）
+        old_value = app.config.get("contribute_enabled")
+        app.config["contribute_enabled"] = False
         dialog = ContributionDialog(app)
         try:
             dialog.window.update_idletasks()
@@ -960,6 +964,7 @@ def main() -> int:
                                      % dialog.count_label.cget("text"))
         finally:
             dialog.window.destroy()
+            app.config["contribute_enabled"] = old_value
 
     step("参与改进对话框（默认关闭）", contribution_dialog)
 

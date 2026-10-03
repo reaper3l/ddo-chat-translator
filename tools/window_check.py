@@ -18,6 +18,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from tkinter import ttk
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -58,6 +59,16 @@ def pump(app, seconds: float) -> None:
     while time.time() < end:
         app.root.update()
         time.sleep(0.02)
+
+
+def descendants(widget, kind):
+    """把控件树里某一类控件全找出来（顺序按遍历顺序）。"""
+    found = []
+    for child in widget.winfo_children():
+        if isinstance(child, kind):
+            found.append(child)
+        found.extend(descendants(child, kind))
+    return found
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -211,6 +222,23 @@ def main() -> int:
               correction.window.focus_get() is correction.edit,
               "当前焦点 %r" % (correction.window.focus_get(),))
         correction.window.destroy()
+
+        # ---- 用户实测：设置 → 关于 那一排按钮，窗口拉窄时会被窗口边缘裁掉 ----
+        about = settings.open_category("关于")
+        pump(app, 0.5)
+        about.geometry("470x420")
+        pump(app, 0.8)
+        clipped = []
+        for button in descendants(about, ttk.Button):
+            if not button.winfo_ismapped():
+                continue
+            right = (button.winfo_rootx() - about.winfo_rootx()
+                     + button.winfo_width())
+            if right > about.winfo_width() + 2:
+                clipped.append((button.cget("text"), right))
+        check("设置 → 关于：窗口拉窄后按钮自动折行（不会被裁掉）",
+              not clipped, "被裁：%s" % (clipped,))
+        about.destroy()
     except Exception as exc:
         check("设置/纠错窗口焦点检查", False, str(exc))
     finally:

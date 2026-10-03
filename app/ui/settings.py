@@ -9,7 +9,7 @@ from tkinter import colorchooser, messagebox, ttk
 from .appearance_tab import AppearanceTab
 from .. import channels as channels_module
 from . import theme
-from .widgets import ScrollableFrame
+from .widgets import ButtonFlow, ScrollableFrame
 
 class SettingsDialog:
     # 设置中心里的分类：(标题, 一句话说明)
@@ -188,27 +188,20 @@ class SettingsDialog:
                 anchor="w", padx=8, pady=1)
 
         self._check(parent, "check_update", "启动时自动检查更新（只查询，不会偷偷下载）")
-        row = ttk.Frame(parent)
-        row.pack(fill="x", padx=10, pady=(2, 6))
-        ttk.Button(row, text="立即检查更新",
-                   command=lambda: self.app.check_update(manual=True)).pack(side="left")
-        ttk.Button(row, text="打开发行页",
-                   command=lambda: update_module.open_page(HOMEPAGE + "/releases")).pack(
-            side="left", padx=6)
-        ttk.Button(row, text="使用须知 / 免责声明",
-                   command=self.app.open_agreement).pack(side="left")
-        ttk.Button(row, text="反馈问题（生成反馈包）",
-                   command=self.app.open_bug_report).pack(side="left", padx=6)
-        ttk.Button(row, text="参与改进（贡献术语）",
-                   command=self.app.open_contribution).pack(side="left")
-
-        row = ttk.Frame(parent)
-        row.pack(fill="x", padx=10, pady=6)
-        for text, path in (("打开数据目录", paths.DATA_DIR),
-                           ("打开日志", paths.LOG_PATH),
-                           ("打开术语表", paths.GLOSSARY_PATH)):
-            ttk.Button(row, text=text,
-                       command=lambda p=path: self._open_path(p)).pack(side="left", padx=(0, 6))
+        # 这一排按钮用 ButtonFlow：窗口拉窄时自动折行，不会被窗口边缘裁掉
+        flow = ButtonFlow(parent, gap=6, row_pady=4)
+        flow.pack(fill="x", padx=10, pady=(2, 6))
+        for text, command in (
+                ("立即检查更新", lambda: self.app.check_update(manual=True)),
+                ("打开发行页",
+                 lambda: update_module.open_page(HOMEPAGE + "/releases")),
+                ("使用须知 / 免责声明", self.app.open_agreement),
+                ("反馈问题（生成反馈包）", self.app.open_bug_report),
+                ("参与改进（贡献术语）", self.app.open_contribution),
+                ("打开数据目录", lambda: self._open_path(paths.DATA_DIR)),
+                ("打开日志", lambda: self._open_path(paths.LOG_PATH)),
+                ("打开术语表", lambda: self._open_path(paths.GLOSSARY_PATH))):
+            flow.add(ttk.Button(flow, text=text, command=command))
 
     @staticmethod
     def _open_path(path) -> None:
