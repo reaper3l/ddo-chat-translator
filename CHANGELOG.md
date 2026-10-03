@@ -20,6 +20,9 @@
 * **收件**：可以用作者部署的收件端（`tools\contribute_worker.js`，Cloudflare 免费版
   粘进去就能跑；或 `tools\contribute_server.py` 放在自己的小服务器上）；
   没配置收件端时，用「复制贡献码」把一行文本发到 issue 里也一样能收。
+  作者的收件端已部署：`https://ddo-contrib.ddo-tools.workers.dev/`（Cloudflare Workers +
+  KV，写入按 IP 限流、导出需要口令，口令只在本机）。导出建议用
+  `--token-file` 传口令，别写在命令行里。
 * **自动闸门**（作者侧，不需要人工逐条审核）：至少 N 个**不同**的人独立同意、
   一致率够高、单人占比不过线、格式与广告特征过滤；单批新增异常多、单人占比过高等
   情况会**报警并停下**等人看一眼，其余情况一条命令直接进公共词典。

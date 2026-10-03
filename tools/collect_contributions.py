@@ -91,10 +91,21 @@ def main() -> int:
     parser.add_argument("--json", help="收件端导出的 JSON")
     parser.add_argument("--url", help="收件端地址（配合 --token）")
     parser.add_argument("--token", default="", help="收件端导出口令（只在你本机用）")
+    parser.add_argument("--token-file",
+                        help="从文件里读口令（推荐：口令就不会出现在命令行/历史记录里）")
     parser.add_argument("--out", default="候选", help="输出目录")
     parser.add_argument("--min-users", type=int, default=0, help="覆盖默认门槛：不同用户数")
     parser.add_argument("--min-count", type=int, default=0, help="覆盖默认门槛：出现次数")
     args = parser.parse_args()
+    if args.token_file and not args.token:
+        try:
+            lines = [line.strip() for line
+                     in Path(args.token_file).read_text(encoding="utf-8").splitlines()]
+            args.token = [line for line in lines if line and ":" not in line
+                          and "：" not in line][-1]
+        except Exception as exc:                   # noqa: BLE001
+            print("读口令文件失败：%s" % exc)
+            return 2
 
     records: list = []
     if args.json:

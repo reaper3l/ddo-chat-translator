@@ -123,7 +123,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "public_dict_interval_hours": 6,  # 隔多久检查一次更新
     # 参与改进：把用户**自己确认过的**术语/纠错匿名贡献给作者（默认关，要用户主动开）
     "contribute_enabled": False,
-    "contribute_url": "",             # 留空 = 只能"复制贡献码"手动转发
+    # 收件端地址（作者的 Cloudflare Worker，见 tools/contribute_worker.js）。
+    # 留空 = 只能"复制贡献码"手动转发；填了才能"直接上传"。
+    "contribute_url": "https://ddo-contrib.ddo-tools.workers.dev/",
     "learn_min_count": 2,        # 同一句被修正多少次后写入长期规则
     "candidate_min_count": 3,    # 陌生词出现多少次后进入"待学习"列表
     "dedup_ttl_seconds": 90,
