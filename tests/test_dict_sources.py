@@ -135,6 +135,15 @@ def test_broken_source_entries_are_dropped():
     assert len(public_dict.sources(config)) == 1          # 只剩官方源
 
 
+def test_source_id_is_sanitized():
+    """id 会被当成缓存文件名，必须挡掉路径字符（配置文件手改也不该写到别处）。"""
+    items = public_dict.sources({"dict_sources": [
+        {"id": "../../evil", "name": "坏 id", "kind": "url",
+         "url": "https://x.example/a.json"}]})
+    assert items[1]["id"] == "evil"
+    assert "/" not in items[1]["id"] and "\\" not in items[1]["id"]
+
+
 # ------------------------------------------------------------ 合并与优先级
 def test_local_file_source_is_merged():
     seed, pub = _keypair()
@@ -145,6 +154,22 @@ def test_local_file_source_is_merged():
         terms = public_dict.load_terms(config)
         assert terms["brandnew"] == "全新词"
         assert terms["mydict"] == "我的词"
+
+
+def test_editing_a_local_file_takes_effect_right_away():
+    """本地文件源是直接读文件的：改了文件再更新一次，术语表必须跟着变。
+
+    （回归：合并结果以前按"源列表"缓存，文件内容变了但源没变 → 改了也不生效。）
+    """
+    with _TempEnv() as tmp:
+        item = _file_source(tmp, "我的词表", {"a": "甲"})
+        config = {"public_dict_enabled": True, "dict_sources": [item]}
+        public_dict.sync_source(public_dict.sources(config)[1], config, force=True)
+        assert public_dict.load_terms(config) == {"a": "甲"}
+
+        Path(item["path"]).write_bytes(_payload({"a": "甲", "b": "乙"}))
+        public_dict.sync_source(public_dict.sources(config)[1], config, force=True)
+        assert public_dict.load_terms(config) == {"a": "甲", "b": "乙"}
 
 
 def test_official_wins_when_user_source_has_the_same_key():

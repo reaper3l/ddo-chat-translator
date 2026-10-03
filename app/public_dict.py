@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 import urllib.parse
@@ -133,8 +134,10 @@ def _norm_source(raw, index: int) -> Optional[dict]:
     kind = str(raw.get("kind") or "").strip().lower()
     if kind not in SOURCE_KINDS:
         return None
+    # id 会当成缓存文件名用（data/dict_sources/<id>.json），只留安全字符
+    raw_id = re.sub(r"[^A-Za-z0-9_.-]", "", str(raw.get("id") or ""))[:32]
     item = {
-        "id": str(raw.get("id") or "").strip() or ("src%d" % index),
+        "id": raw_id.strip(".") or ("src%d" % index),
         "name": str(raw.get("name") or "").strip() or ("词典源 %d" % index),
         "kind": kind,
         "enabled": bool(raw.get("enabled", True)),
@@ -592,8 +595,9 @@ def _fetch_source(item: dict, config: dict, fetch: Callable[[str], bytes]
     官方源带镜像候选（主地址失败自动换备用地址）；用户加的网地址就认它自己那个。
     """
     if item.get("kind") == KIND_OFFICIAL:
-        primary = str(item.get("url") or "").strip() or effective_url(config)
-        urls = [primary] if MIRROR_URL == primary else [primary, MIRROR_URL]
+        primary = str(item.get("url") or "").strip()
+        urls = (url_candidates(config) if not primary
+                else ([primary] if MIRROR_URL == primary else [primary, MIRROR_URL]))
     else:
         urls = [str(item.get("url") or "")]
     reasons = []
@@ -695,6 +699,9 @@ def sync_source(item: dict, config: Optional[dict] = None,
                     "terms": len(_parse_terms(payload)),
                     "reason": "已读取" if updated else "没有变化"})
         _remember(item, now, True, digest=digest)
+        # 本地文件是直接读的，合并结果必须跟着失效 —— 否则用户改完文件、
+        # 点「立即更新」也只会拿到上一份合并缓存（术语表看起来没变）。
+        invalidate()
         return out
     else:
         fetch = fetcher or _fetch

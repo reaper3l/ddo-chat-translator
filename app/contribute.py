@@ -369,8 +369,10 @@ def aggregate(records: Iterable[dict], gates: Optional[dict] = None,
     negative_users: Dict[str, set] = {}
     user_totals: Dict[str, int] = {}
     rejected: List[dict] = []
+    record_count = 0
 
     for payload in records:
+        record_count += 1
         uid = str(payload.get("uid") or "?")
         terms, phrases = _validate_rows(payload)
         user_totals[uid] = user_totals.get(uid, 0) + len(terms) + len(phrases)
@@ -468,7 +470,7 @@ def aggregate(records: Iterable[dict], gates: Optional[dict] = None,
         "retire": retire,
         "alerts": alerts,
         "contributors": len(user_totals),
-        "records": len(list(records)) if not isinstance(records, list) else len(records),
+        "records": record_count,          # records 可能是生成器，边遍历边数
     }
 
 

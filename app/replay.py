@@ -56,9 +56,6 @@ class ReplayReport:
     def ok(self) -> bool:
         return not self.over_reach
 
-    def ratio(self, term: str) -> float:
-        return self.hits.get(term, 0) / float(max(1, self.lines))
-
 
 def client_usable(term: str, translation: str) -> bool:
     """客户端到底会不会把这个词当保护词用 —— 和 app/glossary.py 里的门槛保持一致。

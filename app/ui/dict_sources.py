@@ -208,7 +208,11 @@ class DictSourcesDialog:
 
     def _append(self, source: dict) -> None:
         rows = self._rows()
-        source["id"] = "src%d" % int(time.time())
+        used = {row["id"] for row in rows}
+        index = 1
+        while ("src%s-%d" % (time.strftime("%Y%m%d"), index)) in used:
+            index += 1
+        source["id"] = "src%s-%d" % (time.strftime("%Y%m%d"), index)
         rows.append(source)
         self._save(rows, select=source["id"])
 
@@ -237,4 +241,3 @@ class DictSourcesDialog:
                 self.on_change()
             except Exception:                      # noqa: BLE001
                 pass
-        messagebox.showinfo("已保存", "词典源已更新；术语表已重建。", parent=self.window)
