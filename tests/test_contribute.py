@@ -231,9 +231,10 @@ def test_payload_carries_negative_votes():
         from app import public_dict
 
         old_path = public_dict.NEGATIVE_PATH
+        old_loader = public_dict.load_terms
         try:
             public_dict.NEGATIVE_PATH = contribute.STATE_PATH.parent / "neg.json"
-            public_dict._terms_cache = {"rez plz": "复活我"}
+            public_dict.load_terms = lambda config=None: {"rez plz": "复活我"}
             public_dict.record_negative("rez plz", "快救我")
             payload = contribute.build_payload({"terms": [], "phrases": []})
             assert payload["negatives"] == ["rez plz"]
@@ -241,7 +242,8 @@ def test_payload_carries_negative_votes():
             assert contribute.decode_code(code)["negatives"] == ["rez plz"]
         finally:
             public_dict.NEGATIVE_PATH = old_path
-            public_dict._terms_cache = None
+            public_dict.load_terms = old_loader
+            public_dict.invalidate()
 
 
 def test_aggregate_reports_terms_to_retire():

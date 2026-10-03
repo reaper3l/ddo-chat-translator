@@ -121,6 +121,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "public_dict_enabled": True,
     "public_dict_url": "",            # 留空 = 用 app/public_dict.py 里的默认地址；也可以填镜像
     "public_dict_interval_hours": 6,  # 隔多久检查一次更新
+    # 自己加的词典源（官方源不在这个列表里，程序内置）：
+    # [{"id": "...", "name": "...", "kind": "file"|"url", "path"/"url": "...",
+    #   "enabled": true, "ack": true, "pubkey": ""}]  —— 默认空，用户明确添加才生效
+    "dict_sources": [],
     # 参与改进：把用户**自己确认过的**术语/纠错匿名贡献给作者（默认关，要用户主动开）
     "contribute_enabled": False,
     # 收件端地址（作者的 Cloudflare Worker，见 tools/contribute_worker.js）。

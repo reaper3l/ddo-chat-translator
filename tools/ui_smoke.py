@@ -920,6 +920,28 @@ def main() -> int:
 
     step("词典窗口：公共词典开关/状态", dictionary_public_dict_row)
 
+    def dict_sources_dialog():
+        """「词典源」窗口：官方源排第一、按钮齐全（这一步不联网）。"""
+        from app.ui.dict_sources import DictSourcesDialog
+
+        dialog = DictSourcesDialog(app)
+        try:
+            dialog.window.update_idletasks()
+            rows = dialog.tree.get_children()
+            if not rows:
+                raise AssertionError("词典源窗口一行都没列出来")
+            first = dialog.tree.item(rows[0], "values")
+            if "官方" not in str(first[2]):
+                raise AssertionError("官方源必须排在第一个：%r" % (first,))
+            for text in ("添加本地文件…", "添加网地址…", "启用/停用", "上移",
+                         "下移", "删除", "立即更新"):
+                if find_widget(dialog.window, ttk.Button, text) is None:
+                    raise AssertionError("词典源窗口缺少「%s」按钮" % text)
+        finally:
+            dialog.window.destroy()
+
+    step("词典源窗口：官方源 + 自己加的源", dict_sources_dialog)
+
     def contribution_dialog():
         """「参与改进」对话框：默认关、有预览/复制贡献码按钮（这一步不联网）。"""
         from app.ui.contribute import ContributionDialog

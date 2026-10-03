@@ -341,6 +341,8 @@ class DictionaryDialog:
                         command=self._save_public_switch).pack(side="left")
         ttk.Button(pub_row, text="立即更新",
                    command=self.update_public).pack(side="left", padx=6)
+        ttk.Button(pub_row, text="词典源…",
+                   command=self.manage_sources).pack(side="left")
         self.public_label = theme.label(pub_row, "", muted=True)
         self.public_label.pack(side="left", padx=6)
 
@@ -400,6 +402,14 @@ class DictionaryDialog:
                                  time.localtime(status["updated_at"] or 0))
             text = "公共词典：%d 条，更新于 %s（每 %d 小时检查一次）" % (
                 status["terms"], when, status["interval_hours"])
+            extra = [row for row in (status.get("sources") or [])
+                     if row["kind"] != "official" and row["enabled"]]
+            if extra:
+                text += "；外加 %d 个自加源" % len(extra)
+            bad = [row for row in (status.get("sources") or [])
+                   if row["kind"] != "official" and row["enabled"] and row["error"]]
+            if bad:
+                text += "（%d 个源上次失败）" % len(bad)
             if status.get("disabled"):
                 text += "；本机已停用 %d 条（你改过译法的）" % status["disabled"]
         self.public_label.configure(text=text)
@@ -418,6 +428,12 @@ class DictionaryDialog:
         self.app.maybe_sync_public_dict(manual=True)
         self.window.after(1500, self.refresh)
         self.window.after(5000, self.refresh)
+
+    def manage_sources(self) -> None:
+        """打开「词典源」窗口：官方源 + 自己加的源（本地文件 / 网地址）。"""
+        from .dict_sources import DictSourcesDialog
+
+        DictSourcesDialog(self.app, on_change=self.refresh)
 
     def add_term(self) -> None:
         # 选中某一行时，把它带进输入框 —— 改一改点确定就是「覆盖」

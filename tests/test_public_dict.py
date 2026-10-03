@@ -56,11 +56,14 @@ class _TempCache:
     def __enter__(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="ddo-dict-test-"))
         self.old = (public_dict.CACHE_PATH, public_dict.CACHE_SIG_PATH,
-                    public_dict.NEGATIVE_PATH)
+                    public_dict.NEGATIVE_PATH, public_dict.SOURCE_DIR,
+                    public_dict.SOURCE_STATE_PATH)
         self.old_pubkeys = update.pubkeys
         public_dict.CACHE_PATH = self.tmp / "public_glossary.json"
         public_dict.CACHE_SIG_PATH = self.tmp / "public_glossary.json.sig"
         public_dict.NEGATIVE_PATH = self.tmp / "negatives.json"
+        public_dict.SOURCE_DIR = self.tmp / "dict_sources"
+        public_dict.SOURCE_STATE_PATH = public_dict.SOURCE_DIR / "state.json"
         if self.pubkey:
             update.pubkeys = lambda text=None: [self.pubkey]
         public_dict.invalidate()
@@ -69,7 +72,8 @@ class _TempCache:
 
     def __exit__(self, *_exc):
         (public_dict.CACHE_PATH, public_dict.CACHE_SIG_PATH,
-         public_dict.NEGATIVE_PATH) = self.old
+         public_dict.NEGATIVE_PATH, public_dict.SOURCE_DIR,
+         public_dict.SOURCE_STATE_PATH) = self.old
         update.pubkeys = self.old_pubkeys
         public_dict.invalidate()
         public_dict._last_attempt = 0.0
@@ -287,7 +291,7 @@ def test_public_layer_only_adds_never_overrides():
     old_paths = (paths.GLOSSARY_PATH, paths.GLOSSARY_EXTRA_PATH)
     old_loader = public_dict.load_terms
     paths.GLOSSARY_PATH, paths.GLOSSARY_EXTRA_PATH = base, extra
-    public_dict.load_terms = lambda: {
+    public_dict.load_terms = lambda config=None: {
         "tr": "缠根",             # 和内置冲突 → 不许覆盖
         "elite": "精英",          # 同上
         "brandnew": "全新词",      # 内置没有 → 收下
@@ -316,7 +320,7 @@ def test_public_layer_can_be_switched_off():
     old_paths = (paths.GLOSSARY_PATH, paths.GLOSSARY_EXTRA_PATH)
     old_loader = public_dict.load_terms
     paths.GLOSSARY_PATH, paths.GLOSSARY_EXTRA_PATH = base, tmp / "missing.json"
-    public_dict.load_terms = lambda: {"brandnew": "全新词"}
+    public_dict.load_terms = lambda config=None: {"brandnew": "全新词"}
     try:
         on = glossary.build_glossary({"use_glossary": True,
                                       "use_extra_glossary": False,

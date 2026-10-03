@@ -261,7 +261,7 @@ def build_glossary(config: dict, memory=None) -> Glossary:
         from . import public_dict
 
         existing = {Glossary._norm_key(term) for term in terms}
-        for term, translation in public_dict.load_terms().items():
+        for term, translation in public_dict.load_terms(config).items():
             key = Glossary._norm_key(term)
             if not key or key in existing:
                 continue                     # 已有同名（内置/大词典）→ 不覆盖

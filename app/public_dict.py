@@ -23,6 +23,7 @@ import logging
 import os
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -46,10 +47,23 @@ CACHE_PATH = paths.DATA_DIR / "public_glossary.json"
 CACHE_SIG_PATH = paths.DATA_DIR / "public_glossary.json.sig"
 NEGATIVE_PATH = paths.DATA_DIR / "public_dict_negatives.json"
 
+# 多词典源（v3.0.30 起）：官方源沿用上面那个老缓存文件（升级时不用重新下载），
+# 用户自己加的源各用一个缓存文件，互不影响。
+SOURCE_DIR = paths.DATA_DIR / "dict_sources"
+SOURCE_STATE_PATH = SOURCE_DIR / "state.json"
+OFFICIAL_ID = "official"
+OFFICIAL_NAME = "官方公共词典"
+KIND_OFFICIAL = "official"
+KIND_URL = "url"
+KIND_FILE = "file"
+SOURCE_KINDS = (KIND_OFFICIAL, KIND_URL, KIND_FILE)
+MAX_SOURCES = 12                     # 源太多会把术语表撑乱，也给界面留个上限
+
 # 同一个公共词被用户自己改了这么多次 → 本机先停用它（不影响别人）
 DISABLE_AFTER_NEGATIVES = 2
 
-_terms_cache: Optional[Dict[str, str]] = None
+# 合并后的词条缓存：(源指纹, 词条)。源一变（开关/顺序/地址变了）就重算。
+_terms_cache: Optional[Tuple[str, Dict[str, str]]] = None
 _last_attempt = 0.0
 
 
@@ -111,6 +125,145 @@ def verify(payload: bytes, sig_text: str,
     return False, "签名验证没通过（不是作者发布的词典）"
 
 
+# ------------------------------------------------------------------ 词典源
+def _norm_source(raw, index: int) -> Optional[dict]:
+    """把配置里的一项整理成标准字段；认不出来（少了地址/路径）就返回 None。"""
+    if not isinstance(raw, dict):
+        return None
+    kind = str(raw.get("kind") or "").strip().lower()
+    if kind not in SOURCE_KINDS:
+        return None
+    item = {
+        "id": str(raw.get("id") or "").strip() or ("src%d" % index),
+        "name": str(raw.get("name") or "").strip() or ("词典源 %d" % index),
+        "kind": kind,
+        "enabled": bool(raw.get("enabled", True)),
+        "ack": bool(raw.get("ack", False)),
+        "url": str(raw.get("url") or "").strip(),
+        "path": str(raw.get("path") or "").strip(),
+        "pubkey": str(raw.get("pubkey") or "").strip(),
+    }
+    if kind == KIND_URL and not item["url"]:
+        return None
+    if kind == KIND_FILE and not item["path"]:
+        return None
+    return item
+
+
+def sources(config: Optional[dict] = None) -> List[dict]:
+    """当前配置里的词典源（官方源永远排第一）。
+
+    老配置只有 `public_dict_url` 一个地址、没有 `dict_sources`：这里等值迁移成
+    「官方源 + 那个自定义地址」，老用户手改过的镜像地址不会丢。
+    用户加的源按添加顺序排在官方源后面，同名冲突时先到的赢（见 load_terms）。
+    """
+    config = config or {}
+    raw = config.get("dict_sources")
+    items: List[dict] = []
+    if isinstance(raw, list):
+        for index, entry in enumerate(raw, 1):
+            item = _norm_source(entry, index)
+            if item is not None:
+                items.append(item)
+    if not any(item["kind"] == KIND_OFFICIAL for item in items):
+        items.insert(0, {
+            "id": OFFICIAL_ID, "name": OFFICIAL_NAME, "kind": KIND_OFFICIAL,
+            "enabled": True, "ack": True, "pubkey": "",
+            "url": str(config.get("public_dict_url") or "").strip(), "path": "",
+        })
+    ordered = ([item for item in items if item["kind"] == KIND_OFFICIAL][:1]
+               + [item for item in items if item["kind"] != KIND_OFFICIAL])
+    out: List[dict] = []
+    used = set()
+    for item in ordered[:MAX_SOURCES]:
+        base = item["id"]
+        suffix = 2
+        while item["id"] in used:                 # id 撞了缓存文件会打架
+            item["id"] = "%s-%d" % (base, suffix)
+            suffix += 1
+        used.add(item["id"])
+        out.append(item)
+    return out
+
+
+def source_cache_paths(item: dict) -> Tuple[Path, Path]:
+    """这个源的内容缓存放哪。官方源沿用老文件 —— 升级上来不用重新下载。"""
+    if item.get("kind") == KIND_OFFICIAL:
+        return CACHE_PATH, CACHE_SIG_PATH
+    return (SOURCE_DIR / ("%s.json" % item["id"]),
+            SOURCE_DIR / ("%s.json.sig" % item["id"]))
+
+
+def verify_source(item: dict, payload: bytes, sig_text: str,
+                  pubkey: Optional[str] = None) -> Tuple[bool, str]:
+    """按来源决定怎么信任。
+
+    * 官方源：**必须**验签，用程序内置的发布公钥（不接受别的钥匙）；
+    * 用户加的源：带 `.sig` 就验（源里配了自己的公钥就用它），没签名就必须
+      `ack`（添加时确认过"来源由我自己判断"）—— 否则不采用。
+    """
+    signed = bool((sig_text or "").strip())
+    if item.get("kind") == KIND_OFFICIAL:
+        if not signed:
+            return False, "官方词典缺少签名文件"
+        return verify(payload, sig_text, pubkey=item.get("pubkey") or pubkey)
+    if signed:
+        return verify(payload, sig_text, pubkey=item.get("pubkey") or None)
+    if not item.get("ack"):
+        return False, "这个源没有签名，来源也没确认过（在「词典源」里重新添加一次）"
+    return True, ""
+
+
+def _parse_terms(payload: bytes) -> Dict[str, str]:
+    """把词典 JSON 里的 terms 取出来（大小写、类型都过一遍）。"""
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except Exception as exc:                       # noqa: BLE001
+        logging.getLogger("ddo").warning("词典解析失败：%s", exc)
+        return {}
+    raw = data.get("terms", {}) if isinstance(data, dict) else {}
+    out: Dict[str, str] = {}
+    if isinstance(raw, dict):
+        for term, translation in raw.items():
+            if (isinstance(term, str) and isinstance(translation, str)
+                    and term.strip() and translation.strip()):
+                out[term] = translation
+    return out
+
+
+def _read_source_file(item: dict) -> Tuple[bytes, str]:
+    """读本地文件源：文件本身 + 同名 `.sig`（有就一起读，没有就是未签名）。"""
+    path = Path(str(item.get("path") or ""))
+    payload = _read_bytes(path)
+    if not payload:
+        return b"", ""
+    sig_path = Path("%s.sig" % path)
+    if sig_path.exists():
+        return payload, _read_bytes(sig_path).decode("utf-8", errors="replace")
+    return payload, ""
+
+
+def source_terms(item: dict) -> Dict[str, str]:
+    """读某个源当前的词条（不联网），带签名的顺手验一次，验不过当没有。
+
+    本地文件源**直接读文件**（改完就生效，不用等下一次检查）；网络源读下载缓存。
+    """
+    if item.get("kind") == KIND_FILE:
+        payload, sig_text = _read_source_file(item)
+    else:
+        path, sig_path = source_cache_paths(item)
+        payload = _read_bytes(path)
+        sig_text = _read_bytes(sig_path).decode("utf-8", errors="replace")
+    if not payload:
+        return {}
+    ok, reason = verify_source(item, payload, sig_text)
+    if not ok:
+        logging.getLogger("ddo").warning("词典源「%s」的缓存不可信，忽略：%s",
+                                         item.get("name"), reason)
+        return {}
+    return _parse_terms(payload)
+
+
 # ------------------------------------------------------------------ 本地缓存
 def _write_bytes(path: Path, data: bytes) -> bool:
     """原子写二进制（和 paths.write_json 一个套路：先写临时文件再替换）。"""
@@ -158,29 +311,32 @@ def cached() -> Tuple[Optional[bytes], str, float]:
     return payload, parsed.get("version", ""), when
 
 
-def load_terms() -> Dict[str, str]:
-    """当前可用的公共词条（只读缓存，不联网）。拿不到就返回空字典。"""
+def load_terms(config: Optional[dict] = None) -> Dict[str, str]:
+    """当前可用的公共词条（只读缓存，不联网）。
+
+    多个源按顺序叠加，**只做加法**：同一个词（归一化后）先出现的赢 ——
+    官方源排第一，用户自己加的源只能补前面没有的词，谁也覆盖不了谁。
+    """
     global _terms_cache
-    if _terms_cache is not None:
-        return _terms_cache
-    payload, _version, _when = cached()
+    items = [item for item in sources(config) if item.get("enabled")]
+    signature = "|".join("%s:%s:%s:%s" % (item["id"], item["kind"], item["url"],
+                                          item["path"]) for item in items)
+    if _terms_cache is not None and _terms_cache[0] == signature:
+        return _terms_cache[1]
     terms: Dict[str, str] = {}
-    if payload:
-        try:
-            data = json.loads(payload.decode("utf-8"))
-            raw = data.get("terms", {}) if isinstance(data, dict) else {}
-            if isinstance(raw, dict):
-                for term, translation in raw.items():
-                    if isinstance(term, str) and isinstance(translation, str):
-                        terms[term] = translation
-        except Exception as exc:
-            logging.getLogger("ddo").warning("公共词典解析失败：%s", exc)
-            terms = {}
+    seen = set()
+    for item in items:
+        for term, translation in source_terms(item).items():
+            key = term.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            terms[term] = translation
     disabled = disabled_terms()
     if disabled:
         terms = {term: zh for term, zh in terms.items()
                  if term.strip().lower() not in disabled}
-    _terms_cache = terms
+    _terms_cache = (signature, terms)
     return terms
 
 
@@ -253,21 +409,81 @@ def _fetch(url: str) -> bytes:
     return data
 
 
+def _state() -> dict:
+    """每个源上次什么时候成功/失败（写进 state.json，界面能显示"上次错误"）。"""
+    data = paths.read_json(SOURCE_STATE_PATH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _save_state(state: dict) -> None:
+    try:
+        paths.write_json(SOURCE_STATE_PATH, state)
+    except Exception:                              # noqa: BLE001
+        pass
+
+
+def _remember(item: dict, now: float, ok: bool, error: str = "",
+              digest: str = "") -> None:
+    state = _state()
+    info = state.get(item["id"])
+    info = dict(info) if isinstance(info, dict) else {}
+    info["last_try"] = now
+    info["name"] = str(item.get("name") or "")
+    if digest:
+        info["digest"] = digest
+    if ok:
+        info["last_ok"] = now
+        info["last_error"] = ""
+    else:
+        info["last_error"] = str(error or "")[:200]
+    state[item["id"]] = info
+    _save_state(state)
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def status(config: Optional[dict] = None) -> dict:
-    """给界面用的一份状态（不联网）。"""
+    """给界面用的一份状态（不联网）：总开关 + 每个源各自的条数/时间/上次错误。"""
     config = config or {}
-    payload, version, when = cached()
-    terms = load_terms()
+    state = _state()
+    rows = []
+    for item in sources(config):
+        if item.get("kind") == KIND_FILE:
+            stamp_path = Path(str(item.get("path") or ""))
+        else:
+            stamp_path, _sig_path = source_cache_paths(item)
+        info = state.get(item["id"])
+        info = info if isinstance(info, dict) else {}
+        terms = source_terms(item) if item.get("enabled") else {}
+        rows.append({
+            "id": item["id"], "name": item["name"], "kind": item["kind"],
+            "enabled": bool(item.get("enabled")),
+            "url": str(item.get("url") or ""), "path": str(item.get("path") or ""),
+            "terms": len(terms),
+            "updated_at": _mtime(stamp_path),
+            "last_ok": float(info.get("last_ok") or 0),
+            "last_try": float(info.get("last_try") or 0),
+            "error": str(info.get("last_error") or ""),
+        })
+    terms = load_terms(config)
+    _payload, version, _when = cached()
+    stamps = [row["updated_at"] for row in rows if row["updated_at"]]
     return {
         "enabled": bool(config.get("public_dict_enabled", True)),
-        "has_data": bool(payload),
+        "has_data": bool(terms),
         "version": version,
         "terms": len(terms),
-        "updated_at": when,
+        "updated_at": max(stamps) if stamps else 0.0,
         "url": effective_url(config),
         "interval_hours": int(config.get("public_dict_interval_hours", 6) or 6),
         "negatives": len(negatives()),        # 本机给公共词投过多少次否定票
         "disabled": len(disabled_terms()),    # 被本机停用的公共词
+        "sources": rows,
     }
 
 
@@ -340,86 +556,202 @@ def _rollout_gate(data: dict, now: Optional[float] = None) -> Tuple[bool, str]:
 
 
 def needs_sync(config: dict, now: Optional[float] = None) -> bool:
-    """距上次成功更新够久了没（失败后 30 分钟内不再试）。"""
+    """有没有哪个启用中的源该检查了（刚失败过的源 30 分钟内不再试）。"""
+    config = config or {}
     if not config.get("public_dict_enabled", True):
         return False
     now = time.time() if now is None else now
     if now - _last_attempt < RETRY_AFTER_FAILURE and not cached()[0]:
         return False
-    _payload, _version, when = cached()
     hours = float(config.get("public_dict_interval_hours", 6) or 6)
-    return (now - when) >= hours * 3600
+    state = _state()
+    for item in sources(config):
+        if not item.get("enabled"):
+            continue
+        info = state.get(item["id"])
+        info = info if isinstance(info, dict) else {}
+        last_ok = float(info.get("last_ok") or 0)
+        if not last_ok:
+            return True                       # 这个源还没成功过 → 该试
+        if now - last_ok >= hours * 3600:
+            return True
+    return False
+
+
+def _host(url: str) -> str:
+    try:
+        return urllib.parse.urlsplit(url).netloc or url
+    except Exception:                              # noqa: BLE001
+        return url
+
+
+def _fetch_source(item: dict, config: dict, fetch: Callable[[str], bytes]
+                  ) -> Tuple[bytes, str, str]:
+    """按源的类型拿内容，返回 (内容, 签名文本, 错误)。
+
+    官方源带镜像候选（主地址失败自动换备用地址）；用户加的网地址就认它自己那个。
+    """
+    if item.get("kind") == KIND_OFFICIAL:
+        primary = str(item.get("url") or "").strip() or effective_url(config)
+        urls = [primary] if MIRROR_URL == primary else [primary, MIRROR_URL]
+    else:
+        urls = [str(item.get("url") or "")]
+    reasons = []
+    for url in urls:
+        try:
+            payload = fetch(url)
+        except Exception as exc:                   # noqa: BLE001
+            reasons.append("%s：%s" % (_host(url), exc))
+            continue
+        try:
+            sig_text = fetch(url + ".sig").decode("utf-8", errors="replace")
+        except Exception:                          # noqa: BLE001
+            sig_text = ""
+        if item.get("kind") == KIND_OFFICIAL and not sig_text.strip():
+            reasons.append("%s：拿不到签名文件" % _host(url))
+            continue
+        return payload, sig_text, ""
+    return b"", "", "下载失败：%s" % "；".join(reasons)
+
+
+def _install_payload(item: dict, payload: bytes, sig_text: str,
+                     pubkey: Optional[str] = None) -> dict:
+    """验签 → 解析 → 灰度 → 写缓存。返回 {ok, updated, reason, terms...}。"""
+    ok, reason = verify_source(item, payload, sig_text, pubkey=pubkey)
+    if not ok:
+        return {"ok": False, "updated": False, "reason": reason}
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except Exception as exc:                       # noqa: BLE001
+        return {"ok": False, "updated": False,
+                "reason": "词典内容不是合法 JSON：%s" % exc}
+    if not isinstance(data, dict):
+        return {"ok": False, "updated": False, "reason": "词典内容格式不对"}
+    adopted, why = _rollout_gate(data)
+    if not adopted:
+        logging.getLogger("ddo").info("词典源「%s」暂缓采用：%s", item.get("name"), why)
+        return {"ok": True, "updated": False, "reason": why}
+    cache_path, sig_path = source_cache_paths(item)
+    if _read_bytes(cache_path) == payload:
+        return {"ok": True, "updated": False, "reason": "已经是最新的",
+                "terms": len(_parse_terms(payload))}
+    if not _write_bytes(cache_path, payload):
+        return {"ok": False, "updated": False, "reason": "写缓存失败（磁盘问题？）"}
+    if sig_text.strip():
+        _write_bytes(sig_path, sig_text.encode("utf-8"))
+    else:
+        try:
+            sig_path.unlink()                      # 没签名的源不留旧签名
+        except OSError:
+            pass
+    invalidate()
+    return {"ok": True, "updated": True, "reason": "已更新",
+            "version": str(data.get("version") or ""),
+            "terms": len(_parse_terms(payload))}
+
+
+def sync_source(item: dict, config: Optional[dict] = None,
+                fetcher: Optional[Callable[[str], bytes]] = None,
+                force: bool = False, pubkey: Optional[str] = None,
+                now: Optional[float] = None) -> dict:
+    """拉一个源。失败只影响这个源，返回状态字典，绝不抛异常。"""
+    config = config or {}
+    now = time.time() if now is None else now
+    out = {"id": item.get("id"), "name": item.get("name") or item.get("id"),
+           "kind": item.get("kind"), "ok": False, "checked": False,
+           "updated": False, "reason": "", "terms": 0, "version": ""}
+    if not item.get("enabled"):
+        out.update({"ok": True, "reason": "已停用"})
+        return out
+
+    info = _state().get(item["id"])
+    info = info if isinstance(info, dict) else {}
+    if not force:
+        last_try = float(info.get("last_try") or 0)
+        last_ok = float(info.get("last_ok") or 0)
+        if info.get("last_error") and now - last_try < RETRY_AFTER_FAILURE:
+            out.update({"ok": True, "reason": "上次没成功，过一会儿再试"})
+            return out
+        hours = float(config.get("public_dict_interval_hours", 6) or 6)
+        if last_ok and now - last_ok < hours * 3600:
+            out.update({"ok": True, "reason": "还没到下次检查时间"})
+            return out
+
+    out["checked"] = True
+    if item.get("kind") == KIND_FILE:
+        payload, sig_text = _read_source_file(item)
+        if not payload:
+            out["reason"] = "读不到文件：%s" % item.get("path")
+            _remember(item, now, False, out["reason"])
+            return out
+        ok, reason = verify_source(item, payload, sig_text)
+        if not ok:
+            out["reason"] = reason
+            _remember(item, now, False, reason)
+            return out
+        digest = hashlib.sha256(payload).hexdigest()
+        updated = digest != str(info.get("digest") or "")
+        out.update({"ok": True, "updated": updated,
+                    "terms": len(_parse_terms(payload)),
+                    "reason": "已读取" if updated else "没有变化"})
+        _remember(item, now, True, digest=digest)
+        return out
+    else:
+        fetch = fetcher or _fetch
+        payload, sig_text, error = _fetch_source(item, config, fetch)
+        if error:
+            out["reason"] = error
+            _remember(item, now, False, error)
+            logging.getLogger("ddo").info("词典源「%s」%s", out["name"], error)
+            return out
+        result = _install_payload(item, payload, sig_text, pubkey=pubkey)
+
+    out.update(result)
+    _remember(item, now, bool(result.get("ok")),
+              "" if result.get("ok") else str(result.get("reason") or ""))
+    if not result.get("ok"):
+        logging.getLogger("ddo").warning("词典源「%s」没更新：%s",
+                                         out["name"], result.get("reason"))
+    return out
 
 
 def sync(config: Optional[dict] = None,
          fetcher: Optional[Callable[[str], bytes]] = None,
          force: bool = False,
          pubkey: Optional[str] = None) -> dict:
-    """拉一次公共词典并更新缓存。
+    """把所有启用中的源各拉一次，逐源更新缓存。
 
-    fetcher / pubkey 可以注入（测试用）；返回一份状态字典，绝不抛异常。
+    任何一个源失败都不影响别的源（这是多源的意义）；返回一份状态字典，绝不抛异常。
+    fetcher / pubkey 可以注入（测试用）。
     """
     global _last_attempt
     config = config or {}
-    url = effective_url(config)
     out = status(config)
-    out.update({"ok": False, "updated": False, "reason": ""})
+    out.update({"ok": True, "updated": False, "reason": "", "sources": []})
     if not config.get("public_dict_enabled", True):
+        out["ok"] = False
         out["reason"] = "设置里关掉了公共词典"
         return out
     _last_attempt = time.time()
     if not force and not needs_sync(config):
-        out["ok"] = True
         out["reason"] = "还没到下次检查时间"
         return out
-    fetch = fetcher or _fetch
-    payload = b""
-    sig_text = ""
-    reasons = []
-    for candidate in url_candidates(config):
-        try:
-            payload = fetch(candidate)
-            sig_text = fetch(candidate + ".sig").decode("utf-8", errors="replace")
-            break
-        except Exception as exc:                       # noqa: BLE001
-            reasons.append("%s → %s" % (candidate.split("/")[2], exc))
-            payload, sig_text = b"", ""
-    if not payload:
-        out["reason"] = "下载失败：%s" % "；".join(reasons) if reasons else "下载失败"
-        logging.getLogger("ddo").info("公共词典下载失败（用缓存/内置）：%s",
-                                      "；".join(reasons))
-        return out
-    ok, reason = verify(payload, sig_text, pubkey=pubkey)
-    if not ok:
-        out["reason"] = reason
-        logging.getLogger("ddo").warning("公共词典验签失败，丢弃：%s", reason)
-        return out
-    try:
-        incoming = json.loads(payload.decode("utf-8"))
-    except Exception as exc:                          # noqa: BLE001
-        out["reason"] = "词典内容不是合法 JSON：%s" % exc
-        return out
-    if not isinstance(incoming, dict):
-        out["reason"] = "词典内容格式不对"
-        return out
-    adopted, why = _rollout_gate(incoming)
-    if not adopted:
-        out.update({"ok": True, "reason": why})
-        logging.getLogger("ddo").info("公共词典暂缓采用：%s", why)
-        return out
-    old_terms = cached()[0]
-    if old_terms == payload:
-        out.update({"ok": True, "reason": "已经是最新的"})
-        return out
-    if not (_write_bytes(CACHE_PATH, payload) and _write_bytes(CACHE_SIG_PATH,
-                                                              sig_text.encode("utf-8"))):
-        out["reason"] = "写缓存失败（磁盘问题？）"
-        return out
-    invalidate()
+    results = [sync_source(item, config, fetcher, force, pubkey)
+               for item in sources(config)]
+    out["sources"] = results
+    checked = [row for row in results if row.get("checked")]
+    failed = [row for row in checked if not row.get("ok")]
+    updated = [row for row in results if row.get("updated")]
+    out["updated"] = bool(updated)
+    out["ok"] = not failed
+    if failed:
+        out["reason"] = "；".join("%s：%s" % (row["name"], row["reason"])
+                                  for row in failed)
+    elif updated:
+        out["reason"] = "已更新：" + "、".join(row["name"] for row in updated)
+    else:
+        out["reason"] = "已经是最新的" if checked else "没有需要检查的源"
     fresh = status(config)
-    out.update({"ok": True, "updated": True,
-                "version": fresh["version"], "terms": fresh["terms"],
-                "updated_at": fresh["updated_at"], "reason": "已更新"})
-    logging.getLogger("ddo").info("公共词典已更新：版本 %s，%d 条",
-                                  fresh["version"], fresh["terms"])
+    for key in ("version", "terms", "updated_at", "has_data"):
+        out[key] = fresh[key]
     return out

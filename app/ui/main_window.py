@@ -1265,15 +1265,18 @@ class MainWindow:
         manual = bool(event.get("manual"))
         if result.get("updated"):
             self.rebuild_glossary()
-            self.set_status("公共词典已更新（版本 %s，共 %d 条）"
-                            % (result.get("version") or "?", result.get("terms", 0)),
-                            "ok")
+            names = [row.get("name") for row in (result.get("sources") or [])
+                     if row.get("updated")]
+            detail = ("、".join(names[:3]) if names
+                      else "版本 %s" % (result.get("version") or "?"))
+            self.set_status("词典已更新：%s（合计 %d 条）"
+                            % (detail, result.get("terms", 0)), "ok")
         elif result.get("ok"):
             if manual:
-                self.set_status("公共词典已经是最新的（%d 条）" % result.get("terms", 0),
-                                "ok")
+                self.set_status("词典源已经是最新的（合计 %d 条）"
+                                % result.get("terms", 0), "ok")
         elif manual:
-            self.set_status("公共词典更新失败：%s" % (result.get("reason") or "未知原因"),
+            self.set_status("词典源更新失败：%s" % (result.get("reason") or "未知原因"),
                             "warn")
 
     def open_agreement(self) -> None:
