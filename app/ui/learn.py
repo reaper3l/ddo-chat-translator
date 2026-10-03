@@ -400,6 +400,8 @@ class DictionaryDialog:
                                  time.localtime(status["updated_at"] or 0))
             text = "公共词典：%d 条，更新于 %s（每 %d 小时检查一次）" % (
                 status["terms"], when, status["interval_hours"])
+            if status.get("disabled"):
+                text += "；本机已停用 %d 条（你改过译法的）" % status["disabled"]
         self.public_label.configure(text=text)
 
     def _save_public_switch(self) -> None:

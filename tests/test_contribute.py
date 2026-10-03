@@ -222,3 +222,43 @@ def test_report_text_mentions_gates_and_alerts():
     assert "公共词典候选报告" in text
     assert "rez plz = 复活我" in text
     assert "门槛" in text
+
+
+# ------------------------------------------------------- 否定票（自保护闭环）
+def test_payload_carries_negative_votes():
+    """本机给公共词投过的否定票要跟着贡献一起发出去。"""
+    with _TempState():
+        from app import public_dict
+
+        old_path = public_dict.NEGATIVE_PATH
+        try:
+            public_dict.NEGATIVE_PATH = contribute.STATE_PATH.parent / "neg.json"
+            public_dict._terms_cache = {"rez plz": "复活我"}
+            public_dict.record_negative("rez plz", "快救我")
+            payload = contribute.build_payload({"terms": [], "phrases": []})
+            assert payload["negatives"] == ["rez plz"]
+            code = contribute.encode_code(payload)
+            assert contribute.decode_code(code)["negatives"] == ["rez plz"]
+        finally:
+            public_dict.NEGATIVE_PATH = old_path
+            public_dict._terms_cache = None
+
+
+def test_aggregate_reports_terms_to_retire():
+    """多个不同用户改了同一个公共词 → 建议下架。"""
+    records = []
+    for i in range(3):
+        row = _record("u%d" % i)
+        row["negatives"] = ["rez plz"]
+        records.append(row)
+    records.append({**_record("u9"), "negatives": ["bad word!"]})   # 形态非法 → 不收
+    result = contribute.aggregate(records)
+    assert result["retire"] == {"rez plz": 3}
+    text = contribute.report_text(result)
+    assert "建议下架" in text and "rez plz" in text
+
+
+def test_aggregate_ignores_lone_negative_vote():
+    """只有一个人改过 → 不改公共库（可能是他自己的口癖）。"""
+    result = contribute.aggregate([{**_record("solo"), "negatives": ["rez plz"]}])
+    assert result["retire"] == {}

@@ -10,6 +10,7 @@ import hashlib
 import json
 import secrets
 import tempfile
+import time
 from pathlib import Path
 
 from app import ed25519, glossary, paths, public_dict, update
@@ -54,10 +55,12 @@ class _TempCache:
 
     def __enter__(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="ddo-dict-test-"))
-        self.old = (public_dict.CACHE_PATH, public_dict.CACHE_SIG_PATH)
+        self.old = (public_dict.CACHE_PATH, public_dict.CACHE_SIG_PATH,
+                    public_dict.NEGATIVE_PATH)
         self.old_pubkeys = update.pubkeys
         public_dict.CACHE_PATH = self.tmp / "public_glossary.json"
         public_dict.CACHE_SIG_PATH = self.tmp / "public_glossary.json.sig"
+        public_dict.NEGATIVE_PATH = self.tmp / "negatives.json"
         if self.pubkey:
             update.pubkeys = lambda text=None: [self.pubkey]
         public_dict.invalidate()
@@ -65,7 +68,8 @@ class _TempCache:
         return self.tmp
 
     def __exit__(self, *_exc):
-        public_dict.CACHE_PATH, public_dict.CACHE_SIG_PATH = self.old
+        (public_dict.CACHE_PATH, public_dict.CACHE_SIG_PATH,
+         public_dict.NEGATIVE_PATH) = self.old
         update.pubkeys = self.old_pubkeys
         public_dict.invalidate()
         public_dict._last_attempt = 0.0
@@ -204,6 +208,53 @@ def test_corrupted_cache_is_ignored():
         (tmp / "public_glossary.json").write_bytes(_payload({"brandnew": "改了"}))
         public_dict.invalidate()
         assert public_dict.load_terms() == {}
+
+
+# ---------------------------------------------------------------- 灰度发布
+def test_rollout_gate_defers_outsiders_then_adopts_after_window():
+    """灰度：不在首批的用户先不动，观察窗口结束后自动采用。"""
+    data = {"batch": 3, "updated": "2026-10-03 12:00",
+            "rollout": {"percent": 5, "hold_hours": 48}}
+    start = time.mktime(time.strptime("2026-10-03 12:00", "%Y-%m-%d %H:%M"))
+    old_bucket = public_dict._install_bucket
+    try:
+        public_dict._install_bucket = lambda batch: 50      # 不在前 5% 里
+        adopted, why = public_dict._rollout_gate(data, now=start + 60)
+        assert not adopted and "灰度中" in why
+        adopted, _why = public_dict._rollout_gate(data, now=start + 49 * 3600)
+        assert adopted
+        public_dict._install_bucket = lambda batch: 1       # 属于首批
+        adopted, _why = public_dict._rollout_gate(data, now=start + 60)
+        assert adopted
+        # 没写 rollout（或者 100%）→ 一律立刻采用
+        assert public_dict._rollout_gate({"batch": 3}, now=start)[0]
+        assert public_dict._rollout_gate(
+            {"rollout": {"percent": 100, "hold_hours": 48}}, now=start)[0]
+    finally:
+        public_dict._install_bucket = old_bucket
+
+
+# ------------------------------------------------------------ 本机自保护
+def test_negative_votes_disable_a_public_term_locally():
+    """用户把公共词改成自己的译法 → 本机记票，攒够了就在本机停用它。"""
+    seed, pub = _keypair()
+    payload = _payload({"rez plz": "复活我", "pop": "位面监狱"})
+    with _TempCache(pub) as tmp:
+        public_dict.NEGATIVE_PATH = tmp / "negatives.json"
+        public_dict.sync({"public_dict_enabled": True},
+                         fetcher=_fetcher(payload, _signed(payload, seed)),
+                         force=True, pubkey=pub)
+        assert set(public_dict.load_terms()) == {"rez plz", "pop"}
+
+        assert public_dict.record_negative("rez plz", "快救我") == 1
+        assert "rez plz" in public_dict.load_terms()          # 一次还不至于停用
+        assert public_dict.record_negative("rez plz", "快救我") == 2
+        assert "rez plz" not in public_dict.load_terms()      # 达到门槛 → 本机停用
+        assert public_dict.negatives()["rez plz"] == 2
+
+        # 译法和公共库一样、或者根本不是公共词 → 不记票
+        assert public_dict.record_negative("pop", "位面监狱") == 0
+        assert public_dict.record_negative("never seen", "随便") == 0
 
 
 # ------------------------------------------------------------------ 分层

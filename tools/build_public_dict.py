@@ -46,6 +46,12 @@ def main() -> int:
     parser.add_argument("--add", action="append", default=[],
                         help="额外并入的词表文件（可多次；JSON，形如 {'terms': {...}}）")
     parser.add_argument("--batch", type=int, default=0, help="批次号（默认自动 +1）")
+    parser.add_argument("--retire", action="append", default=[],
+                        help="要下架的词表文件（聚合脚本产出的「建议下架.json」）")
+    parser.add_argument("--rollout", type=int, default=100,
+                        help="灰度百分比：新批次先只对这么比例的用户生效（默认 100 = 全量）")
+    parser.add_argument("--hold-hours", type=float, default=0,
+                        help="灰度观察时长（小时）：窗口结束后所有客户端都会采用（默认 0）")
     parser.add_argument("--key", default=str(DEFAULT_KEY_FILE), help="发布私钥路径")
     args = parser.parse_args()
 
@@ -63,6 +69,22 @@ def main() -> int:
         print("并入 %s：%d 条（同名的覆盖）" % (extra, len(incoming)))
         terms.update(incoming)
 
+    retired = []
+    for path in args.retire:
+        data = paths.read_json(Path(path), {}) or {}
+        names = data.get("retire") or data.get("terms") or []
+        if isinstance(names, dict):
+            names = list(names)
+        for name in names:
+            key = str(name)
+            for existing in list(terms):
+                if existing.strip().lower() == key.strip().lower():
+                    terms.pop(existing)
+                    retired.append(key)
+                    break
+    if retired:
+        print("下架 %d 条：%s" % (len(retired), "、".join(retired[:10])))
+
     old = paths.read_json(target, {}) or {}
     old_batch = int(old.get("batch", 0) or 0)
     batch = args.batch or (old_batch + 1)
@@ -73,6 +95,8 @@ def main() -> int:
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "note": "公共词典：由作者整理/发布。只用于补充内置表里没有的词，不覆盖内置表，"
                 "也不会覆盖用户自己的词。",
+        "rollout": {"percent": max(0, min(100, int(args.rollout))),
+                    "hold_hours": max(0.0, float(args.hold_hours))},
         "terms": dict(sorted(terms.items())),
     }
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False)

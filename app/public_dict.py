@@ -40,6 +40,10 @@ RETRY_AFTER_FAILURE = 30 * 60        # 本次失败后 30 分钟内不再重试
 
 CACHE_PATH = paths.DATA_DIR / "public_glossary.json"
 CACHE_SIG_PATH = paths.DATA_DIR / "public_glossary.json.sig"
+NEGATIVE_PATH = paths.DATA_DIR / "public_dict_negatives.json"
+
+# 同一个公共词被用户自己改了这么多次 → 本机先停用它（不影响别人）
+DISABLE_AFTER_NEGATIVES = 2
 
 _terms_cache: Optional[Dict[str, str]] = None
 _last_attempt = 0.0
@@ -168,8 +172,65 @@ def load_terms() -> Dict[str, str]:
         except Exception as exc:
             logging.getLogger("ddo").warning("公共词典解析失败：%s", exc)
             terms = {}
+    disabled = disabled_terms()
+    if disabled:
+        terms = {term: zh for term, zh in terms.items()
+                 if term.strip().lower() not in disabled}
     _terms_cache = terms
     return terms
+
+
+# ---------------------------------------------------------- 本机自保护（否定票）
+def _load_negatives() -> dict:
+    data = paths.read_json(NEGATIVE_PATH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def negatives() -> Dict[str, int]:
+    """本机记录下来的"某个公共词被用户改掉"的次数。"""
+    data = _load_negatives()
+    out = {}
+    for term, item in data.items():
+        if isinstance(item, dict):
+            out[str(term)] = int(item.get("neg", 0) or 0)
+    return out
+
+
+def disabled_terms() -> set:
+    """本机已停用的公共词（被用户反复改掉的）。"""
+    return {term.strip().lower() for term, count in negatives().items()
+            if count >= DISABLE_AFTER_NEGATIVES}
+
+
+def record_negative(term: str, user_zh: str = "") -> int:
+    """用户自己给某个公共词换了译法 → 记一张否定票（只记在本机）。
+
+    累计到 DISABLE_AFTER_NEGATIVES 次就在**这台机器**上停用该词（不影响其他人），
+    下次贡献时会把这张否决票一起发给作者，用来把不合用的词从公共库里退掉。
+    返回这个条目当前的否定票数。
+    """
+    key = str(term or "").strip()
+    if not key:
+        return 0
+    public_terms = load_terms()
+    mine = public_terms.get(key) or public_terms.get(key.lower())
+    if not mine:
+        for candidate, zh in public_terms.items():       # 大小写不敏感地找一遍
+            if candidate.strip().lower() == key.lower():
+                mine, key = zh, candidate
+                break
+    if not mine:
+        return 0                                          # 不是公共词，不关这事
+    if user_zh and user_zh.strip() == str(mine).strip():
+        return 0                                          # 译法和公共库一样，不算否定
+    data = _load_negatives()
+    item = data.get(key) if isinstance(data.get(key), dict) else {}
+    count = int(item.get("neg", 0) or 0) + 1
+    data[key] = {"neg": count, "last": time.strftime("%Y-%m-%d %H:%M"),
+                 "public": str(mine)[:40], "mine": str(user_zh)[:40]}
+    paths.write_json(NEGATIVE_PATH, data)
+    invalidate()                                          # 可能刚好达到停用门槛
+    return count
 
 
 def invalidate() -> None:
@@ -201,6 +262,8 @@ def status(config: Optional[dict] = None) -> dict:
         "updated_at": when,
         "url": effective_url(config),
         "interval_hours": int(config.get("public_dict_interval_hours", 6) or 6),
+        "negatives": len(negatives()),        # 本机给公共词投过多少次否定票
+        "disabled": len(disabled_terms()),    # 被本机停用的公共词
     }
 
 
@@ -208,6 +271,59 @@ def effective_url(config: Optional[dict] = None) -> str:
     """实际使用的地址：配置里填了就用配置的（方便换镜像），否则用内置默认。"""
     config = config or {}
     return str(config.get("public_dict_url") or "").strip() or DEFAULT_URL
+
+
+def _install_bucket(batch: str) -> int:
+    """本机在灰度分桶里的位置（0~99）。
+
+    用匿名安装 ID + 批次号算哈希：同一个人对同一批的归属是稳定的，
+    不同批次之间又是打散的（不会总是同一批用户先拿到）。
+    """
+    try:
+        from . import contribute
+
+        uid = contribute.install_uid()
+    except Exception:
+        uid = "anonymous"
+    digest = hashlib.sha256(("%s\x1f%s" % (uid, batch)).encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % 100
+
+
+def _rollout_gate(data: dict, now: Optional[float] = None) -> Tuple[bool, str]:
+    """灰度判定：这一批要不要现在就对本机生效。
+
+    * `rollout.percent >= 100` 或没写 → 全量，直接生效；
+    * 否则先只放给一部分用户；**观察窗口结束**（updated + hold_hours）后所有客户端都会采用
+      —— 客户端不需要服务端配合，靠文件里的时间自己判断。
+    """
+    rollout = data.get("rollout") if isinstance(data, dict) else None
+    if not isinstance(rollout, dict):
+        return True, ""
+    try:
+        percent = int(rollout.get("percent", 100) or 100)
+        hold_hours = float(rollout.get("hold_hours", 0) or 0)
+    except (TypeError, ValueError):
+        return True, ""
+    if percent >= 100 or hold_hours <= 0:
+        return True, ""
+    updates = str(data.get("updated") or "")
+    when = None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            when = time.mktime(time.strptime(updates, fmt))
+            break
+        except ValueError:
+            continue
+    now = time.time() if now is None else now
+    if when is not None and now >= when + hold_hours * 3600:
+        return True, ""                       # 观察窗口结束 → 全量采用
+    batch = str(data.get("batch", ""))
+    if _install_bucket(batch) < max(0, percent):
+        return True, ""                       # 本机在首批里
+    wait = 0.0
+    if when is not None:
+        wait = max(0.0, (when + hold_hours * 3600 - now) / 3600.0)
+    return False, "灰度中（本机不在首批，约 %.0f 小时后自动采用）" % wait
 
 
 def needs_sync(config: dict, now: Optional[float] = None) -> bool:
@@ -255,6 +371,19 @@ def sync(config: Optional[dict] = None,
     if not ok:
         out["reason"] = reason
         logging.getLogger("ddo").warning("公共词典验签失败，丢弃：%s", reason)
+        return out
+    try:
+        incoming = json.loads(payload.decode("utf-8"))
+    except Exception as exc:                          # noqa: BLE001
+        out["reason"] = "词典内容不是合法 JSON：%s" % exc
+        return out
+    if not isinstance(incoming, dict):
+        out["reason"] = "词典内容格式不对"
+        return out
+    adopted, why = _rollout_gate(incoming)
+    if not adopted:
+        out.update({"ok": True, "reason": why})
+        logging.getLogger("ddo").info("公共词典暂缓采用：%s", why)
         return out
     old_terms = cached()[0]
     if old_terms == payload:

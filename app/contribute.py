@@ -197,6 +197,20 @@ def collect_items(memory, include_sent: bool = False) -> dict:
     return {"terms": terms, "phrases": phrases, "skipped": skipped}
 
 
+def collect_negatives(limit: int = 60) -> List[str]:
+    """本机给公共词典投过的"否定票"（用户把某个公共词改成了别的译法）。
+
+    发给作者后，被多个用户否掉的词会从公共词典里退掉 —— 这样公共库能靠用户纠错自我净化。
+    """
+    try:
+        from . import public_dict
+
+        items = sorted(public_dict.negatives().items(), key=lambda kv: -kv[1])
+        return [term for term, _count in items[:limit]]
+    except Exception:
+        return []
+
+
 def mark_sent(items: Iterable[dict]) -> None:
     """记下已经贡献过的条目，避免每次重复发送。"""
     state = _load_state()
@@ -218,6 +232,7 @@ def build_payload(items: dict, version: str = "") -> dict:
         "time": time.strftime("%Y-%m-%d"),
         "terms": [{"t": i["source"], "z": i["zh"]} for i in items.get("terms", [])],
         "phrases": [{"t": i["source"], "z": i["zh"]} for i in items.get("phrases", [])],
+        "negatives": collect_negatives(),
     }
 
 
@@ -246,6 +261,9 @@ def decode_code(code: str) -> Optional[dict]:
         rows = data.get(key)
         data[key] = [r for r in rows if isinstance(r, dict) and r.get("t") and r.get("z")] \
             if isinstance(rows, list) else []
+    rows = data.get("negatives")
+    data["negatives"] = [str(r) for r in rows if isinstance(r, str)] \
+        if isinstance(rows, list) else []
     return data
 
 
@@ -315,6 +333,7 @@ DEFAULT_GATES = {
     "phrase_min_users": 8,     # 整句要求更严（而且只出报告）
     "phrase_min_count": 20,
     "phrase_min_consistency": 0.9,
+    "min_negative_users": 3,   # 多少个不同用户把同一个公共词改掉 → 建议从公共库下架
     "max_new_per_run": 30,     # 单批新增超过这个数 → 报警，停下来等人看
     "max_single_user_share_alert": 0.5,
 }
@@ -347,6 +366,7 @@ def aggregate(records: Iterable[dict], gates: Optional[dict] = None,
     # 术语 → 译法 → 每个匿名 ID 提交了几次
     term_votes: Dict[str, Dict[str, Dict[str, int]]] = {}
     phrase_votes: Dict[str, Dict[str, Dict[str, int]]] = {}
+    negative_users: Dict[str, set] = {}
     user_totals: Dict[str, int] = {}
     rejected: List[dict] = []
 
@@ -362,6 +382,10 @@ def aggregate(records: Iterable[dict], gates: Optional[dict] = None,
             key = source.strip().lower()
             by_uid = phrase_votes.setdefault(key, {}).setdefault(translation, {})
             by_uid[uid] = by_uid.get(uid, 0) + 1
+        for term in payload.get("negatives") or []:
+            key = str(term).strip().lower()
+            if TERM_SOURCE_RE.match(key):        # 只收形态合法的词，挡掉塞进来的句子/广告
+                negative_users.setdefault(key, set()).add(uid)
 
     def pick(votes: Dict[str, Dict[str, int]], min_users: int, min_count: int,
              min_consistency: float, max_share: float) -> Tuple[Optional[str], dict]:
@@ -417,6 +441,10 @@ def aggregate(records: Iterable[dict], gates: Optional[dict] = None,
             phrase_candidates[key] = translation
 
     alerts: List[str] = []
+    retire = {term: len(users) for term, users in sorted(negative_users.items())
+              if len(users) >= int(gate["min_negative_users"])}
+    if len(retire) > 10:
+        alerts.append("本批建议下架 %d 条词（有人集中改同一批词？），建议先看一眼。" % len(retire))
     if len(candidates) > int(gate["max_new_per_run"]):
         alerts.append("本批新增 %d 条，超过上限 %d —— 可能有人在刷，建议先别推。"
                       % (len(candidates), int(gate["max_new_per_run"])))
@@ -436,6 +464,8 @@ def aggregate(records: Iterable[dict], gates: Optional[dict] = None,
         "details": details,
         "phrase_details": phrase_details,
         "rejected": rejected,
+        "negatives": {term: len(users) for term, users in sorted(negative_users.items())},
+        "retire": retire,
         "alerts": alerts,
         "contributors": len(user_totals),
         "records": len(list(records)) if not isinstance(records, list) else len(records),
@@ -474,4 +504,13 @@ def report_text(result: dict, gates: Optional[dict] = None) -> str:
     lines.append("【整句纠错候选（只供参考）】")
     for source, translation in sorted(result.get("phrases", {}).items())[:40]:
         lines.append("  %s → %s" % (source, translation))
+    lines.append("")
+    lines.append("【建议下架（%d 个以上不同用户把同一个公共词改掉了）】" % gate["min_negative_users"])
+    retire = result.get("retire") or {}
+    if retire:
+        for term, users in sorted(retire.items(), key=lambda kv: -kv[1]):
+            lines.append("  %s（%d 人改过）" % (term, users))
+        lines.append("  → 想下架就用：python tools\\build_public_dict.py --retire 建议下架.json")
+    else:
+        lines.append("  （无）")
     return "\n".join(lines)

@@ -150,6 +150,11 @@ def main() -> int:
         encoding="utf-8")
     report = contribute.report_text(result, gates=gates)
     (out_dir / "报告.md").write_text(report, encoding="utf-8")
+    retire = result.get("retire") or {}
+    if retire:
+        (out_dir / "建议下架.json").write_text(
+            json.dumps({"retire": sorted(retire)}, ensure_ascii=False, indent=2),
+            encoding="utf-8")
 
     print(report)
     print("")
@@ -159,6 +164,10 @@ def main() -> int:
         print("  python tools\\build_public_dict.py --add \"%s\""
               % (out_dir / "候选术语.json"))
         print("  powershell -ExecutionPolicy Bypass -File ..\\work\\push_dict_branch.ps1")
+    if retire:
+        print("\n有 %d 条词被多个用户改掉，建议下架（已写进 建议下架.json）：" % len(retire))
+        print("  python tools\\build_public_dict.py --retire \"%s\""
+              % (out_dir / "建议下架.json"))
     if result["alerts"]:
         print("\n有报警项 —— 建议先看一眼报告，确认没问题再推。")
         return 3

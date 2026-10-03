@@ -170,6 +170,14 @@ class MemoryStore:
         zh = (zh or "").strip()
         if not term or not zh:
             return
+        # 本机自保护：如果这是"公共词典"里的词、而用户给了不一样的译法，
+        # 记一张否定票（改到几次就在本机停用它；下次贡献时把票带给作者）。
+        try:
+            from . import public_dict
+
+            public_dict.record_negative(term, zh)
+        except Exception:
+            pass
         key = term.lower()
         previous = self._terms.get(key, {})
         self._terms[key] = {
