@@ -45,7 +45,9 @@ def test_text_is_readable_and_covers_key_points():
     for keyword in ("第三方", "服务条款", "API", "担保",
                     "著作权", "签名公钥", "不同意",
                     # 联网与"参与改进"必须写清楚（默认关、只发确认过的、能预览）
-                    "公共词典", "参与改进", "默认关闭", "匿名", "预览"):
+                    "公共词典", "参与改进", "默认关闭", "匿名", "预览",
+                    # v3 起：开启后默认"关程序时自动发"，这条必须写明（否则等于没说）
+                    "关闭程序时自动发送", "直接上传"):
         assert keyword in body, keyword
     # Tk 文本框不认 Markdown，正文里不该出现 ** 这种标记
     assert "**" not in body

@@ -51,6 +51,12 @@ class ContributionDialog:
                         variable=self.enabled,
                         command=self._save_switch).pack(anchor="w", pady=(6, 2))
 
+        self.auto_send = tk.BooleanVar(
+            value=bool(self.app.config.get("contribute_auto_send", True)))
+        ttk.Checkbutton(
+            box, text="关闭程序时自动上传（不勾 = 只在我点「直接上传」时发）",
+            variable=self.auto_send, command=self._save_switch).pack(anchor="w")
+
         theme.label(
             box,
             "只发送：你按 F10 改过的句子、以及你自己在词典里加的术语。\n"
@@ -84,9 +90,15 @@ class ContributionDialog:
     # ------------------------------------------------------------------ 行为
     def _save_switch(self) -> None:
         self.app.config["contribute_enabled"] = bool(self.enabled.get())
+        self.app.config["contribute_auto_send"] = bool(self.auto_send.get())
         config_module.save_config(self.app.config)
         self.refresh()
-        self.status.set("已%s参与改进" % ("开启" if self.enabled.get() else "关闭"))
+        if not self.enabled.get():
+            self.status.set("已关闭参与改进（什么都不发）")
+        elif self.auto_send.get():
+            self.status.set("已开启：关程序时会自动上传新确认的内容；也可以随时手动发")
+        else:
+            self.status.set("已开启，但只在你点「直接上传」时发送")
 
     def refresh(self) -> None:
         self.items = contribute.collect_items(self.app.memory)
@@ -207,12 +219,14 @@ class ContributionInviteDialog:
             "· 你自己在词典里加的术语。\n\n"
             "原始聊天内容不会上传；发送前会在本机去掉链接、邮箱、连续数字，\n"
             "并跳过带玩家名的聊天行。发之前可以先预览，随时能关掉。\n\n"
+            "同意之后：关闭程序时会自动把这些内容发出去（不用每次手动点），\n"
+            "也可以在那个窗口里取消「自动上传」，改成只手动发。\n\n"
             "现在是关着的：不点下面的按钮，什么都不会发。",
             muted=True, justify="left").pack(anchor="w", pady=(8, 0))
 
         row = ttk.Frame(self.window)
         row.pack(fill="x", padx=14, pady=(6, 12))
-        ttk.Button(row, text="愿意，去设置", style="Accent.TButton",
+        ttk.Button(row, text="愿意，按这个来", style="Accent.TButton",
                    command=self.accept).pack(side="left")
         ttk.Button(row, text="以后再说", command=self.later).pack(side="left", padx=8)
         ttk.Button(row, text="不再提醒", command=self.never).pack(side="left")
@@ -220,8 +234,9 @@ class ContributionInviteDialog:
 
     # ------------------------------------------------------------------ 动作
     def accept(self) -> None:
-        """用户点了"愿意"：这时才打开开关，并打开贡献窗口。"""
+        """用户点了"愿意"：这时才打开开关（含关闭时自动上传），并打开贡献窗口。"""
         self.app.config["contribute_enabled"] = True
+        self.app.config["contribute_auto_send"] = True
         self._mark(version=__version__)
         self.window.destroy()
         callback = self.on_accept or self.app.open_contribution

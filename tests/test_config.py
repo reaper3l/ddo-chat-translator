@@ -23,6 +23,7 @@ def test_boolean_switches_used_by_settings_exist():
         "cn2en_auto_suggest", "cn2en_clear_after",
         "flatten_background", "ocr_det_cap",
         "public_dict_enabled", "contribute_enabled", "contribute_invite_done",
+        "contribute_auto_send",
         "check_update",
     )
     for key in switches:

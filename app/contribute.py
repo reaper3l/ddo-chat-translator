@@ -324,6 +324,70 @@ def send(payload: dict, url: str,
         return False, "发送失败：%s" % exc
 
 
+def auto_send(memory, config: Optional[dict] = None, version: str = "",
+              poster: Optional[Callable[[str, bytes], bool]] = None
+              ) -> Tuple[bool, str, int]:
+    """关程序时自动把"这次新确认过的内容"发出去。
+
+    只有用户在「参与改进」里开着这个功能、也没取消"自动上传"时才会被调用。
+    返回 (是否发出去, 说明, 这次有几条内容)。
+
+    三条注意：
+    * 没有新内容 → 立刻返回，**不联网也不等待**（常见情况，关窗口不会变慢）；
+    * 失败不标记已发送（`mark_sent` 只在成功后调用）→ 下次还有机会补发；
+    * 结果记在本机台账里，下次启动可以提示"上次没发出去"。
+    """
+    config = config or {}
+    url = str(config.get("contribute_url") or "").strip()
+    items = collect_items(memory)
+    count = len(items.get("terms", [])) + len(items.get("phrases", []))
+    if not count and not collect_negatives():
+        return True, "没有新内容", 0
+    if not url:
+        _remember_auto(False, "没有配置接收地址（可以先复制贡献码手动发）")
+        return False, "没有配置接收地址", count
+    payload = build_payload(items, version=version)
+    ok, reason = send(payload, url, poster=poster)
+    if ok:
+        mark_sent(list(items.get("terms", [])) + list(items.get("phrases", [])))
+        _remember_auto(True, "", count)
+        logging.getLogger("ddo").info("退出前自动上传了 %d 条改进内容", count)
+    else:
+        _remember_auto(False, reason)
+        logging.getLogger("ddo").info("退出前自动上传失败（下次再试）：%s", reason)
+    return ok, reason, count
+
+
+def _remember_auto(ok: bool, reason: str, count: int = 0) -> None:
+    """记下上次"自动上传"的结果（只在本机，用来在下次启动时提醒一句）。"""
+    try:
+        state = _load_state()
+        state["last_auto"] = {"ok": bool(ok), "reason": str(reason)[:200],
+                              "count": int(count), "time": time.strftime("%Y-%m-%d %H:%M")}
+        _save_state(state)
+    except Exception:                              # noqa: BLE001
+        pass
+
+
+def last_auto() -> dict:
+    """上次"退出前自动上传"的结果（没有就返回空字典）。"""
+    try:
+        data = _load_state().get("last_auto")
+    except Exception:                              # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def clear_auto_result() -> None:
+    """把"上次自动上传失败"的记号清掉（提醒过一次就不用再念了）。"""
+    try:
+        state = _load_state()
+        state.pop("last_auto", None)
+        _save_state(state)
+    except Exception:                              # noqa: BLE001
+        pass
+
+
 # -------------------------------------------------------------- 作者侧闸门
 DEFAULT_GATES = {
     "min_users": 4,            # 至少几个不同的人独立给出同一条

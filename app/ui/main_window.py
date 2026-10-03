@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -13,6 +14,7 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 
+from .. import __version__
 from .. import channels
 from .. import config as config_module
 from .. import disclaimer
@@ -1206,6 +1208,30 @@ class MainWindow:
             notes.append("② 点「设置」填 DeepSeek API Key（或把引擎改成 mymemory 免费试用）")
         notes.append("③ 点「▶ 监听」开始实时翻译；翻译不对就选中它按 F10 纠正")
         self.set_status("  ".join(notes))
+        self._hint_last_auto_send()
+
+    def _hint_last_auto_send(self) -> None:
+        """上次关程序前自动上传没成功的话，这里提醒一句（不弹窗）。"""
+        from .. import contribute as contribute_module
+
+        if not self.config.get("contribute_enabled"):
+            return
+        last = contribute_module.last_auto()
+        if not last or last.get("ok"):
+            return
+        try:
+            items = contribute_module.collect_items(self.memory)
+        except Exception:                          # noqa: BLE001
+            return
+        pending = len(items.get("terms", [])) + len(items.get("phrases", []))
+        if pending <= 0:
+            return
+        self.set_status("上次关程序时有 %d 条改进内容没发出去（%s）——"
+                        "可以在「参与改进」窗口里手动发" % (pending,
+                                                       last.get("reason") or "原因不明"),
+                        "warn")
+        # 提醒过就行，别每次启动都念一遍
+        contribute_module.clear_auto_result()
 
     # ------------------------------------------------------- 使用须知 / 免责声明
     def startup_gate(self) -> None:
@@ -1334,6 +1360,8 @@ class MainWindow:
             config_module.save_config(self.config)
         except Exception:
             pass
+        # 参与改进：用户同意过的话，关程序前把这次新确认的内容发出去
+        self.auto_send_contribution()
         try:
             self.pipeline.shutdown()
         except Exception:
@@ -1343,6 +1371,49 @@ class MainWindow:
         except Exception:
             pass
         self.root.destroy()
+
+    def auto_send_contribution(self, timeout: float = 6.0) -> bool:
+        """关程序时的自动上传（在「参与改进」里同意过、且没关掉自动上传才会做）。
+
+        * 没有新内容 → 立刻返回，不联网、不等待（关窗口不会因此变慢）；
+        * 有内容才联网，最多等 timeout 秒：超时就放它走（内容不会标记成"已发送"，
+          下次启动/关闭还有机会补发）；
+        * 失败只写日志 + 记在本机台账里，**绝不在关窗口时弹框拦人**。
+        """
+        from .. import contribute as contribute_module
+
+        if not self.config.get("contribute_enabled"):
+            return False
+        if not self.config.get("contribute_auto_send", True):
+            return False
+        try:
+            items = contribute_module.collect_items(self.memory)
+        except Exception:                          # noqa: BLE001
+            return False
+        count = len(items.get("terms", [])) + len(items.get("phrases", []))
+        if not count:
+            return False                           # 没新内容：不联网也不等待
+        try:
+            self.set_status("正在把这次的改进内容发出去…（最多等几秒）", "info")
+            self.root.update_idletasks()
+        except Exception:                          # noqa: BLE001
+            pass
+        result: dict = {}
+
+        def work() -> None:
+            try:
+                result["value"] = contribute_module.auto_send(
+                    self.memory, self.config, version=__version__)
+            except Exception as exc:               # noqa: BLE001
+                result["value"] = (False, str(exc), count)
+
+        thread = threading.Thread(target=work, name="contribute-autosend", daemon=True)
+        thread.start()
+        thread.join(timeout=max(0.5, float(timeout)))
+        ok, reason, sent = result.get("value", (False, "还没发完（下次会再试）", count))
+        if not ok:
+            logging.getLogger("ddo").info("关程序前的自动上传没完成：%s", reason)
+        return bool(ok)
 
     def run(self) -> None:
         self.root.mainloop()

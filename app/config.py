@@ -132,6 +132,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     #   contribute_invite_done    = 用户点了"不再提醒"（以后都不问）
     "contribute_invite_version": "",
     "contribute_invite_done": False,
+    # 关闭程序时自动把"这次新确认过的内容"发出去（只在这个功能开着时才有意义；
+    # 用户可以在「参与改进」窗口里取消勾选，改成只手动发）
+    "contribute_auto_send": True,
     # 收件端地址（作者的 Cloudflare Worker，见 tools/contribute_worker.js）。
     # 留空 = 只能"复制贡献码"手动转发；填了才能"直接上传"。
     "contribute_url": "https://ddo-contrib.ddo-tools.workers.dev/",

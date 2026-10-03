@@ -957,6 +957,9 @@ def main() -> int:
                 raise AssertionError("缺少「预览要发送的内容」按钮")
             if find_widget(dialog.window, ttk.Button, "复制贡献码") is None:
                 raise AssertionError("缺少「复制贡献码」按钮")
+            if find_widget(dialog.window, ttk.Checkbutton,
+                           "关闭程序时自动上传（不勾 = 只在我点「直接上传」时发）") is None:
+                raise AssertionError("缺少「关闭程序时自动上传」勾选框")
             if dialog.enabled.get():
                 raise AssertionError("参与改进默认必须是关闭的")
             if not str(dialog.count_label.cget("text")).startswith("当前未开启"):
@@ -974,22 +977,42 @@ def main() -> int:
 
         saved = {key: app.config.get(key) for key in
                  ("contribute_enabled", "contribute_invite_version",
-                  "contribute_invite_done")}
+                  "contribute_invite_done", "contribute_auto_send")}
         app.config["contribute_enabled"] = False
+        app.config["contribute_auto_send"] = True
         dialog = ContributionInviteDialog(app, on_accept=lambda: None)
         try:
             dialog.window.update_idletasks()
-            for text in ("愿意，去设置", "以后再说", "不再提醒"):
+            for text in ("愿意，按这个来", "以后再说", "不再提醒"):
                 if find_widget(dialog.window, ttk.Button, text) is None:
                     raise AssertionError("邀请窗口缺少「%s」按钮" % text)
             if app.config.get("contribute_enabled"):
                 raise AssertionError("只是打开邀请窗口，就把「参与改进」开关打开了")
+            if app.config.get("contribute_auto_send") is not True:
+                raise AssertionError("只是打开邀请窗口就动了「自动上传」开关")
             dialog.never()                     # 点「不再提醒」
             if not app.config.get("contribute_invite_done"):
                 raise AssertionError("点了「不再提醒」却没记下来")
         finally:
             try:
                 dialog.window.destroy()
+            except Exception:
+                pass
+            app.config.update(saved)
+
+        # 点「愿意」：才开开关，并且把"关闭时自动上传"一起打开（文案里就是这么说的）
+        app.config["contribute_enabled"] = False
+        app.config["contribute_auto_send"] = False
+        accept_dialog = ContributionInviteDialog(app, on_accept=lambda: None)
+        try:
+            accept_dialog.accept()
+            if not app.config.get("contribute_enabled"):
+                raise AssertionError("点「愿意」却没开启「参与改进」")
+            if not app.config.get("contribute_auto_send"):
+                raise AssertionError("点「愿意」后应同时打开「关闭程序时自动上传」")
+        finally:
+            try:
+                accept_dialog.window.destroy()
             except Exception:
                 pass
             app.config.update(saved)

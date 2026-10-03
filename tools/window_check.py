@@ -306,6 +306,16 @@ def main() -> int:
         check("参与改进的邀请：每版只弹一次，开着时不弹",
               first and not again and not when_on,
               "第一次=%s 第二次=%s 已开启时=%s" % (first, again, when_on))
+        # 关程序时的自动上传：开关关着、或没有接收地址时，绝不该联网
+        app.config["contribute_enabled"] = False
+        app.config["contribute_auto_send"] = True
+        off = app.auto_send_contribution(timeout=1.0)
+        app.config["contribute_enabled"] = True
+        app.config["contribute_auto_send"] = False
+        manual_only = app.auto_send_contribution(timeout=1.0)
+        check("关程序时的自动上传：没开开关 / 关了自动上传都不发",
+              off is False and manual_only is False,
+              "开关关着=%s 只手动=%s" % (off, manual_only))
     finally:
         for child in list(app.root.winfo_children()):
             try:

@@ -225,6 +225,71 @@ def test_report_text_mentions_gates_and_alerts():
 
 
 # ------------------------------------------------------- 否定票（自保护闭环）
+def _memory_with(term="rez plz", zh="复活我"):
+    return _FakeMemory(terms=[{"text": term, "zh": zh, "count": 2}])
+
+
+def test_auto_send_sends_new_items_then_marks_them_sent():
+    """关程序时的自动上传：发成功要记账，下一次就没有可发的了。"""
+    with _TempState():
+        sent = []
+
+        def poster(url, body):
+            sent.append((url, body))
+            return True
+
+        ok, reason, count = contribute.auto_send(
+            _memory_with(), {"contribute_url": "https://example.invalid/"},
+            version="9.9.9", poster=poster)
+        assert ok and count == 1, (ok, reason, count)
+        assert len(sent) == 1 and b"rez plz" in sent[0][1]
+
+        # 第二次：没有新内容 → 不联网、不等待、直接返回
+        ok, reason, count = contribute.auto_send(
+            _memory_with(), {"contribute_url": "https://example.invalid/"},
+            version="9.9.9", poster=poster)
+        assert ok and count == 0 and "没有新内容" in reason
+        assert len(sent) == 1
+
+
+def test_auto_send_failure_keeps_items_for_next_time():
+    with _TempState():
+        def broken(_url, _body):
+            raise OSError("断网了")
+
+        ok, reason, count = contribute.auto_send(
+            _memory_with(), {"contribute_url": "https://example.invalid/"},
+            version="9.9.9", poster=broken)
+        assert not ok and count == 1
+        assert contribute.last_auto().get("ok") is False
+        # 失败不算发过 → 下一次还会尝试
+        calls = []
+        ok, _reason, count = contribute.auto_send(
+            _memory_with(), {"contribute_url": "https://example.invalid/"},
+            version="9.9.9", poster=lambda u, b: (calls.append(u), True)[1])
+        assert ok and count == 1 and calls
+        assert contribute.last_auto().get("ok") is True
+
+
+def test_auto_send_without_endpoint_is_a_noop():
+    with _TempState():
+        called = []
+        ok, reason, count = contribute.auto_send(
+            _memory_with(), {}, version="9.9.9",
+            poster=lambda u, b: (called.append(u), True)[1])
+        assert not ok and count == 1 and "接收地址" in reason
+        assert called == []                      # 没地址就根本不该发请求
+
+
+def test_auto_send_skips_network_when_nothing_new():
+    with _TempState():
+        called = []
+        ok, _reason, count = contribute.auto_send(
+            _FakeMemory(), {"contribute_url": "https://example.invalid/"},
+            version="9.9.9", poster=lambda u, b: (called.append(u), True)[1])
+        assert ok and count == 0 and called == []
+
+
 def test_payload_carries_negative_votes():
     """本机给公共词投过的否定票要跟着贡献一起发出去。"""
     with _TempState():
