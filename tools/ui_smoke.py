@@ -134,6 +134,7 @@ def main() -> int:
     def create_main():
         app = MainWindow()
         app.config["check_update"] = False      # 自检不联网（启动检查是后台请求）
+        app.config["public_dict_enabled"] = False   # 也一样：自检不去拉公共词典
         # 使用须知已经同意过了：这一关单独用下面的步骤测（否则会弹出来挡住后面的步骤）
         app.config["agreement_version"] = disclaimer.DISCLAIMER_VERSION
         app.root.withdraw()
@@ -900,6 +901,24 @@ def main() -> int:
     step("正文颜色跟随频道颜色", body_color_follows_channel)
     step("学习中心", lambda: open_and_close(lambda: LearningCenterDialog(app)))
     step("词典窗口", lambda: open_and_close(lambda: DictionaryDialog(app)))
+
+    def dictionary_public_dict_row():
+        """词典窗口要有公共词典的开关、按钮和状态行（联网更新那块）。"""
+        dialog = DictionaryDialog(app)
+        try:
+            dialog.window.update_idletasks()
+            if find_widget(dialog.window, ttk.Checkbutton,
+                           "自动获取公共词典") is None:
+                raise AssertionError("词典窗口缺少「自动获取公共词典」开关")
+            if find_widget(dialog.window, ttk.Button, "立即更新") is None:
+                raise AssertionError("词典窗口缺少「立即更新」按钮")
+            if not str(dialog.public_label.cget("text")).startswith("公共词典"):
+                raise AssertionError("公共词典状态行没写出来：%r"
+                                     % dialog.public_label.cget("text"))
+        finally:
+            dialog.window.destroy()
+
+    step("词典窗口：公共词典开关/状态", dictionary_public_dict_row)
 
     def dictionary_export_import():
         """词典的导出/导入接线：导出成 json 再读回来，导入不应该炸。"""

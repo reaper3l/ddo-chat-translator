@@ -72,6 +72,7 @@ def main() -> int:
 
     app = MainWindow()
     snapshot = _config_snapshot()
+    app.config["public_dict_enabled"] = False    # 自检不联网（不拉公共词典）
     app.root.deiconify()            # 真实使用时主窗口是显示的
     app.root.geometry("+40+40")
     app.root.update()

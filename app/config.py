@@ -116,6 +116,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 词典 / 学习
     "use_glossary": True,
     "use_extra_glossary": True,
+    # 公共词典：启动时从网上下载一份**签名过的**术语表（只下载，不上传任何东西）。
+    # 只用于补充内置表里没有的词，不覆盖内置表，也不会覆盖用户自己的词。
+    "public_dict_enabled": True,
+    "public_dict_url": "",            # 留空 = 用 app/public_dict.py 里的默认地址；也可以填镜像
+    "public_dict_interval_hours": 6,  # 隔多久检查一次更新
     "learn_min_count": 2,        # 同一句被修正多少次后写入长期规则
     "candidate_min_count": 3,    # 陌生词出现多少次后进入"待学习"列表
     "dedup_ttl_seconds": 90,

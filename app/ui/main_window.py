@@ -890,6 +890,8 @@ class MainWindow:
             elif kind == "update":
                 self._on_update_result(event.get("info"), bool(event.get("manual")),
                                        bool(event.get("skipped")))
+            elif kind == "public_dict":
+                self._on_public_dict(event)
 
         self._update_stats()
         self.memory.flush()
@@ -1210,6 +1212,63 @@ class MainWindow:
         """同意之后才做的事：使用提示 + 后台查一次更新（一天最多一次）。"""
         self.root.after(300, self._first_run_hint)
         self.root.after(3800, self.maybe_check_update)
+        # 公共词典：启动几秒后在后台拉一次（只下载、不上传任何东西）
+        self.root.after(6000, self._public_dict_tick)
+
+    # ------------------------------------------------------------ 公共词典
+    PUBLIC_DICT_TICK = 30 * 60          # 每半小时看一次"该不该更新了"
+
+    def _public_dict_tick(self) -> None:
+        """定期检查公共词典（真正的间隔判断在 public_dict.needs_sync 里）。"""
+        self.maybe_sync_public_dict()
+        try:
+            self.root.after(self.PUBLIC_DICT_TICK * 1000, self._public_dict_tick)
+        except tk.TclError:
+            pass          # 窗口销毁了，收工
+
+    def maybe_sync_public_dict(self, manual: bool = False) -> None:
+        """后台更新公共词典；失败就静默退回缓存/内置表，绝不挡界面。"""
+        from .. import public_dict as public_dict_module
+
+        if not self.config.get("public_dict_enabled", True):
+            if manual:
+                self.set_status("公共词典已在设置里关掉", "warn")
+            return
+        if not manual and not public_dict_module.needs_sync(self.config):
+            return
+        if getattr(self, "_public_dict_busy", False):
+            return
+        self._public_dict_busy = True
+        if manual:
+            self.set_status("正在更新公共词典…", "info")
+
+        def work() -> None:
+            try:
+                result = public_dict_module.sync(self.config, force=manual)
+            except Exception as exc:                 # noqa: BLE001
+                result = {"ok": False, "updated": False, "terms": 0,
+                          "reason": "更新出错：%s" % exc}
+            self.ui_queue.put({"type": "public_dict", "result": result,
+                               "manual": manual})
+
+        threading.Thread(target=work, name="public-dict", daemon=True).start()
+
+    def _on_public_dict(self, event) -> None:
+        self._public_dict_busy = False
+        result = event.get("result") or {}
+        manual = bool(event.get("manual"))
+        if result.get("updated"):
+            self.rebuild_glossary()
+            self.set_status("公共词典已更新（版本 %s，共 %d 条）"
+                            % (result.get("version") or "?", result.get("terms", 0)),
+                            "ok")
+        elif result.get("ok"):
+            if manual:
+                self.set_status("公共词典已经是最新的（%d 条）" % result.get("terms", 0),
+                                "ok")
+        elif manual:
+            self.set_status("公共词典更新失败：%s" % (result.get("reason") or "未知原因"),
+                            "warn")
 
     def open_agreement(self) -> None:
         """从「设置 → 关于」回看使用须知（只看，不改同意状态）。"""

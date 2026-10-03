@@ -36,6 +36,7 @@ MODULES = [
     "test_style",
     "test_capture",
     "test_preprocess",
+    "test_public_dict",
     "test_ocr_filter",
     "test_frame",
     "test_capture_similar",

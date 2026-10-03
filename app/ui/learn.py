@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 
+from .. import config as config_module
 from .. import glossary_io
 from . import ask
 from . import theme
@@ -331,6 +332,18 @@ class DictionaryDialog:
         theme.label(io_row, "导出 JSON / CSV；导入只写入新增或改动过的词",
                     muted=True).pack(side="left", padx=10)
 
+        # 公共词典：启动时从网上下载的签名词表（只下载、不上传任何东西）
+        pub_row = ttk.Frame(self.window)
+        pub_row.pack(fill="x", padx=10, pady=(0, 4))
+        self.public_var = tk.BooleanVar(
+            value=bool(self.app.config.get("public_dict_enabled", True)))
+        ttk.Checkbutton(pub_row, text="自动获取公共词典", variable=self.public_var,
+                        command=self._save_public_switch).pack(side="left")
+        ttk.Button(pub_row, text="立即更新",
+                   command=self.update_public).pack(side="left", padx=6)
+        self.public_label = theme.label(pub_row, "", muted=True)
+        self.public_label.pack(side="left", padx=6)
+
         self.tree = ttk.Treeview(self.window, columns=("term", "zh", "source"),
                                  show="headings", height=18)
         for column, title, width in (("term", "英文术语", 240),
@@ -367,6 +380,42 @@ class DictionaryDialog:
             used_ids.add(item_id)
             self.tree.insert("", "end", iid=item_id, values=(term, zh, source))
         self.count_label.config(text="共 %d 条（显示前 1500 条）" % len(rows))
+        self._refresh_public()
+
+    # ------------------------------------------------------------ 公共词典
+    def _refresh_public(self) -> None:
+        """显示公共词典状态（条数、更新时间）。"""
+        from .. import public_dict
+
+        try:
+            status = public_dict.status(self.app.config)
+        except Exception:
+            return
+        if not status["enabled"]:
+            text = "公共词典：已关闭（只用内置表）"
+        elif not status["has_data"]:
+            text = "公共词典：还没下载过（联网后会自动获取）"
+        else:
+            when = time.strftime("%m-%d %H:%M",
+                                 time.localtime(status["updated_at"] or 0))
+            text = "公共词典：%d 条，更新于 %s（每 %d 小时检查一次）" % (
+                status["terms"], when, status["interval_hours"])
+        self.public_label.configure(text=text)
+
+    def _save_public_switch(self) -> None:
+        """开关公共词典：关掉立刻把公共词条从当前术语表里撤下来。"""
+        enabled = bool(self.public_var.get())
+        self.app.config["public_dict_enabled"] = enabled
+        config_module.save_config(self.app.config)
+        self.app.rebuild_glossary()
+        self.refresh()
+        self.app.set_status("公共词典已%s" % ("开启" if enabled else "关闭"), "info")
+
+    def update_public(self) -> None:
+        """手动更新一次（结果在主窗口状态栏显示，这里刷两次标签）。"""
+        self.app.maybe_sync_public_dict(manual=True)
+        self.window.after(1500, self.refresh)
+        self.window.after(5000, self.refresh)
 
     def add_term(self) -> None:
         # 选中某一行时，把它带进输入框 —— 改一改点确定就是「覆盖」

@@ -220,9 +220,14 @@ class Glossary:
 def build_glossary(config: dict, memory=None) -> Glossary:
     """按配置组装术语表。
 
-    优先级（后者覆盖前者）：扩展表（旧版大词典） < 内置精选表 < 用户学习到的。
+    优先级（后者覆盖前者）：
+        扩展表（旧版大词典） < 内置精选表 < 公共词典 < 用户学习到的。
     旧版那 1900 条里有不少和精选表冲突的（例如 tr=缠根 vs tr=真轮回、
     elite=精英 vs elite=精英难度），所以内置精选必须压过它。
+
+    公共词典（`app/public_dict.py`，从网上下载的签名词表）**只做加法**：
+    同名的一律跳过，绝不改掉内置精选表和用户自己的译法。这样联网下发的内容
+    最坏只是"多了一条新词"，不会动到既有行为。
     """
     if not config.get("use_glossary", True):
         return Glossary({}, [])
@@ -251,6 +256,21 @@ def build_glossary(config: dict, memory=None) -> Glossary:
                 terms[term] = translation
 
     terms.update(base_terms)
+
+    if config.get("public_dict_enabled", True):
+        from . import public_dict
+
+        existing = {Glossary._norm_key(term) for term in terms}
+        for term, translation in public_dict.load_terms().items():
+            key = Glossary._norm_key(term)
+            if not key or key in existing:
+                continue                     # 已有同名（内置/大词典）→ 不覆盖
+            if not isinstance(translation, str) or not textutil.has_cjk(translation):
+                continue                     # 和内置表同样的门槛：译文必须有中文
+            if " " not in key and (key in NEVER_PROTECT or len(key) < 3):
+                continue                     # 单个普通英文词/缩写噪音不做保护
+            terms[term] = translation
+            existing.add(key)
 
     if memory is not None:
         for item in getattr(memory, "data", {}).get("terms", {}).values():
