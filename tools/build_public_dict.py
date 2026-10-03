@@ -8,6 +8,11 @@
 为什么单独一个工具：词典要挂在仓库的 `dict` 分支上，和代码历史分开；
 每次更新只需要重跑这个脚本 → 推送那两个文件，**不用发版**。
 
+写文件之前会先跑一遍**语料回放**（app/replay.py）：拿 tools\corpus\chat_samples.txt
+加上本机记忆库里的真实句子，比对「加词前 / 加词后」的术语匹配。某个新词如果在常见
+句子里到处乱改（命中 >= 3 行、且占语料 >= 5%），就**不写文件**并报出来。
+确认那些改动没问题，再加 --replay-force 重跑；不想跑就 --no-replay。
+
 签名用的是和安装包同一把发布私钥（%USERPROFILE%\\.ddo-release\\release.key），
 私钥不进仓库；验签逻辑在 app/public_dict.py，和客户端共用一份实现。
 """
@@ -25,8 +30,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
-from app import ed25519, paths, public_dict      # noqa: E402
+from app import ed25519, paths, public_dict, replay      # noqa: E402
 from sign_release import DEFAULT_KEY_FILE, _read_key   # noqa: E402
+
+DEFAULT_CORPUS = ROOT / "tools" / "corpus" / "chat_samples.txt"
 
 
 def _load_terms(path: Path) -> dict:
@@ -37,6 +44,33 @@ def _load_terms(path: Path) -> dict:
     if not isinstance(terms, dict):
         return {}
     return {str(k): str(v) for k, v in terms.items() if k and v}
+
+
+def _replay_check(terms: dict, target: Path, args) -> int:
+    """上线前拿语料回放一遍。返回 0 = 继续，2 = 停下不写文件。
+
+    比的是"用户手上那一份（现有 public.json）"和"这次要发的"。第一次生成
+    public.json 时没有旧版可比 → 跳过（那时是新词库的整体上线，回放没有基准）。
+    """
+    before = _load_terms(target) if Path(target).exists() else {}
+    new_terms = {k: v for k, v in terms.items() if before.get(k) != v}
+    if not new_terms:
+        print("语料回放：没有新增或改动的词，跳过。")
+        return 0
+
+    lines = replay.collect_lines([DEFAULT_CORPUS] + [Path(p) for p in args.corpus],
+                                 use_memory=True)
+    report = replay.compare(before, new_terms, lines,
+                            min_hits=args.replay_min_hits,
+                            max_ratio=args.replay_max_ratio)
+    print(replay.format_report(report))
+    if report.ok:
+        return 0
+    if args.replay_force:
+        print("  （--replay-force 已放行；上面的句子请自己确认没被改坏）")
+        return 0
+    print("回放不通过 → 没有写文件。确认没问题就加 --replay-force 重跑。")
+    return 2
 
 
 def main() -> int:
@@ -53,6 +87,17 @@ def main() -> int:
     parser.add_argument("--hold-hours", type=float, default=0,
                         help="灰度观察时长（小时）：窗口结束后所有客户端都会采用（默认 0）")
     parser.add_argument("--key", default=str(DEFAULT_KEY_FILE), help="发布私钥路径")
+    parser.add_argument("--no-replay", action="store_true",
+                        help="跳过语料回放自检（不建议）")
+    parser.add_argument("--replay-force", action="store_true",
+                        help="回放判定过度泛化也照发（会打印警告）")
+    parser.add_argument("--corpus", action="append", default=[],
+                        help="额外语料文件（可多次；纯文本一行一句，或 JSON 数组）")
+    parser.add_argument("--replay-min-hits", type=int, default=replay.DEFAULT_MIN_HITS,
+                        help="少于这么多行命中就不判过度泛化（默认 %d）"
+                             % replay.DEFAULT_MIN_HITS)
+    parser.add_argument("--replay-max-ratio", type=float, default=replay.DEFAULT_MAX_RATIO,
+                        help="命中比例阈值（默认 %.2f）" % replay.DEFAULT_MAX_RATIO)
     args = parser.parse_args()
 
     out_dir = Path(args.out)
@@ -88,6 +133,11 @@ def main() -> int:
     old = paths.read_json(target, {}) or {}
     old_batch = int(old.get("batch", 0) or 0)
     batch = args.batch or (old_batch + 1)
+
+    if not args.no_replay:
+        code = _replay_check(terms, target, args)
+        if code:
+            return code
 
     payload = {
         "version": 1,

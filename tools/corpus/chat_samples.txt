@@ -1,0 +1,91 @@
+# 语料回放用的样例闲聊句（一行一句，# 开头是注释）。
+#
+# 用途：公共词典上线前，拿这批句子把「加词前 / 加词后」的术语匹配各跑一遍，
+# 看新词会不会在常见句子里到处乱改（见 app/replay.py）。
+#
+# 来源：作者在实机反馈里贴过的原文（玩家名已去掉，只留说话内容）+ 同类型常见说法。
+# 要扩充就直接往下加行；加得越多，越能看出一个词是不是「到处都是」。
+Guys, do you play other games on Steam?
+gi
+elite right?
+guihuo, nikyireddoor
+pet for the door?
+hi, pop side
+in
+dont worry about me
+everyone knows rogues are expendable
+there is something like this in Art of War
+heading to Eye area now
+So PoP, FoD and Cry
+uudd
+lawful
+hmmm
+got the orb?
+not sure if both needs to be
+this is bad
+crap
+ok restart
+thought you forgot to pick orb
+sec
+nvm
+In Dulug
+lock me in
+lever plz
+polar ray hurts
+I got one-shot by it today
+y fire shield saved me :D
+FoD
+ty all
+meh
+100 Scrolls of Resurrection
+resting
+wb
+do we go now or later?
+ty
+tamos na fod
+tem alguem ainda
+uff tor 1
+1 tower
+rez plz
+pop
+lol
+brt
+wtb
+gtg
+afk
+watch out behind you
+need healer
+on my way
+let me pull
+come to the door
+open the door plz
+wait for me
+brb
+nice one
+good job
+sorry my bad
+gratz
+trap!
+scout ahead
+I have the key
+drop it here
+take the chest
+go left
+go right
+boss at the end
+we need to split
+who has the orb
+no mana
+I am dead
+rez me
+kill the caster
+skip the trash
+too many mobs
+follow me
+stay here
+they are respawning
+where are you
+wait at the entrance
+portal is open
+need buffs
+buff me plz
