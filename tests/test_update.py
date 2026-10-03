@@ -258,11 +258,32 @@ def test_verify_package_rejects_tampered_content():
     assert not ok and "sha256" in reason
 
 
-def test_verify_package_rejects_version_or_file_mismatch():
-    for tamper in ("version", "file"):
-        package, info, pubkey = _signed(tamper=tamper)
-        ok, reason = update.verify_package(package, info, pubkey=pubkey)
-        assert not ok, tamper
+def test_verify_package_rejects_version_mismatch():
+    package, info, pubkey = _signed(tamper="version")
+    ok, reason = update.verify_package(package, info, pubkey=pubkey)
+    assert not ok and "版本号" in reason
+
+
+def test_verify_package_allows_mirror_asset_name():
+    """镜像源（GitHub）会把附件名里的中文换成 "."，不能因此判它不可信。
+
+    实测：DDO翻译助手_v3.0.29.zip 在 GitHub 上叫 DDO._v3.0.29.zip。签名覆盖的是
+    (版本号, 文件名, sha256)，文件名被改签名就验不过，所以包里叫什么名字不影响安全性。
+    """
+    package, info, pubkey = _signed(filename="DDO翻译助手_v9.9.9.zip")
+    info.asset_name = "DDO._v9.9.9.zip"          # 模拟 GitHub 改名后的附件
+    ok, reason = update.verify_package(package, info, pubkey=pubkey)
+    assert ok and "签名验证通过" in reason
+
+    package, info, pubkey = _signed(tamper="file")   # 签名里的名字和包不一致
+    ok, reason = update.verify_package(package, info, pubkey=pubkey)
+    assert ok and "附件名" in reason
+
+    package, info, pubkey = _signed()            # 内容被换过 → 照样拒绝
+    info.asset_name = "DDO-translator-v9.9.9.zip"
+    Path(package).write_bytes(b"other bytes")
+    ok, reason = update.verify_package(package, info, pubkey=pubkey)
+    assert not ok and "sha256" in reason
 
 
 def test_verify_package_without_signature_or_pubkey():

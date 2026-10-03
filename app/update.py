@@ -601,9 +601,13 @@ def verify_package(package: Path, info: "UpdateInfo",
     if parsed["version"].lstrip("vV") != str(info.version).lstrip("vV"):
         return False, "签名里的版本号（%s）和发行版（%s）对不上" % (
             parsed["version"], info.version)
+    # 不比对文件名：GitHub 的发行版附件名只允许 [A-Za-z0-9._-]，中文会被它替换成 "."
+    # （实测 DDO翻译助手_v3.0.29.zip → DDO._v3.0.29.zip），镜像源上永远对不上。
+    # 文件名也不是防伪手段 —— 签名覆盖了 (版本号, 文件名, sha256) 三行，名字被改
+    # 签名立刻验不过；包的真伪由 sha256 决定。所以这里只在名字不同时附带一句说明。
+    name_note = ""
     if info.asset_name and parsed["file"] != info.asset_name:
-        return False, "签名里的文件名（%s）和安装包（%s）对不上" % (
-            parsed["file"], info.asset_name)
+        name_note = "，附件名是 %s（镜像源会改文件名，不影响内容）" % info.asset_name
     try:
         digest = sha256_file(package)
     except Exception as exc:
@@ -624,7 +628,7 @@ def verify_package(package: Path, info: "UpdateInfo",
             continue
         if ed25519.verify(signature, message, key):
             which = "主密钥" if index == 1 else "备用密钥 #%d" % index
-            return True, "签名验证通过（%s，%s）" % (digest[:12], which)
+            return True, "签名验证通过（%s，%s）%s" % (digest[:12], which, name_note)
     return False, "签名验证失败（这个包不是用你的私钥签的）"
 
 

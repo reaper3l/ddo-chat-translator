@@ -34,6 +34,40 @@ ZIP_DIR = ROOT / "dist"
 CACHE_DIR = ROOT.parent / "work" / "镜像缓存"
 
 
+def mirror_asset_name(tag: str) -> str:
+    """GitHub 上统一用的 ASCII 附件名。
+
+    GitHub 的附件名只留 [A-Za-z0-9._-]，中文会被它替换成 "."（实测
+    DDO翻译助手_v3.0.29.zip → DDO._v3.0.29.zip）。名字不影响自动更新：客户端校验的
+    是 sha256 + 签名，不拿文件名当门槛（见 app/update.py 的 verify_package）。
+    """
+    return "DDO-translator-%s.zip" % tag
+
+
+def rename_assets(tags, token) -> int:
+    """把已经传上去的附件改成统一的 ASCII 名（只改名字，不重传文件）。"""
+    done = 0
+    for tag in tags:
+        status, release = _json("%s/releases/tags/%s" % (GH_API, tag), token)
+        if status != 200 or not isinstance(release, dict):
+            print("%-10s GitHub 上没有这个发行版：%s" % (tag, status))
+            continue
+        want = mirror_asset_name(tag)
+        for asset in (release.get("assets") or []):
+            name = str(asset.get("name") or "")
+            if not name.lower().endswith(".zip") or name == want:
+                continue
+            status, result = _json("%s/releases/assets/%s" % (GH_API, asset["id"]),
+                                   token, method="PATCH", payload={"name": want})
+            if status == 200 and isinstance(result, dict):
+                print("%-10s 附件改名：%s → %s" % (tag, name, result.get("name")))
+                done += 1
+            else:
+                print("%-10s 改名失败：%s %s" % (tag, status, result))
+    print("\n共改名 %d 个附件" % done)
+    return 0
+
+
 def _json(url: str, token: str = "", method: str = "GET", payload=None, extra=None):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload else None
     headers = dict(UA)
@@ -84,6 +118,8 @@ def main() -> int:
     parser.add_argument("--all-recent", action="store_true", help="自动挑最近有附件的发行版")
     parser.add_argument("--token-file", default=str(ROOT.parent / "work" / "github_token.txt"))
     parser.add_argument("--dry-run", action="store_true", help="只检查，不创建发行版")
+    parser.add_argument("--rename", action="store_true",
+                        help="只把已上传的附件改成统一的 ASCII 名（不重传文件）")
     args = parser.parse_args()
 
     token = ""
@@ -102,6 +138,9 @@ def main() -> int:
         tags = [r["tag_name"] for r in releases if r.get("assets")]
         tags = list(reversed(tags))[:6]
         print("自动挑选：%s" % "、".join(tags))
+
+    if args.rename:
+        return rename_assets(tags, token)
 
     print("%-10s %-28s %-10s %s" % ("标签", "安装包", "sha256", "结果"))
     ok_count = 0
@@ -159,12 +198,13 @@ def main() -> int:
 
         release_id = result["id"]
         have = {a.get("name") for a in (result.get("assets") or [])}
-        if name in have:
-            print("%-10s %-28s %-10s 已存在，跳过上传" % (tag, name, digest[:8]))
+        gh_name = mirror_asset_name(tag)        # GitHub 上固定的 ASCII 附件名
+        if gh_name in have:
+            print("%-10s %-28s %-10s 已存在，跳过上传" % (tag, gh_name, digest[:8]))
             ok_count += 1
             continue
         upload_url = ("https://uploads.github.com/repos/reaper3l/ddo-chat-translator/"
-                      "releases/%s/assets?name=%s" % (release_id, urllib.parse.quote(name)))
+                      "releases/%s/assets?name=%s" % (release_id, urllib.parse.quote(gh_name)))
         headers = dict(UA)
         headers["Authorization"] = "Bearer " + token
         headers["Content-Type"] = "application/zip"
@@ -174,7 +214,8 @@ def main() -> int:
             with urllib.request.urlopen(request, timeout=900) as response:
                 uploaded = json.loads(response.read().decode("utf-8"))
             print("%-10s %-28s %-10s %s上传成功（%d 字节）"
-                  % (tag, name, digest[:8], action, uploaded.get("size", 0)))
+                  % (tag, uploaded.get("name", gh_name), digest[:8], action,
+                     uploaded.get("size", 0)))
             ok_count += 1
         except urllib.error.HTTPError as exc:
             print("%-10s 上传失败：%s %s" % (tag, exc.code, exc.read().decode('utf-8', 'replace')[:160]))

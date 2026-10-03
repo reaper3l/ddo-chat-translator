@@ -49,6 +49,17 @@
 * 生成工具：`tools\build_public_dict.py`（生成 + 签名 + 自检），
   推送脚本：`work\push_dict_branch.ps1`。这一步只下载，隐私承诺不变。
 
+**备用更新源：Gitee 打不开也能升级**（新功能）
+
+检查更新时同时问 Gitee 和 GitHub 镜像，取两边里更新的那个；哪一边临时打不开都不影响
+另一条路。公共词典一样带镜像地址，主地址失败就自动换备用地址。
+
+* 镜像上放着**一模一样的包**（同一个 zip、同一份签名，sha256 前后一致），
+  不是重新打包的版本 —— 防伪级别和原来完全一样；
+* 镜像地址：https://github.com/reaper3l/ddo-chat-translator
+* 附带工具 `tools\mirror_releases_github.py`：把 Gitee 上已签名的发行版原样搬到
+  GitHub（搬之前先核对 sha256，对不上就停下）。
+
 ---
 
 ## v3.0.29（2026-10-03）
