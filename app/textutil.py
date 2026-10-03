@@ -246,6 +246,25 @@ def ocr_similar(first: str, second: str) -> float:
 # 判成"同一条消息"的最低相似度；低于这个值还可能是同一条的条件见下
 SAME_MESSAGE_RATIO = 0.85
 SAME_MESSAGE_MIN_LENGTH = 6
+# 长度接近的两个串之间，允许几个字认错（按编辑距离，够长的串才生效）
+OCR_SAME_EDIT_RATIO = 0.25
+OCR_SAME_EDIT_MIN_LENGTH = 10
+
+
+def _edit_distance(first: str, second: str) -> int:
+    """两个字符串的编辑距离（都是短串，滚动数组的 DP 就够）。"""
+    if first == second:
+        return 0
+    if not first or not second:
+        return len(first) or len(second)
+    previous = list(range(len(second) + 1))
+    for i, char_a in enumerate(first, 1):
+        current = [i] + [0] * len(second)
+        for j, char_b in enumerate(second, 1):
+            current[j] = min(previous[j] + 1, current[j - 1] + 1,
+                             previous[j - 1] + (char_a != char_b))
+        previous = current
+    return previous[-1]
 
 
 def _whole_word_replaced(first: str, second: str) -> bool:
@@ -292,11 +311,58 @@ def same_ocr_message(first: str, second: str) -> bool:
         return False
     if ocr_similar(a, b) >= SAME_MESSAGE_RATIO:
         return True
+    # 长度接近、只是几个字母认错：difflib 对短串给分偏低（实测
+    # "pls1slot.firstd" / "pis1siot.tirstd" 只有 0.80），这里按编辑距离补一刀。
+    # 只对够长的串生效，而且要求长度差 ≤2 —— "need heals" / "need heals fast"
+    # 这种真·追加了内容（长度差 4）不受影响。
+    limit = max(2, int(min(len(a), len(b)) * OCR_SAME_EDIT_RATIO))
+    if (abs(len(a) - len(b)) <= 2
+            and min(len(a), len(b)) >= OCR_SAME_EDIT_MIN_LENGTH
+            and _edit_distance(a, b) <= limit):
+        return True
     # 被读短的那一版应该和长的那版开头几乎一致（差 6 个字符以上才算，避免
     # 把"need heals"和"need heals fast"这种真·追加内容当成重复）
     short, long_text = (a, b) if len(a) < len(b) else (b, a)
     if len(long_text) - len(short) >= 6:
         return ocr_similar(short, long_text[: len(short)]) >= 0.9
+    # 反过来：短的那版是长的那版的**结尾** —— OCR 有时把行首的频道前缀
+    # 漏读/多读（实测 "小队):Secondd已断线" / "Secondd已断线"）。只允许
+    # 长出 ≤6 个字符，免得把"真·说了一句更长的话"当成重复。
+    if len(long_text) - len(short) <= 6 and long_text.endswith(short):
+        return True
+    return False
+
+
+def _name_key(name: str) -> str:
+    """玩家名归一化：小写、去掉空格和符号（保留数字，数字是区分人的）。"""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def same_player_name(first: str, second: str) -> bool:
+    """两个玩家名是不是**同一个人**的两种 OCR 读法。
+
+    为什么单独一个函数：消息文本用的 `same_ocr_message` 有"最短 6 个字符"的门槛，
+    而玩家名常常只有 3~5 个字母 —— 门槛一拦，名字被读花就会当成"另一个人"，
+    同一条消息于是又显示一遍。实测反馈（v3.0.29）：OCR 把 `[小队] Kyiae:` 读成
+    `[小队jKyiae:`，说话人变成 `jKyiae`，同一条 "because they respawn?" 显示了两次。
+
+    名字里的数字（游戏给重名玩家加的 -1 / -2）代表**不同的人**，一律不合并：
+    "Huzi-2" 和 "Huzi" 是两个人，"Huzi-2" 和 "Medics" 也是两个人。
+    """
+    a = _name_key(first)
+    b = _name_key(second)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if any(ch.isdigit() for ch in a) or any(ch.isdigit() for ch in b):
+        return False
+    if min(len(a), len(b)) < 3:
+        return False
+    if _edit_distance(a, b) <= 1:
+        return True                  # 粘上一个字符，或者认错一个字母
+    if min(len(a), len(b)) >= 6 and _edit_distance(a, b) <= 2:
+        return True                  # 长一点的名字允许两个字母认错（Sinoke / Snioke）
     return False
 
 

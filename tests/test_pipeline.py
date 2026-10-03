@@ -468,6 +468,26 @@ def test_same_sentence_from_two_players_is_shown_twice():
     assert _drain_jobs(pipeline) == []
 
 
+def test_same_message_with_glued_speaker_is_shown_once():
+    """实测反馈（v3.0.29）：OCR 把名字读成 "jKyiae"，同一条消息显示了两次。
+
+    根因：说话人被粘上一个字符后，"jKyiae" 和 "Kyiae" 被当成两个不同的人，
+    而去重（带上说话人的指纹 + 模糊比对）就放它过去了。
+    """
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines(["(小队):[小队] Kyiae: because they respawn?"])
+    pipeline._handle_lines(["(小队):[小队jKyiae: becausetheyrespawn"])
+    assert [job.source for job in _drain_jobs(pipeline)] == ["because they respawn?"]
+
+
+def test_ocr_noise_variants_of_a_short_phrase_are_shown_once():
+    """同一个人、同一句，OCR 读成两个版本（错了 3 个字母）→ 只显示一条。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline._handle_lines(["(小队):[小队] Sinoke: pls1slot.firstd"])
+    pipeline._handle_lines(["(小队):[小队] Sinoke: pis1siot.tirstd"])
+    assert [job.source for job in _drain_jobs(pipeline)] == ["pls1slot.firstd"]
+
+
 def test_long_line_read_short_is_not_shown_twice():
     pipeline = make_pipeline(EchoEngine())
     pipeline._handle_lines(["(小队):[小队] Beruthiell:there is something like thisinArtofWar"])

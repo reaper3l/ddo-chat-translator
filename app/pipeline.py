@@ -689,7 +689,8 @@ class Pipeline:
 
         `speaker` 也参与判断：**不同的人说同一句话要各显示一条**
         （"Huzi-2告诉你: halo nihao" 和 "你对 Huzi-2说: halo nihao" 是两条）。
-        说话人自己也允许 OCR 读花（"S Sinoke" / "Sinoke" 仍算同一个人）。
+        说话人自己允许 OCR 读花，而且门槛比正文更宽松：名字短、又常被粘上相邻
+        字符（实测 `[小队jKyiae:` → "jKyiae"），所以用 `same_player_name()` 比。
         """
         if not text or len(text.strip()) < 2:
             return False
@@ -702,7 +703,7 @@ class Pipeline:
                 if not textutil.same_ocr_message(text, old):
                     continue
                 if speaker and old_speaker and speaker != old_speaker \
-                        and not textutil.same_ocr_message(speaker, old_speaker):
+                        and not textutil.same_player_name(speaker, old_speaker):
                     continue          # 说话人明显不同 → 这是另一个人说的同一句话
                 return True
         return False

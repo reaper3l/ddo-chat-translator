@@ -115,6 +115,43 @@ def test_same_ocr_message_keeps_different_texts_apart():
         assert not textutil.same_ocr_message(first, second), (first, second)
 
 
+def test_same_ocr_message_accepts_multi_char_noise_when_lengths_match():
+    """实测反馈（v3.0.29）：同一句被读成 "pls1slot.firstd" / "pis1siot.tirstd"。
+
+    两个串一样长、错了 3 个字母，difflib 只给 0.80（低于 0.85 的阈值），
+    以前会被当成两条消息显示两遍 —— 现在按编辑距离补一刀。
+    """
+    assert textutil.same_ocr_message("pls1slot.firstd", "pis1siot.tirstd")
+    assert textutil.same_ocr_message("pls1slot.firstd", "pisTslot.firstd")
+    # 真·追加内容（长度差 4）还是两条
+    assert not textutil.same_ocr_message("need heals", "need heals fast")
+
+
+def test_same_ocr_message_sees_lost_prefix_as_same():
+    """行首的频道前缀被 OCR 漏读（实测系统提示）：短的那版是长的那版的结尾。"""
+    assert textutil.same_ocr_message("小队):Secondd已断线", "Secondd已断线")
+    assert textutil.same_ocr_message("(小队):你的队友Beruthiell已死亡",
+                                     "你的队友Beruthiell已死亡")
+    # 但"接在后面的新内容"仍然是两条（长度差 4）
+    assert not textutil.same_ocr_message("need heals", "need heals fast")
+    assert not textutil.same_ocr_message("yes", "yes please")
+
+
+def test_same_player_name_handles_ocr_glue_and_typos():
+    """玩家名单独一套判断：名字短，门槛要比正文松，但重名后缀不能合并。"""
+    assert textutil.same_player_name("Kyiae", "jKyiae")      # OCR 把前缀粘进了名字
+    assert textutil.same_player_name("Miru", "Mlru")         # 认错一个字母
+    assert textutil.same_player_name("Sinoke", "Snioke")     # 两个字母颠倒
+    assert textutil.same_player_name("Kyiae", "Kyiae")
+    assert textutil.same_player_name("Kyiae", "KYIAE")
+    # 重名后缀（-1 / -2）是不同的人，绝不能合并
+    assert not textutil.same_player_name("Miru", "Miru-1")
+    assert not textutil.same_player_name("Huzi-2", "Huzi")
+    assert not textutil.same_player_name("Huzi-2", "Medics")
+    assert not textutil.same_player_name("", "Bob")
+    assert not textutil.same_player_name("Bob", "")
+
+
 def test_ocr_similar_is_order_sensitive():
     """集合相似度给高分、顺序相似度必须给低分的情况。"""
     a = "please wait for me i need to repair my gear"

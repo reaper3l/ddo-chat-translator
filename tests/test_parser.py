@@ -332,6 +332,10 @@ def test_trailing_channel_label_is_stripped():
     assert _chats(["(小队):[小队] AngelGwing: ty all[小队]"])[0].text == "ty all"
     assert _chats(["(小队):[小队] Mornyngstar: resetting?小队"])[0].text == "resetting?"
     assert _chats(["(常规): Alice: hi 常规"])[0].text == "hi"
+    # 标签后面偶尔还跟着一个冒号（实测 "in 小队:"）：不摘掉的话，同一条消息
+    # 会因为"带尾巴/不带尾巴"两个 OCR 结果被显示两遍
+    assert _chats(["(小队):[小队] Sinoke: in 小队:"])[0].text == "in"
+    assert _chats(["(小队):[小队] Sinoke: in 小队："])[0].text == "in"
     # 系统消息尾巴上也会粘（"…离开了你的队伍。 小队"）
     systems = [event for event in ChatParser().parse(
         ["(小队):AngelGwing离开了你的队伍。 小队"]) if event.kind == "system"]
