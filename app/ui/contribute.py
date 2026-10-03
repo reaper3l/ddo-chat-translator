@@ -17,6 +17,7 @@ from tkinter import ttk
 
 from .. import config as config_module
 from .. import contribute
+from .. import __version__
 from . import theme
 
 
@@ -171,3 +172,80 @@ class ContributionDialog:
             self.window.after(150, self._poll)
         except tk.TclError:
             pass
+
+
+class ContributionInviteDialog:
+    """启动时的一次邀请：要不要参与改进（贡献术语）。
+
+    为什么要有它：这个功能藏在「设置 → 关于」里，绝大多数人根本不会点进去
+    （作者反馈：入口太隐蔽）。所以在启动后主动问一次。
+
+    三条底线不动摇：
+    * 不偷偷开：点"愿意"才打开开关，而且立刻打开贡献窗口，让用户先看到会发什么；
+    * 不烦人：每版只问一次，点"不再提醒"以后永不出现；
+    * 说清楚：只发用户自己确认过的句子/术语，原始聊天不上传，随时能关。
+    """
+
+    def __init__(self, app, on_accept=None) -> None:
+        self.app = app
+        self.on_accept = on_accept
+        self.window = tk.Toplevel(app.root)
+        self.window.title("参与改进")
+        self.window.transient(app.root)
+        theme.prepare_window(self.window, app.config)
+        theme.frameless_dialog(self.window, "愿意帮忙改进翻译吗？", size=(580, 340))
+        self._build()
+
+    def _build(self) -> None:
+        box = ttk.Frame(self.window)
+        box.pack(fill="both", expand=True, padx=14, pady=(12, 4))
+        theme.label(box, "这个翻译器靠大家的纠错慢慢变准。", anchor="w").pack(fill="x")
+        theme.label(
+            box,
+            "愿意的话，程序会把你「自己确认过」的内容匿名发给作者：\n"
+            "· 你按 F10 改过的句子；\n"
+            "· 你自己在词典里加的术语。\n\n"
+            "原始聊天内容不会上传；发送前会在本机去掉链接、邮箱、连续数字，\n"
+            "并跳过带玩家名的聊天行。发之前可以先预览，随时能关掉。\n\n"
+            "现在是关着的：不点下面的按钮，什么都不会发。",
+            muted=True, justify="left").pack(anchor="w", pady=(8, 0))
+
+        row = ttk.Frame(self.window)
+        row.pack(fill="x", padx=14, pady=(6, 12))
+        ttk.Button(row, text="愿意，去设置", style="Accent.TButton",
+                   command=self.accept).pack(side="left")
+        ttk.Button(row, text="以后再说", command=self.later).pack(side="left", padx=8)
+        ttk.Button(row, text="不再提醒", command=self.never).pack(side="left")
+        ttk.Button(row, text="关闭", command=self.window.destroy).pack(side="right")
+
+    # ------------------------------------------------------------------ 动作
+    def accept(self) -> None:
+        """用户点了"愿意"：这时才打开开关，并打开贡献窗口。"""
+        self.app.config["contribute_enabled"] = True
+        self._mark(version=__version__)
+        self.window.destroy()
+        callback = self.on_accept or self.app.open_contribution
+        try:
+            callback()
+        except Exception:                          # noqa: BLE001
+            pass
+        self.app.set_status("已打开「参与改进」：就是下面这个窗口，先预览再决定发不发",
+                            "info")
+
+    def later(self) -> None:
+        """点"以后再说"：这一版先不问了，下个版本再提一次。"""
+        self._mark(version=__version__)
+        self.window.destroy()
+
+    def never(self) -> None:
+        """点"不再提醒"：以后永不出现（想参与可以去设置 → 关于）。"""
+        self._mark(version=__version__, done=True)
+        self.window.destroy()
+        self.app.set_status("好的，以后不再提醒（想参与随时可在 设置 → 关于 里打开）",
+                            "info")
+
+    def _mark(self, version: str, done: bool = False) -> None:
+        self.app.config["contribute_invite_version"] = version
+        if done:
+            self.app.config["contribute_invite_done"] = True
+        config_module.save_config(self.app.config)

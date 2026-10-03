@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import sys
 import time
+import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 
@@ -288,6 +289,31 @@ def main() -> int:
           and app.strip_holder.winfo_width() <= 1,
           "按钮 %d px，灯条 %d px" % (app.actions_holder.winfo_width(),
                                      app.strip_holder.winfo_width()))
+
+    # ---------------- "参与改进"的启动邀请 ----------------
+    saved_invite = {key: app.config.get(key) for key in
+                    ("contribute_enabled", "contribute_invite_version",
+                     "contribute_invite_done")}
+    try:
+        app.config["contribute_enabled"] = False
+        app.config["contribute_invite_done"] = False
+        app.config["contribute_invite_version"] = ""
+        first = app.maybe_invite_contribution()
+        pump(app, 0.5)
+        again = app.maybe_invite_contribution()          # 同一版不该问第二遍
+        app.config["contribute_enabled"] = True
+        when_on = app.maybe_invite_contribution()        # 已经开了就别问
+        check("参与改进的邀请：每版只弹一次，开着时不弹",
+              first and not again and not when_on,
+              "第一次=%s 第二次=%s 已开启时=%s" % (first, again, when_on))
+    finally:
+        for child in list(app.root.winfo_children()):
+            try:
+                if isinstance(child, tk.Toplevel) and child.title() == "参与改进":
+                    child.destroy()
+            except Exception:
+                pass
+        app.config.update(saved_invite)
 
     # ---------------- 悬停提示不能一直挂着 ----------------
     from app.ui import theme as theme_module

@@ -287,6 +287,8 @@ class MainWindow:
         self.menu.add_separator()
         self.menu.add_command(label="反馈问题（自动带上日志/翻译记录）",
                               command=self.open_bug_report)
+        self.menu.add_command(label="参与改进（贡献术语）",
+                             command=self.open_contribution)
         self.menu.add_command(label="清空显示区", command=self.clear_display)
         self.menu.add_command(label="退出", command=self.quit_app)
         self.text.bind("<Button-3>", self._show_menu)
@@ -1230,6 +1232,37 @@ class MainWindow:
         self.root.after(3800, self.maybe_check_update)
         # 公共词典：启动几秒后在后台拉一次（只下载、不上传任何东西）
         self.root.after(6000, self._public_dict_tick)
+        # "参与改进"的邀请：放最后（12 秒），别和上面几个弹窗撞在一起
+        self.root.after(12000, self.maybe_invite_contribution)
+
+    # ------------------------------------------------------ 参与改进（邀请）
+    def maybe_invite_contribution(self, force: bool = False) -> bool:
+        """启动时问一次"要不要参与改进（贡献术语）"。
+
+        规则（都不违背"默认关、完全自愿"这条）：
+        * 已经开着 → 不问；
+        * 点过"不再提醒" → 永不问；
+        * 每版只问一次（点"以后再说"就等下一个版本再提）；
+        * 点"愿意"才打开开关，并立刻打开贡献窗口让用户看到要发什么。
+
+        返回是否弹了窗口 —— 自检直接看返回值，不用去猜哪个窗口是它。
+        """
+        from .. import __version__
+
+        if self.config.get("contribute_enabled"):
+            return False
+        if not force and self.config.get("contribute_invite_done"):
+            return False
+        if not force and str(self.config.get("contribute_invite_version") or "") == __version__:
+            return False
+        from .contribute import ContributionInviteDialog
+
+        # 一弹出来就记下"这一版问过了"：用户直接关掉窗口也算问过，
+        # 免得同一次运行里反复弹（换个版本才会再问）。
+        self.config["contribute_invite_version"] = __version__
+        config_module.save_config(self.config)
+        ContributionInviteDialog(self, on_accept=self.open_contribution)
+        return True
 
     # ------------------------------------------------------------ 公共词典
     PUBLIC_DICT_TICK = 30 * 60          # 每半小时看一次"该不该更新了"

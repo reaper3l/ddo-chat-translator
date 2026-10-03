@@ -968,6 +968,44 @@ def main() -> int:
 
     step("参与改进对话框（默认关闭）", contribution_dialog)
 
+    def contribution_invite():
+        """启动时那个"愿意帮忙改进翻译吗？"的邀请（用户要求：入口别太隐蔽）。"""
+        from app.ui.contribute import ContributionInviteDialog
+
+        saved = {key: app.config.get(key) for key in
+                 ("contribute_enabled", "contribute_invite_version",
+                  "contribute_invite_done")}
+        app.config["contribute_enabled"] = False
+        dialog = ContributionInviteDialog(app, on_accept=lambda: None)
+        try:
+            dialog.window.update_idletasks()
+            for text in ("愿意，去设置", "以后再说", "不再提醒"):
+                if find_widget(dialog.window, ttk.Button, text) is None:
+                    raise AssertionError("邀请窗口缺少「%s」按钮" % text)
+            if app.config.get("contribute_enabled"):
+                raise AssertionError("只是打开邀请窗口，就把「参与改进」开关打开了")
+            dialog.never()                     # 点「不再提醒」
+            if not app.config.get("contribute_invite_done"):
+                raise AssertionError("点了「不再提醒」却没记下来")
+        finally:
+            try:
+                dialog.window.destroy()
+            except Exception:
+                pass
+            app.config.update(saved)
+
+        # 主窗口的判断：开关开着、或用户点过"不再提醒"，都不该再弹
+        app.config["contribute_enabled"] = True
+        if app.maybe_invite_contribution() is not False:
+            raise AssertionError("已经开着「参与改进」还弹邀请")
+        app.config["contribute_enabled"] = False
+        app.config["contribute_invite_done"] = True
+        if app.maybe_invite_contribution() is not False:
+            raise AssertionError("用户点过「不再提醒」还弹邀请")
+        app.config.update(saved)
+
+    step("参与改进：启动时的邀请（不偷偷开、可永久拒绝）", contribution_invite)
+
     def dictionary_export_import():
         """词典的导出/导入接线：导出成 json 再读回来，导入不应该炸。"""
         import tempfile

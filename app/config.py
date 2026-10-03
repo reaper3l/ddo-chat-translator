@@ -127,6 +127,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "dict_sources": [],
     # 参与改进：把用户**自己确认过的**术语/纠错匿名贡献给作者（默认关，要用户主动开）
     "contribute_enabled": False,
+    # 启动时的那次"愿意帮忙改进翻译吗？"邀请：
+    #   contribute_invite_version = 已经问过的版本号（换版本才会再问一次）
+    #   contribute_invite_done    = 用户点了"不再提醒"（以后都不问）
+    "contribute_invite_version": "",
+    "contribute_invite_done": False,
     # 收件端地址（作者的 Cloudflare Worker，见 tools/contribute_worker.js）。
     # 留空 = 只能"复制贡献码"手动转发；填了才能"直接上传"。
     "contribute_url": "https://ddo-contrib.ddo-tools.workers.dev/",
