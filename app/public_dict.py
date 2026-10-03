@@ -217,6 +217,36 @@ def verify_source(item: dict, payload: bytes, sig_text: str,
     return True, ""
 
 
+TEMPLATE_EXAMPLES = {"rez plz": "复活我", "pop side": "位面监狱", "uudd": "上上下下"}
+TEMPLATE_README = (
+    "这是给「词典源」用的文件，用记事本 / VS Code 改就行。",
+    "只有 terms 是必须的：左边写游戏里的英文（尽量和游戏里一模一样），右边写中文。",
+    "每行一条，最后一条后面不要加逗号；写错了程序会提示「不是合法 JSON」。",
+    "以 _ 开头的字段（比如这条 _说明）只是写给人看的，程序会忽略，删掉也没关系。",
+    "做好之后：词典窗口 →「词典源…」→「添加本地文件…」选中它。",
+    "想让别人也能用：把这个文件放到能直接下载的地方（例如 Gitee/GitHub 上的文件），",
+    "把 raw 链接发给别人，对方在「添加网地址…」里填进去就能订阅 —— 和官方词典一样的用法。",
+    "官方词典比这个多一个 .sig 签名文件（那是作者发的才有）；自己做的源不需要签名。",
+)
+
+
+def source_template(terms: Optional[Dict[str, str]] = None) -> dict:
+    """生成一份"词典源模板"。
+
+    给玩家用：格式就这么点东西 —— 一个 `terms` 字典，外加一段说明。
+    传了 `terms`（比如用户自己在词典里加的词）就当成起点，否则用几个示例词。
+    """
+    start = {str(k).strip(): str(v).strip()
+             for k, v in (terms or {}).items()
+             if str(k).strip() and str(v).strip()}
+    return {
+        "_说明": list(TEMPLATE_README),
+        "version": 1,
+        "updated": time.strftime("%Y-%m-%d %H:%M"),
+        "terms": start or dict(TEMPLATE_EXAMPLES),
+    }
+
+
 def _parse_terms(payload: bytes) -> Dict[str, str]:
     """把词典 JSON 里的 terms 取出来（大小写、类型都过一遍）。"""
     try:

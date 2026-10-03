@@ -942,6 +942,39 @@ def main() -> int:
 
     step("词典源窗口：官方源 + 自己加的源", dict_sources_dialog)
 
+    def dict_source_help():
+        """「自己做词典源…」：讲清格式 + 存出来的模板真能当源用。"""
+        import tempfile
+        from pathlib import Path
+
+        from app import paths
+        from app.ui.dict_sources import SourceHelpDialog
+
+        made = []
+        target = Path(tempfile.mkdtemp(prefix="ddo-src-help-")) / "模板.json"
+        dialog = SourceHelpDialog(app, on_make=made.append)
+        try:
+            dialog.window.update_idletasks()
+            if find_widget(dialog.window, ttk.Button, "保存一个模板文件…") is None:
+                raise AssertionError("缺少「保存一个模板文件…」按钮")
+            filedialog.asksaveasfilename = lambda *a, **k: str(target)
+            messagebox.askyesno = lambda *a, **k: True
+            dialog.make_template()
+            if not target.exists():
+                raise AssertionError("点了保存却没生成模板文件")
+            payload = paths.read_json(target, {})
+            if not isinstance(payload.get("terms"), dict) or not payload["terms"]:
+                raise AssertionError("模板里没有可用的 terms：%r" % (payload,))
+            if not made:
+                raise AssertionError("存完模板后没问「要不要直接加成源」")
+        finally:
+            try:
+                dialog.window.destroy()
+            except Exception:
+                pass
+
+    step("词典源：自己做源的说明 + 模板文件", dict_source_help)
+
     def contribution_dialog():
         """「参与改进」对话框：默认关、有预览/复制贡献码按钮（这一步不联网）。"""
         from app.ui.contribute import ContributionDialog

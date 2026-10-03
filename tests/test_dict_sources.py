@@ -145,6 +145,52 @@ def test_source_id_is_sanitized():
 
 
 # ------------------------------------------------------------ 合并与优先级
+def test_minimal_terms_file_works_as_a_source():
+    """玩家自己做源只需要一段 terms —— 这是"格式是什么"的答案，钉住它。"""
+    with _TempEnv() as tmp:
+        path = tmp / "最简源.json"
+        path.write_text('{"terms": {"rez plz": "复活我"}}', encoding="utf-8")
+        item = {"id": "simple", "name": "手写的源", "kind": "file",
+                "path": str(path), "enabled": True, "ack": True}
+        assert public_dict.source_terms(item) == {"rez plz": "复活我"}
+
+
+def test_glossary_export_file_works_as_a_source():
+    """词典窗口「只导出我的…」出来的 JSON 能直接当源用（界面文案就是这么说的）。"""
+    from app import glossary_io
+
+    with _TempEnv() as tmp:
+        text = glossary_io.dump_terms({"omw": "马上到", "rez plz": "复活我"})
+        path = tmp / "导出.json"
+        path.write_text(text, encoding="utf-8")
+        item = {"id": "export", "name": "我的导出", "kind": "file",
+                "path": str(path), "enabled": True, "ack": True}
+        assert public_dict.source_terms(item) == {"omw": "马上到", "rez plz": "复活我"}
+
+
+def test_source_template_is_loadable_and_self_explanatory():
+    """模板要能当源用，而且里面得写清楚怎么用（玩家最容易卡在这里）。"""
+    from app import paths
+
+    with _TempEnv() as tmp:
+        payload = public_dict.source_template({"my term": "我的词"})
+        assert payload["terms"] == {"my term": "我的词"}
+        assert payload["_说明"] and any("terms" in line for line in payload["_说明"])
+        path = tmp / "模板.json"
+        assert paths.write_json(path, payload) is True
+        item = {"id": "tpl", "name": "模板", "kind": "file", "path": str(path),
+                "enabled": True, "ack": True}
+        assert public_dict.source_terms(item) == {"my term": "我的词"}
+
+        # 没给词就用示例词，而且示例词是"客户端真会用到"的那种
+        empty = public_dict.source_template()
+        assert empty["terms"] == public_dict.TEMPLATE_EXAMPLES
+        from app import replay
+
+        for term, zh in empty["terms"].items():          # 示例词要"客户端真的会用"
+            assert replay.client_usable(term, zh), (term, zh)
+
+
 def test_local_file_source_is_merged():
     seed, pub = _keypair()
     with _TempEnv(pub) as tmp:

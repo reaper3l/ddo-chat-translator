@@ -64,6 +64,8 @@ class DictSourcesDialog:
         row.pack(fill="x", padx=12, pady=(8, 2))
         ttk.Button(row, text="添加本地文件…", command=self.add_file).pack(side="left")
         ttk.Button(row, text="添加网地址…", command=self.add_url).pack(side="left", padx=6)
+        ttk.Button(row, text="自己做词典源…",
+                   command=self.show_help).pack(side="left", padx=(0, 6))
         ttk.Button(row, text="启用/停用", command=self.toggle).pack(side="left", padx=6)
         ttk.Button(row, text="上移", command=lambda: self.move(-1)).pack(side="left")
         ttk.Button(row, text="下移", command=lambda: self.move(1)).pack(side="left", padx=6)
@@ -158,6 +160,12 @@ class DictSourcesDialog:
             filetypes=[("词典 JSON", "*.json"), ("所有文件", "*.*")])
         if not path:
             return
+        self.add_local_path(path)
+
+    def add_local_path(self, path: str) -> None:
+        """把一个本地 JSON 加成本地源（「自己做词典源…」里也用这个）。"""
+        if not self._check_room():
+            return
         default = Path(path).stem
 
         def submit(name: str) -> None:
@@ -167,6 +175,10 @@ class DictSourcesDialog:
         ask.ask_one(self.app, "添加本地词典源", "给它起个名字", submit,
                     hint="本地文件随时可以改，改完点「立即更新」就生效；同名不会覆盖官方词。",
                     initial=default)
+
+    def show_help(self) -> None:
+        """「自己做词典源…」：把格式讲清楚，并给一个能直接改的模板。"""
+        SourceHelpDialog(self.app, on_make=self.add_local_path)
 
     def add_url(self) -> None:
         if not self._check_room():
@@ -188,7 +200,8 @@ class DictSourcesDialog:
                           "url": url, "enabled": True, "ack": True})
 
         ask.ask_two(self.app, "添加网词典源", "名称", "地址（http/https 的 JSON）",
-                    submit, hint="地址指向的 JSON 和官方词典同一种格式；"
+                    submit, hint="地址指向的 JSON 只要有一段 terms 就行"
+                                 "（格式不清楚就点「自己做词典源…」看一眼）；"
                                  "带 .sig 的话程序会自动验签。")
 
     def refresh_all(self) -> None:
@@ -241,3 +254,90 @@ class DictSourcesDialog:
                 self.on_change()
             except Exception:                      # noqa: BLE001
                 pass
+
+
+HELP_TEXT = """词典源就是一个 JSON 文件，格式很简单 —— 只有 terms 是必须的：
+
+{
+  "terms": {
+    "rez plz": "复活我",
+    "pop side": "位面监狱"
+  }
+}
+
+· 左边写游戏里的英文（尽量和游戏里原本的写法一样），右边写中文；
+· 每行一条，最后一条后面不要加逗号；
+· 想加点说明就写 "_说明": ["随便写"]，程序会忽略以 _ 开头的字段。
+
+三种做法，随便挑一种：
+
+① 你已经有词表：词典窗口 →「只导出我的…」导出的 JSON 就是这个格式，
+   用记事本改一改，再回到这个窗口点「添加本地文件…」选它就行。
+② 从零开始：点下面的「保存一个模板文件…」，我把模板（带上你已有的词）存出来，
+   你照着改；改完同样用「添加本地文件…」加进来。
+③ 用别人的：对方把文件放到能直接下载的地方（比如 Gitee/GitHub 上的文件），
+   把 raw 链接给你，你在「添加网地址…」里填进去 —— 和官方词典一样的用法。
+
+自己做的源不需要签名（签名只有官方词典才有）。
+不管哪个源，都只补空缺：同名不会覆盖官方词，更覆盖不了你自己改过的译法。
+"""
+
+
+class SourceHelpDialog:
+    """「自己做词典源…」：把格式讲清楚 + 生成一个能直接改的模板。"""
+
+    def __init__(self, app, on_make=None) -> None:
+        self.app = app
+        self.on_make = on_make
+        self.window = tk.Toplevel(app.root)
+        self.window.title("自己做词典源")
+        self.window.transient(app.root)
+        theme.prepare_window(self.window, app.config)
+        theme.frameless_dialog(self.window, "自己做词典源", size=(680, 560))
+        self._build()
+
+    def _build(self) -> None:
+        box = theme.text_widget(self.window, wrap="word")
+        box.pack(fill="both", expand=True, padx=12, pady=(10, 4))
+        box.insert("end", HELP_TEXT)
+        box.configure(state="disabled")
+
+        row = ttk.Frame(self.window)
+        row.pack(fill="x", padx=12, pady=(4, 10))
+        theme.label(row, "改完文件后回到「词典源」窗口点「添加本地文件…」就行",
+                    muted=True).pack(side="left")
+        ttk.Button(row, text="关闭", command=self.window.destroy).pack(side="right")
+        ttk.Button(row, text="保存一个模板文件…", style="Accent.TButton",
+                   command=self.make_template).pack(side="right", padx=6)
+
+    def make_template(self) -> None:
+        """把模板存成文件（尽量带上用户自己已有的词），并问要不要直接加成源。"""
+        from .. import paths
+
+        path = filedialog.asksaveasfilename(
+            parent=self.window, title="保存词典源模板",
+            defaultextension=".json", initialfile="我的词典源.json",
+            filetypes=[("词典源 JSON", "*.json"), ("所有文件", "*.*")])
+        if not path:
+            return
+        terms = {}
+        try:
+            for item in self.app.memory.term_list():
+                term = str(item.get("text") or "").strip()
+                zh = str(item.get("zh") or "").strip()
+                if term and zh:
+                    terms[term] = zh
+        except Exception:                          # noqa: BLE001
+            terms = {}
+        if not paths.write_json(Path(path), public_dict.source_template(terms)):
+            messagebox.showwarning("没保存成功", "写文件失败：\n%s" % path,
+                                   parent=self.window)
+            return
+        if messagebox.askyesno(
+                "模板已保存",
+                "模板已经存到：\n%s\n（里面带了 %d 条你自己的词，可以直接改）\n\n"
+                "现在就把这个文件加成一个词典源吗？" % (path, len(terms)),
+                parent=self.window):
+            self.window.destroy()
+            if callable(self.on_make):
+                self.on_make(path)
