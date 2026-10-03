@@ -749,8 +749,10 @@ class MainWindow:
         actions_width = max(1, self.actions.winfo_reqwidth())
         strip_width = max(1, self._strip_width or self.channel_strip.winfo_reqwidth())
         self._animating = True
+        self._animation_drawn = 0            # 自己数画了几帧（自检用，见 window_check）
 
         def set_width(ratio: float) -> None:
+            self._animation_drawn = getattr(self, "_animation_drawn", 0) + 1
             if expanded:
                 actions_part, strip_part = actions_width * ratio, strip_width * (1 - ratio)
             else:

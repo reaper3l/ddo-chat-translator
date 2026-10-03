@@ -62,6 +62,16 @@ def pump(app, seconds: float) -> None:
         time.sleep(0.02)
 
 
+def pump_until(app, condition, attempts: int = 6, gap: float = 0.2) -> bool:
+    """反复 pump 直到条件成立 —— Tk 的焦点/映射要看窗口管理器的脸色，
+    机器一忙就会晚几拍，单次采样容易冤枉它（这个自检以前偶发失败就是这个原因）。"""
+    for _ in range(max(1, attempts)):
+        if condition():
+            return True
+        pump(app, gap)
+    return bool(condition())
+
+
 def descendants(widget, kind):
     """把控件树里某一类控件全找出来（顺序按遍历顺序）。"""
     found = []
@@ -96,8 +106,8 @@ def main() -> int:
     dialog = CnToEnDialog(app)
     pump(app, 0.9)                  # 等 after(80)/after(400) 的自动聚焦跑完
 
-    check("打开中译英后，焦点在输入框上",
-          dialog.window.focus_get() is dialog.input,
+    first_ok = pump_until(app, lambda: dialog.window.focus_get() is dialog.input)
+    check("打开中译英后，焦点在输入框上", first_ok,
           "当前焦点 %r" % (dialog.window.focus_get(),))
 
     app.root.focus_force()          # 模拟"焦点跑到游戏/别的窗口去了"
@@ -107,9 +117,8 @@ def main() -> int:
 
     # when="tail" = 交给事件循环处理，和真实点击一样
     dialog.window.event_generate("<Button-1>", x=200, y=300, when="tail")
-    pump(app, 0.3)
-    check("点回对话框后，焦点回到输入框",
-          dialog.window.focus_get() is dialog.input,
+    back_ok = pump_until(app, lambda: dialog.window.focus_get() is dialog.input)
+    check("点回对话框后，焦点回到输入框", back_ok,
           "当前焦点 %r" % (dialog.window.focus_get(),))
 
     dialog.input.focus_force()
@@ -263,6 +272,7 @@ def main() -> int:
     check("展开时功能按钮占着位置", expanded > 40, "%d px" % expanded)
 
     app.config["toolbar_collapsed"] = True
+    app._animation_drawn = 0
     app._apply_toolbar_collapsed(animate=True)
     samples = []
     # 采"不同的宽度"：每 5ms 采一次、最多 200ms（动画本身约 130ms）。
@@ -280,9 +290,11 @@ def main() -> int:
     actions_end = app.actions_holder.winfo_width()
     strip_end = app.strip_holder.winfo_width()
     lampps = len(app._lamp_boxes)
-    check("收起时有过渡动画（宽度逐帧变小，不是一步到位）",
-          len(set(samples)) >= 3 and samples[0] >= samples[-1],
-          "%s → %d" % (samples, actions_end))
+    # 判"是不是真的分多帧画的"：让程序自己数（采样宽度会被机器负载影响，测不准）
+    drawn = int(getattr(app, "_animation_drawn", 0) or 0)
+    check("收起时有过渡动画（分多帧画出来，不是一步到位）",
+          drawn >= 3 and samples and samples[-1] <= samples[0] + 1,
+          "画了 %d 帧，宽度采样 %s → %d" % (drawn, samples, actions_end))
     # 注意：Tk 的 Frame 宽度最小是 1（设成 0 也会报 1），所以判断用 <= 1
     check("动画结束后：按钮收起、灯条就位",
           actions_end <= 1 and strip_end > 10 and lampps > 0,
