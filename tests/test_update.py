@@ -48,6 +48,32 @@ def test_check_returns_none_when_up_to_date():
     assert info is None
 
 
+def test_check_falls_back_to_github_mirror():
+    """Gitee 打不开时，用 GitHub 镜像源照样能发现新版（发行页也指向镜像站）。"""
+    def fetch(url):
+        if "gitee.com" in url:
+            raise OSError("gitee down")
+        return _release("v9.9.9", assets=[_asset(
+            "https://github.com/reaper3l/ddo-chat-translator/releases/download/v9.9.9/DDO.zip",
+            "DDO.zip")])
+
+    info = update.check("3.0.19", fetcher=fetch)
+    assert info is not None and info.version == "9.9.9"
+    assert "github.com" in info.page_url
+    assert info.asset_name == "DDO.zip"
+
+
+def test_check_picks_the_newest_of_both_sources():
+    """两边都通时取更新的那个（万一镜像还没同步完，不能反而降级）。"""
+    def fetch(url):
+        if "gitee.com" in url:
+            return _release("v9.9.8")
+        return _release("v9.9.10")
+
+    info = update.check("3.0.19", fetcher=fetch)
+    assert info is not None and info.version == "9.9.10"
+
+
 def test_check_returns_none_when_release_has_no_package():
     """附件被清理过的发行版：仍然提示有新版，但没有可下载的包（界面会引导去发行页）。"""
     info = update.check("3.0.19", fetcher=lambda url: _release("v9.9.9", assets=[]))

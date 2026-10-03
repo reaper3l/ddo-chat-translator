@@ -35,6 +35,10 @@ from . import AUTHOR, HOMEPAGE, __version__
 from . import ed25519
 
 API_LATEST = "https://gitee.com/api/v5/repos/git55236/ddo-chat-translator/releases/latest"
+# 备用更新源（GitHub 镜像仓库）：Gitee 打不开、被限流或临时抽风时从这里查。
+# 两边是**同一批发行版、同一个安装包、同一个签名**，所以走哪个源都安全。
+API_LATEST_MIRROR = "https://api.github.com/repos/reaper3l/ddo-chat-translator/releases/latest"
+MIRROR_HOMEPAGE = "https://github.com/reaper3l/ddo-chat-translator"
 USER_AGENT = "DDOTranslator/%s (+%s)" % (__version__, HOMEPAGE)
 
 # --------------------------------------------------------------------------
@@ -109,14 +113,8 @@ def _http_get(url: str, timeout: float = 8.0) -> bytes:
         return response.read()
 
 
-def check(current: str = __version__, fetcher: Optional[Callable[[str], bytes]] = None,
-          timeout: float = 8.0) -> Optional[UpdateInfo]:
-    """查最新发行版；有新版返回 UpdateInfo，没有（或查不到）返回 None。"""
-    fetch = fetcher or (lambda url: _http_get(url, timeout))
-    try:
-        data = json.loads(fetch(API_LATEST).decode("utf-8"))
-    except Exception:
-        return None
+def _parse_release(data, current: str, homepage: str) -> Optional["UpdateInfo"]:
+    """把一份发行版 JSON（Gitee / GitHub 的字段差不多）解析成 UpdateInfo。"""
     if not isinstance(data, dict):
         return None
     tag = str(data.get("tag_name") or "").strip()
@@ -129,7 +127,7 @@ def check(current: str = __version__, fetcher: Optional[Callable[[str], bytes]] 
     if not info.page_url or not page_url_ok(info.page_url):
         # Gitee 的这个接口不总是给 html_url，按 tag 自己拼一个发行页地址；
         # 给了但不是 Gitee/GitHub 的（账号被拿走后的钓鱼链接）也一律不用。
-        info.page_url = "%s/releases/tag/%s" % (HOMEPAGE.rstrip("/"), tag)
+        info.page_url = "%s/releases/tag/%s" % (homepage.rstrip("/"), tag)
     # Gitee 的 assets 里有下载地址和文件名（id 要另外查，这里用不到）
     for asset in (data.get("assets") or []):
         if not isinstance(asset, dict):
@@ -145,6 +143,28 @@ def check(current: str = __version__, fetcher: Optional[Callable[[str], bytes]] 
         # 没有可下载的包（例如附件被清理了）→ 让界面引导去发行页
         info.asset_url = ""
     return info
+
+
+def check(current: str = __version__, fetcher: Optional[Callable[[str], bytes]] = None,
+          timeout: float = 8.0) -> Optional[UpdateInfo]:
+    """查最新发行版：先问 Gitee，再问 GitHub 镜像，取两边里**最新**的那个。
+
+    两个源都可以单独失败：Gitee 打不开时自动用 GitHub，反过来也一样。
+    """
+    fetch = fetcher or (lambda url: _http_get(url, timeout))
+    best: Optional[UpdateInfo] = None
+    for api, homepage in ((API_LATEST, HOMEPAGE),
+                          (API_LATEST_MIRROR, MIRROR_HOMEPAGE)):
+        try:
+            data = json.loads(fetch(api).decode("utf-8"))
+        except Exception:
+            continue
+        info = _parse_release(data, current, homepage)
+        if info is None:
+            continue
+        if best is None or is_newer(info.version, best.version):
+            best = info
+    return best
 
 
 def download(url: str, target: Path,

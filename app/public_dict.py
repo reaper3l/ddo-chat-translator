@@ -25,13 +25,17 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import ed25519, paths, update
 
 # 默认地址：仓库 dict 分支上的词典（和代码历史分开，链接稳定，随时可换镜像）
 DEFAULT_URL = ("https://gitee.com/git55236/ddo-chat-translator/"
                "raw/dict/dictionary/public.json")
+# 备用地址（GitHub 镜像仓库的同一个分支）：Gitee 打不开时自动改用这个，
+# 内容完全一样、签名也一样（两边都要验签，验不过就丢弃）。
+MIRROR_URL = ("https://raw.githubusercontent.com/reaper3l/ddo-chat-translator/"
+              "dict/dictionary/public.json")
 SIGNATURE_MARK = "---- DDO-DICT-SIGNATURE ----"
 USER_AGENT = "DDOTranslator-publicdict (+%s)" % update.HOMEPAGE
 REQUEST_TIMEOUT = 8
@@ -273,6 +277,15 @@ def effective_url(config: Optional[dict] = None) -> str:
     return str(config.get("public_dict_url") or "").strip() or DEFAULT_URL
 
 
+def url_candidates(config: Optional[dict] = None) -> List[str]:
+    """按顺序尝试的下载地址：配置/默认 → 备用镜像（去重）。"""
+    first = effective_url(config)
+    out = [first]
+    if MIRROR_URL not in out:
+        out.append(MIRROR_URL)
+    return out
+
+
 def _install_bucket(batch: str) -> int:
     """本机在灰度分桶里的位置（0~99）。
 
@@ -360,12 +373,21 @@ def sync(config: Optional[dict] = None,
         out["reason"] = "还没到下次检查时间"
         return out
     fetch = fetcher or _fetch
-    try:
-        payload = fetch(url)
-        sig_text = fetch(url + ".sig").decode("utf-8", errors="replace")
-    except Exception as exc:
-        out["reason"] = "下载失败：%s" % exc
-        logging.getLogger("ddo").info("公共词典下载失败（用缓存/内置）：%s", exc)
+    payload = b""
+    sig_text = ""
+    reasons = []
+    for candidate in url_candidates(config):
+        try:
+            payload = fetch(candidate)
+            sig_text = fetch(candidate + ".sig").decode("utf-8", errors="replace")
+            break
+        except Exception as exc:                       # noqa: BLE001
+            reasons.append("%s → %s" % (candidate.split("/")[2], exc))
+            payload, sig_text = b"", ""
+    if not payload:
+        out["reason"] = "下载失败：%s" % "；".join(reasons) if reasons else "下载失败"
+        logging.getLogger("ddo").info("公共词典下载失败（用缓存/内置）：%s",
+                                      "；".join(reasons))
         return out
     ok, reason = verify(payload, sig_text, pubkey=pubkey)
     if not ok:

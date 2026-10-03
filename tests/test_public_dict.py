@@ -188,6 +188,24 @@ def test_sync_is_skipped_when_disabled():
         assert not result["ok"] and not called
 
 
+def test_sync_falls_back_to_mirror_when_primary_fails():
+    """Gitee 原始地址打不开时，自动改用 GitHub 镜像地址（内容同样要验签）。"""
+    seed, pub = _keypair()
+    payload = _payload({"brandnew": "全新词"})
+    sig_text = _signed(payload, seed)
+
+    def fetch(url: str) -> bytes:
+        if public_dict.MIRROR_URL in url:
+            return sig_text.encode("utf-8") if url.endswith(".sig") else payload
+        raise OSError("gitee raw is down")
+
+    with _TempCache(pub):
+        result = public_dict.sync({"public_dict_enabled": True}, fetcher=fetch,
+                                  force=True, pubkey=pub)
+        assert result["ok"] and result["updated"], result
+        assert public_dict.load_terms() == {"brandnew": "全新词"}
+
+
 def test_needs_sync_respects_interval_and_off_switch():
     with _TempCache():
         config = {"public_dict_enabled": True, "public_dict_interval_hours": 6}
