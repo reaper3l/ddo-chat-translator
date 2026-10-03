@@ -200,8 +200,10 @@ class Pipeline:
         self._capture_thread.start()
         self._translate_thread.start()
         self._lower_thread_priority(self._capture_thread)
+        # 引擎名不上状态栏：那一行本来就挤，引擎（含模型名）放在底栏的悬停提示里，
+        # 设置 → 翻译 也能看到。这里只在"引擎被回退"时补一句提醒。
         note = "（%s）" % self.engine_note if self.engine_note else ""
-        self._emit_status("已开始监听 · 引擎 %s%s" % (self.engine.describe(), note), "info")
+        self._emit_status("已开始监听%s" % note, "info")
 
     @staticmethod
     def _lower_thread_priority(thread) -> None:

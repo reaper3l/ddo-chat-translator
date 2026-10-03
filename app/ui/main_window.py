@@ -65,6 +65,11 @@ ACTION_BUTTONS = (
     ("⚙", "设置", "open_settings", "引擎、区域、外观、学习阈值"),
 )
 
+# 底部状态栏右侧那排计数的悬停说明（前面会拼上"当前引擎"）
+STATS_TIP = ("待译=排队中　缓存=命中本地缓存　调用=已请求接口次数\n"
+             "记忆=命中你纠正过的句子　跳过=画面没变省掉的 OCR 次数\n"
+             "错误=接口失败次数")
+
 
 class MainWindow:
     def __init__(self) -> None:
@@ -249,10 +254,8 @@ class MainWindow:
         self.grip.bind("<B1-Motion>", lambda event: self.frameless.drag(event))
         self.grip.bind("<ButtonRelease-1>", lambda event: self.frameless.release(event))
         theme.Tooltip(self.grip, "拖动这里可以缩放窗口")
-        theme.Tooltip(self.stats_label,
-                      "待译=排队中　缓存=命中本地缓存　调用=已请求接口次数\n"
-                      "记忆=命中你纠正过的句子　跳过=画面没变省掉的 OCR 次数\n"
-                      "错误=接口失败次数")
+        # 悬停提示里带上"当前引擎"——状态栏本身放不下（并且用户反馈太占地方）
+        self.stats_tooltip = theme.Tooltip(self.stats_label, STATS_TIP)
 
         # ---------------- 中间：聊天卡片 ----------------
         card = ttk.Frame(self.root, style="Card.TFrame")
@@ -908,6 +911,13 @@ class MainWindow:
         status = self.pipeline.status()
         stats = status["stats"]
         running = bool(status["running"])
+        try:
+            engine = str(status.get("engine") or "")
+            note = str(status.get("engine_note") or "")
+            self.stats_tooltip.text = ("当前引擎：%s%s\n" % (
+                engine, "（%s）" % note if note else "")) + STATS_TIP
+        except Exception:                          # noqa: BLE001
+            pass
         icons_only = bool(self.config.get("toolbar_icons_only", False))
         if icons_only:
             # 图标模式：只占 3 个字符宽，不再白占 13 个字符
