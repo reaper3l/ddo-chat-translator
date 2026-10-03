@@ -22,6 +22,7 @@ def test_boolean_switches_used_by_settings_exist():
         "low_priority", "idle_backoff", "merge_same_row", "ui_animation",
         "cn2en_auto_suggest", "cn2en_clear_after",
         "flatten_background", "ocr_det_cap",
+        "public_dict_enabled", "contribute_enabled",
         "check_update",
     )
     for key in switches:

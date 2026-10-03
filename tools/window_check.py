@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.ui import theme                    # noqa: E402
+from app import disclaimer                  # noqa: E402
 from app.ui.cn2en import CnToEnDialog       # noqa: E402
 from app.ui.main_window import MainWindow   # noqa: E402
 
@@ -73,6 +74,9 @@ def main() -> int:
     app = MainWindow()
     snapshot = _config_snapshot()
     app.config["public_dict_enabled"] = False    # 自检不联网（不拉公共词典）
+    # 条款版本升过级时，主窗口 200ms 后会自动弹同意框并 grab 输入 —— 那会干扰焦点检查，
+    # 所以自检里直接标成"已同意"（同意流程本身由 ui_smoke 单独测）。
+    app.config["agreement_version"] = disclaimer.DISCLAIMER_VERSION
     app.root.deiconify()            # 真实使用时主窗口是显示的
     app.root.geometry("+40+40")
     app.root.update()

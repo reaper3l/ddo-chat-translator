@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SKIP_DIRS = {"__pycache__", ".git", "build", "dist", "data"}
 ALLOWED = {"__file__", "__name__", "__doc__", "__package__", "__spec__",
            "__builtins__", "__loader__", "__debug__"}
+# 基类提供、静态检查看不到的方法（写在这里 = 明确知道它来自标准库基类）
+BASE_METHODS = {
+    "send_response", "send_header", "end_headers",   # http.server.BaseHTTPRequestHandler
+}
 
 
 def bound_names(tree: ast.AST) -> set:
@@ -103,7 +107,7 @@ def check_missing_self_methods(tree: ast.AST) -> list:
                     and isinstance(sub.func.value, ast.Name)
                     and sub.func.value.id == "self"):
                 name = sub.func.attr
-                if name not in defined and name not in assigned:
+                if name not in defined and name not in assigned and name not in BASE_METHODS:
                     problems.append((name, "类 %s：调用了未定义的 self.%s()（第 %d 行）"
                                      % (node.name, name, sub.lineno)))
     return problems

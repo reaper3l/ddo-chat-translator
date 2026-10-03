@@ -920,6 +920,27 @@ def main() -> int:
 
     step("词典窗口：公共词典开关/状态", dictionary_public_dict_row)
 
+    def contribution_dialog():
+        """「参与改进」对话框：默认关、有预览/复制贡献码按钮（这一步不联网）。"""
+        from app.ui.contribute import ContributionDialog
+
+        dialog = ContributionDialog(app)
+        try:
+            dialog.window.update_idletasks()
+            if find_widget(dialog.window, ttk.Button, "预览要发送的内容") is None:
+                raise AssertionError("缺少「预览要发送的内容」按钮")
+            if find_widget(dialog.window, ttk.Button, "复制贡献码") is None:
+                raise AssertionError("缺少「复制贡献码」按钮")
+            if dialog.enabled.get():
+                raise AssertionError("参与改进默认必须是关闭的")
+            if not str(dialog.count_label.cget("text")).startswith("当前未开启"):
+                raise AssertionError("关闭状态下的说明文案不对：%r"
+                                     % dialog.count_label.cget("text"))
+        finally:
+            dialog.window.destroy()
+
+    step("参与改进对话框（默认关闭）", contribution_dialog)
+
     def dictionary_export_import():
         """词典的导出/导入接线：导出成 json 再读回来，导入不应该炸。"""
         import tempfile

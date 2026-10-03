@@ -42,8 +42,10 @@ def test_text_is_readable_and_covers_key_points():
     assert "条款版本 %d" % disclaimer.DISCLAIMER_VERSION in body
     assert disclaimer.DISCLAIMER_DATE in body
     # 这几件事必须写进正文里，缺了就等于没告知
-    for keyword in ("第三方", "服务条款", "上传到任何地方", "API", "担保",
-                    "著作权", "签名公钥", "不同意"):
+    for keyword in ("第三方", "服务条款", "API", "担保",
+                    "著作权", "签名公钥", "不同意",
+                    # 联网与"参与改进"必须写清楚（默认关、只发确认过的、能预览）
+                    "公共词典", "参与改进", "默认关闭", "匿名", "预览"):
         assert keyword in body, keyword
     # Tk 文本框不认 Markdown，正文里不该出现 ** 这种标记
     assert "**" not in body

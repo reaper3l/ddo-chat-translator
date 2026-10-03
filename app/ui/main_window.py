@@ -1149,6 +1149,12 @@ class MainWindow:
     def open_learning(self) -> None:
         LearningCenterDialog(self)
 
+    def open_contribution(self) -> None:
+        """「参与改进」：把用户自己确认过的术语/纠错匿名贡献出去（默认关）。"""
+        from .contribute import ContributionDialog
+
+        return ContributionDialog(self)
+
     def open_dictionary(self) -> None:
         DictionaryDialog(self)
 
