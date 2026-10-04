@@ -225,6 +225,36 @@ def test_report_text_mentions_gates_and_alerts():
 
 
 # ------------------------------------------------------- 否定票（自保护闭环）
+def test_overview_counts_users_days_and_gaps():
+    """贡献总览：多少人、按天分布、每个词离门槛还差多少。"""
+    records = [
+        {"uid": "aaa", "time": "2026-10-03",
+         "terms": [{"t": "rez plz", "z": "复活我"}, {"t": "gtg", "z": "要走了"}],
+         "phrases": [], "negatives": []},
+        {"uid": "bbb", "time": "2026-10-03",
+         "terms": [{"t": "rez plz", "z": "复活我"}], "phrases": [], "negatives": []},
+        {"uid": "bbb", "time": "2026-10-04",
+         "terms": [{"t": "rez plz", "z": "复活我"}], "phrases": [], "negatives": []},
+    ]
+    data = contribute.overview(records)
+    assert data["records"] == 3 and data["users"] == 2
+    assert data["by_day"] == {"2026-10-03": 2, "2026-10-04": 1}
+    assert data["by_user"]["aaa"]["terms"] == 2
+    assert data["by_user"]["bbb"]["records"] == 2
+    gaps = {item["term"]: item for item in data["gaps"]}
+    # rez plz：2 个不同的人给过 → 还差 2 人；gtg 只有 1 人 → 还差 3 人
+    assert gaps["rez plz"]["users"] == 2 and gaps["rez plz"]["need_users"] == 2
+    assert gaps["gtg"]["need_users"] == 3
+    # 3 份都来自 2 个人，谁都还没到门槛 → 不该有词通过
+    assert data["terms"] == {}
+
+
+def test_overview_is_empty_safe():
+    data = contribute.overview([])
+    assert data["records"] == 0 and data["users"] == 0 and data["by_day"] == {}
+    assert data["terms"] == {} and data["gaps"] == []
+
+
 def _memory_with(term="rez plz", zh="复活我"):
     return _FakeMemory(terms=[{"text": term, "zh": zh, "count": 2}])
 

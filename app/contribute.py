@@ -400,6 +400,8 @@ DEFAULT_GATES = {
     "min_negative_users": 3,   # 多少个不同用户把同一个公共词改掉 → 建议从公共库下架
     "max_new_per_run": 30,     # 单批新增超过这个数 → 报警，停下来等人看
     "max_single_user_share_alert": 0.5,
+    # "一个人占了大头"这条报警，至少要有这么多贡献者才有意义（人少时必然占满）
+    "min_users_for_share_alert": 3,
 }
 
 
@@ -515,10 +517,13 @@ def aggregate(records: Iterable[dict], gates: Optional[dict] = None,
         alerts.append("本批新增 %d 条，超过上限 %d —— 可能有人在刷，建议先别推。"
                       % (len(candidates), int(gate["max_new_per_run"])))
     total_items = sum(user_totals.values()) or 1
-    for uid, count in sorted(user_totals.items(), key=lambda kv: -kv[1])[:1]:
-        if count / float(total_items) > float(gate["max_single_user_share_alert"]):
-            alerts.append("单个贡献者占了 %.0f%% 的条目（%s），建议看一眼来源。"
-                          % (count * 100.0 / total_items, uid))
+    # 参与的人还少的时候，"一个人占了大头"是必然的（比如总共只有 1 个人贡献过），
+    # 那时候天天报警只会让人不再看报警 —— 所以这条要等到人数够多才有意义。
+    if len(user_totals) >= int(gate.get("min_users_for_share_alert", 3)):
+        for uid, count in sorted(user_totals.items(), key=lambda kv: -kv[1])[:1]:
+            if count / float(total_items) > float(gate["max_single_user_share_alert"]):
+                alerts.append("单个贡献者占了 %.0f%% 的条目（%s），建议看一眼来源。"
+                              % (count * 100.0 / total_items, uid))
     for info in details:
         bad = [w for w in AD_WORDS if w in info["term"]]
         if bad:
@@ -580,3 +585,61 @@ def report_text(result: dict, gates: Optional[dict] = None) -> str:
     else:
         lines.append("  （无）")
     return "\n".join(lines)
+
+
+def overview(records: Iterable[dict], gates: Optional[dict] = None) -> dict:
+    """贡献总览（作者侧）：有多少人参与、各人给了多少、哪个词离门槛还差多少。
+
+    和 `aggregate()` 的区别：aggregate 回答"哪些词能进公共词典"，
+    overview 回答"现在有多少人在维护、攒到什么程度"。
+
+    口径说明：客户端那边**发过的条目不会再发**（本机台账按内容哈希去重），
+    所以这里的数字是"每个人新确认过的内容"的累计，不是他确认过的总数。
+    """
+    gate = dict(DEFAULT_GATES)
+    gate.update(gates or {})
+    rows = [row for row in (records or []) if isinstance(row, dict)]
+    by_user: Dict[str, dict] = {}
+    by_day: Dict[str, int] = {}
+    for row in rows:
+        uid = str(row.get("uid") or "?")
+        info = by_user.setdefault(uid, {"records": 0, "terms": 0, "phrases": 0,
+                                        "negatives": 0, "first": "", "last": ""})
+        info["records"] += 1
+        info["terms"] += len(row.get("terms") or [])
+        info["phrases"] += len(row.get("phrases") or [])
+        info["negatives"] += len(row.get("negatives") or [])
+        day = str(row.get("time") or "").strip()[:10]
+        if day:
+            by_day[day] = by_day.get(day, 0) + 1
+            if not info["first"] or day < info["first"]:
+                info["first"] = day
+            if day > info["last"]:
+                info["last"] = day
+    result = aggregate(rows, gates=gate)
+    # 每个词还差多少才够门槛（"还差几个不同的人 / 还差几次"）
+    gaps = []
+    for info in result.get("details", []):
+        if not info.get("fail"):
+            continue
+        gaps.append({
+            "term": info.get("term", ""),
+            "users": int(info.get("users", 0)),
+            "count": int(info.get("count", 0)),
+            "need_users": max(0, int(gate["min_users"]) - int(info.get("users", 0))),
+            "need_count": max(0, int(gate["min_count"]) - int(info.get("count", 0))),
+            "known": bool(info.get("known")),
+        })
+    gaps.sort(key=lambda item: (item["need_users"], item["need_count"], item["term"]))
+    return {
+        "records": len(rows),
+        "users": len(by_user),
+        "by_user": by_user,
+        "by_day": dict(sorted(by_day.items())),
+        "terms": result.get("terms", {}),
+        "phrases": result.get("phrases", {}),
+        "retire": result.get("retire", {}),
+        "alerts": result.get("alerts", []),
+        "gaps": gaps,
+        "gates": gate,
+    }
