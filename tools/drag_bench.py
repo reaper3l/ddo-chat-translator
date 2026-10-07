@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -38,6 +39,7 @@ EVENT_INTERVAL = 0.008   # 8ms 一个消息（≈125Hz）
 BEAT_MS = 10             # 主循环心跳节拍
 
 _VERBOSE = {"on": False}
+_TUNE = {"step": MOVE_STEP, "interval": EVENT_INTERVAL}
 _USER32 = ctypes.windll.user32
 _USER32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
 _USER32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
@@ -109,6 +111,50 @@ def pump(app, seconds: float) -> None:
     while time.perf_counter() < deadline:
         app.root.update()
         time.sleep(0.002)
+
+
+def set_priority(mode: str) -> str:
+    """把本进程的优先级类设成 before/normal（和 main.py 里那一套同一个常量）。"""
+    if sys.platform != "win32" or mode in ("", "keep"):
+        return "不变"
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        handle = kernel32.GetCurrentProcess()
+        table = {"below": (0x00004000, "低于正常（和 main.py 一样）"),
+                 "normal": (0x00000020, "正常")}
+        value, label = table.get(mode, (0x00000020, "正常"))
+        kernel32.SetPriorityClass(handle, value)
+        return label
+    except Exception as exc:                       # noqa: BLE001
+        return "设置失败：%s" % exc
+
+
+def start_load(count: int) -> list:
+    """起 N 个"正常优先级、把 CPU 占满"的忙等进程，模拟"游戏正在吃 CPU"。
+
+    为什么要它：用户的实际场景是**游戏在前台跑**，我们只在自己空转的桌面上量，
+    永远量不出"界面线程抢不到时间片"这件事。
+    """
+    procs = []
+    script = "x = 0\nwhile True:\n    x += 1\n"
+    for _ in range(max(0, int(count))):
+        try:
+            procs.append(subprocess.Popen(
+                [sys.executable, "-c", script],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
+        except Exception:                          # noqa: BLE001
+            break
+    return procs
+
+
+def stop_load(procs) -> None:
+    for proc in procs:
+        try:
+            proc.kill()
+        except Exception:                          # noqa: BLE001
+            pass
 
 
 def describe_dpi(app, label: str) -> None:
@@ -184,7 +230,7 @@ def real_drag(app, seconds: float, point) -> list:
         end = time.perf_counter() + seconds
         trace = []
         while cursor_x < target_x and time.perf_counter() < end:
-            cursor_x = min(target_x, cursor_x + MOVE_STEP)
+            cursor_x = min(target_x, cursor_x + _TUNE["step"])
             move_to(cursor_x, grab_y)
             app.root.update()
             app.root.update_idletasks()
@@ -192,7 +238,7 @@ def real_drag(app, seconds: float, point) -> list:
             samples.append((0.0, lag, time.perf_counter()))
             if len(trace) < 8 or len(samples) % 80 == 0:
                 trace.append((cursor_x, app.root.winfo_x(), lag))
-            time.sleep(0.004)
+            time.sleep(_TUNE["interval"])
         button(LEFT_UP)
         app.root.update()
         if _VERBOSE["on"]:
@@ -268,12 +314,22 @@ def parse_args(argv):
     parser.add_argument("--listening", action="store_true", help="先开始监听")
     parser.add_argument("--settle", type=float, default=0.0, help="拖动前先空转几秒")
     parser.add_argument("--verbose", action="store_true", help="多打细节")
+    parser.add_argument("--priority", default="keep",
+                        help="拖动前把本进程优先级设成 below / normal（默认不动）")
+    parser.add_argument("--load", type=int, default=0,
+                        help="先起 N 个正常优先级的 CPU 忙等进程（模拟游戏在吃 CPU）")
+    parser.add_argument("--step", type=int, default=MOVE_STEP,
+                        help="每个鼠标消息挪几像素（默认 6；电竞鼠标一个消息才 1~2 像素）")
+    parser.add_argument("--interval", type=float, default=EVENT_INTERVAL,
+                        help="两个鼠标消息之间隔多少秒（默认 0.008；0.001＝1000Hz）")
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     _VERBOSE["on"] = bool(args.verbose)
+    _TUNE["step"] = max(1, int(args.step))
+    _TUNE["interval"] = max(0.0, float(args.interval))
     config = load_config()
     dpi.enable(str(config.get("dpi_mode", "auto")))
     app = MainWindow()
@@ -287,6 +343,12 @@ def main(argv=None) -> int:
     app.root.lift()
     pump(app, 0.6)
     describe_dpi(app, "建完主窗口")
+    print("[条件] 进程优先级：%s" % set_priority(args.priority), flush=True)
+    load = start_load(args.load)
+    if load:
+        print("[条件] 起了 %d 个正常优先级的 CPU 忙等进程（模拟游戏在吃 CPU）"
+              % len(load), flush=True)
+        pump(app, 1.0)
 
     if args.listening:
         app.pipeline.start()
@@ -328,6 +390,7 @@ def main(argv=None) -> int:
     if args.listening:
         app.pipeline.stop()
     report(samples, beats)
+    stop_load(load)
     try:
         app.root.destroy()
     except Exception:                              # noqa: BLE001

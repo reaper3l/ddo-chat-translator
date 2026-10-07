@@ -705,6 +705,35 @@ def main() -> int:
 
     step("新手教学：分步高亮 + 说明（不改设置/不动学习库/不调接口）", guided_tour)
 
+    def drag_pauses_capture():
+        """拖窗口期间要暂停后台抓屏（用户反馈"拖动不跟手"的一层保险）。
+
+        抓屏 + OCR 再省也总要用线程和显卡合成器，和鼠标拖动挤在一起就是不跟手。
+        拖动通常不到一秒，暂停这一下对翻译没有影响；松手要立刻恢复。
+        """
+        app.config["frameless"] = True
+        app.apply_settings()
+        pump(3)
+        handle = app.top_frame
+        x0, y0 = app.root.winfo_x(), app.root.winfo_y()
+        handle.event_generate("<ButtonPress-1>", x=40, y=12,
+                              rootx=x0 + 40, rooty=y0 + 12, when="now")
+        app.root.update()
+        if getattr(app.frameless._mode, "startswith", lambda _x: False)("resize"):
+            raise AssertionError("按在标题栏上却进了缩放模式")
+        if not app.pipeline._paused.is_set():
+            raise AssertionError("拖动窗口时没有暂停后台抓屏")
+        handle.event_generate("<B1-Motion>", x=120, y=12,
+                              rootx=x0 + 120, rooty=y0 + 12, when="now")
+        app.root.update()
+        handle.event_generate("<ButtonRelease-1>", x=120, y=12,
+                              rootx=x0 + 120, rooty=y0 + 12, when="now")
+        pump(2)
+        if app.pipeline._paused.is_set():
+            raise AssertionError("松手之后没有恢复抓屏（会一直不翻译）")
+
+    step("拖动窗口时暂停后台抓屏，松手立刻恢复", drag_pauses_capture)
+
     def channel_strip():
         """收起工具条后那块留白：一排频道小灯，点一下就能开关频道。"""
         from app import channels as channels_module

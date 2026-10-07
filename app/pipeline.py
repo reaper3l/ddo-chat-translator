@@ -140,6 +140,10 @@ class Pipeline:
         self._skipped_seqs = set()
         self._skip_lock = threading.Lock()
         self._stop = threading.Event()
+        # "先别抓屏"：用户在拖窗口/缩放窗口时按下它 —— 抓屏和 OCR 再省也总要占线程和
+        # 显卡合成器，和"鼠标拖动"挤在一起就会觉得不跟手。拖动通常不到一秒，
+        # 暂停这一下对翻译没有任何实际影响（松手就恢复）。
+        self._paused = threading.Event()
         self._running = False        # 是否真的已经启动过（不能用 Event 状态代替）
         self._capture_thread: Optional[threading.Thread] = None
         self._translate_thread: Optional[threading.Thread] = None
@@ -257,6 +261,16 @@ class Pipeline:
         self.stop()
         self.flush_cache()
         self.ocr.close()
+
+    def set_paused(self, paused: bool) -> None:
+        """暂停/恢复抓屏（界面在拖窗口、缩放窗口时用）。
+
+        只影响"接下来还抓不抓屏"，已经抓到的帧照常处理完；松手立刻恢复。
+        """
+        if paused:
+            self._paused.set()
+        else:
+            self._paused.clear()
 
     # ------------------------------------------------------------ 配置/引擎
     def reload_engine(self) -> None:
@@ -501,6 +515,10 @@ class Pipeline:
         announced_ocr = False
         self._calibrate_once()
         while not self._stop.is_set():
+            if self._paused.is_set():
+                # 用户在拖窗口/缩放窗口：这一小会儿先不抓、不认，别和他的鼠标操作抢线程
+                self._stop.wait(0.03)
+                continue
             started = time.time()
             interval = self._current_interval()
 

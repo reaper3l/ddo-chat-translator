@@ -849,6 +849,11 @@ def place_near(window: tk.Misc, size=None, gap: int = 14) -> None:
                     break
         if x is None:
             x, y = max(vx + 4, min(px + pw + gap, vx + vw - width - 4)), base_y
+        # 兜底：不管前面怎么选，最后一定得落在桌面里。
+        # 实测踩过：设置中心开在主窗口右边，它的分类页再往右挤 —— 右边没地方了，
+        # 于是整页跑到屏幕外面（x=1786、右边缘 2346 > 1920），用户看不见也点不到。
+        x = max(vx + 4, min(int(x), vx + int(vw) - width - 4))
+        y = max(vy + 4, min(int(y), vy + int(vh) - height - 4))
         window.geometry("%dx%d+%d+%d" % (width, height, x, y))
     except Exception:
         pass

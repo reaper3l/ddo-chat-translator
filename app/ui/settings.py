@@ -152,6 +152,7 @@ class SettingsDialog:
         from .. import paths, update as update_module
         from .. import disclaimer
         from .. import AUTHOR, HOMEPAGE, __version__
+        from .. import source_stamp
 
         # 公钥指纹：让用户能拿它跟发行页/README 上贴的对一对 —— 万一流传出去的是
         # 别人改过源码重打包的"假官方版"，指纹对不上就能看出来。
@@ -179,6 +180,8 @@ class SettingsDialog:
             "",
             "运行方式：%s" % ("打包版（可以自动升级）" if update_module.can_self_update()
                            else "源码运行（更新请 git pull 或下载发行版）"),
+            # 这份代码的指纹：反馈问题时照着念，能立刻确认跑的是哪一份（项目里副本很多）
+            "代码指纹：%s" % source_stamp(),
             "更新来源：%s" % HOMEPAGE.split("//")[-1],
             "发布签名指纹：%s" % (fingerprint or "（未配置）"),
             "使用须知：%s" % ("已同意（%s）" % disclaimer.accepted_at(self.app.config)

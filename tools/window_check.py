@@ -721,13 +721,22 @@ def main() -> int:
                              ("设置中心", settings.window)):
             x, y = window.winfo_rootx(), window.winfo_rooty()
             w, h = window.winfo_width(), window.winfo_height()
-            near = (abs(x - (mx + mw)) <= 60 or abs((x + w) - mx) <= 60
-                    or (mx <= x <= mx + mw) or (mx <= x + w <= mx + mw))
+            # "在旁边"的判据要放宽：设置分类页挂在"设置中心"下面，而设置中心本身就在
+            # 主窗口右边 —— 2560 宽的屏幕上它会被摆在设置中心右边（离主窗口 400 多像素），
+            # 那同样是"主窗口这一片"。真正不能出的是"跑到屏幕角落/屏幕外"（用户实测踩过）。
+            span = mw + max(w, 560) + 60
+            near = (mx - span <= x <= mx + span) or (mx - span <= x + w <= mx + span)
             left_top = x < 8 and y < 8
+            # 完整落在桌面里（用户实测过"弹窗跑到屏幕外"，看不见也点不到）
+            vx, vy = window.winfo_vrootx(), window.winfo_vrooty()
+            vw = window.winfo_vrootwidth()
+            vh = window.winfo_vrootheight()
+            inside = (x >= vx - 2 and y >= vy - 2
+                      and x + w <= vx + vw + 2 and y + h <= vy + vh + 2)
             check("%s 开在主窗口旁边（不在屏幕左上角）" % name,
-                  near and not left_top,
-                  "弹窗 (%d,%d) %dx%d，主窗口 (%d,%d) %dx%d"
-                  % (x, y, w, h, mx, my, mw, mh))
+                  near and not left_top and inside,
+                  "弹窗 (%d,%d) %dx%d（在桌面内=%s），主窗口 (%d,%d) %dx%d"
+                  % (x, y, w, h, inside, mx, my, mw, mh))
     finally:
         for window in opened:
             try:

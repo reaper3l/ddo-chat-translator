@@ -17,6 +17,8 @@ Tk 用 overrideredirect(True) 去掉标题栏后，系统提供的拖动和缩�
 """
 from __future__ import annotations
 
+import logging
+import time
 import tkinter as tk
 from tkinter import ttk
 from typing import List, Sequence, Tuple
@@ -36,7 +38,8 @@ _CURSORS = {
 
 class FramelessWindow:
     def __init__(self, window: tk.Tk, drag_handles: Sequence[tk.Misc] = (),
-                 min_size: Tuple[int, int] = DEFAULT_MIN_SIZE) -> None:
+                 min_size: Tuple[int, int] = DEFAULT_MIN_SIZE,
+                 on_drag_state=None) -> None:
         self.window = window
         self.drag_handles: List[tk.Misc] = list(drag_handles)
         self.min_w, self.min_h = min_size
@@ -45,6 +48,9 @@ class FramelessWindow:
         self._edge = ""
         self._start = (0, 0)
         self._geometry = (0, 0, 0, 0)
+        # 拖动期间"暂停后台事情"的回调（主窗口用它暂停抓屏，见 main_window）
+        self.on_drag_state = on_drag_state
+        self._watch = None           # 拖动性能自测（见 _watch_start/_watch_note）
 
     # ------------------------------------------------------------------ 开关
     def set_enabled(self, enabled: bool) -> None:
@@ -180,12 +186,15 @@ class FramelessWindow:
                               self.window.winfo_width(), self.window.winfo_height())
         except Exception:
             self._geometry = (0, 0, self.min_w, self.min_h)
+        self._watch_start()
+        self._notify_drag(True)
 
     def _on_drag(self, event) -> None:
         if not self.enabled or not self._mode:
             return
         dx = event.x_root - self._start[0]
         dy = event.y_root - self._start[1]
+        self._watch_note(event, dx, dy)
         x, y, width, height = self._geometry
         try:
             if self._mode == "move":
@@ -207,8 +216,70 @@ class FramelessWindow:
             pass
 
     def _on_release(self, _event=None) -> None:
+        was_dragging = bool(self._mode)
         self._mode = ""
         self._edge = ""
+        if was_dragging:
+            self._notify_drag(False)
+        self._watch_finish()
+
+    # ---------------------------------------------------------- 拖动性能自测
+    # 用户实测反馈过"拖窗口不跟手"，可那台机器上我们复现不出来。与其来回猜，不如让
+    # 程序**自己量**：拖动期间记"窗口落后光标多少像素"和"两次鼠标消息之间隔了多久"
+    # （主线程被堵住时这个间隔会明显变长）。松手后写一行日志 —— 反馈包里带着日志，
+    # 一看就知道到底卡在哪、卡多久。
+    def _watch_start(self) -> None:
+        try:
+            self._watch = {"t0": time.perf_counter(), "last": None, "events": 0,
+                           "max_lag": 0, "max_gap": 0.0, "stalls": 0,
+                           "grab": self._start[0] - self._geometry[0]}
+        except Exception:                          # noqa: BLE001
+            self._watch = None
+
+    def _watch_note(self, event, dx, dy) -> None:
+        watch = self._watch
+        if watch is None or self._mode != "move":
+            return
+        now = time.perf_counter()
+        gap = (now - watch["last"]) if watch["last"] is not None else 0.0
+        watch["last"] = now
+        watch["events"] += 1
+        if gap > watch["max_gap"]:
+            watch["max_gap"] = gap
+        if gap > 0.15:
+            watch["stalls"] += 1
+        # 窗口应该一直待在"光标 - 抓取点"的位置上；偏差就是用户看到的"落后多少像素"
+        try:
+            lag = abs((event.x_root - watch["grab"]) - self.window.winfo_x())
+        except Exception:                          # noqa: BLE001
+            lag = 0
+        if lag > watch["max_lag"]:
+            watch["max_lag"] = lag
+
+    def _watch_finish(self) -> None:
+        watch = self._watch
+        self._watch = None
+        if not watch or watch["events"] < 3:
+            return
+        duration = time.perf_counter() - watch["t0"]
+        if duration < 0.25:
+            return                                 # 只点了一下没拖，不用记
+        message = ("拖动自测：%.1f 秒、%d 个鼠标消息、最大落后 %d 像素、"
+                   "两次消息最长间隔 %.0f ms" % (duration, watch["events"],
+                                             watch["max_lag"], watch["max_gap"] * 1000.0))
+        if watch["max_lag"] > 25 or watch["stalls"]:
+            logging.warning("%s（%d 次 >150ms 的卡顿）", message, watch["stalls"])
+        else:
+            logging.info("%s（跟手正常）", message)
+
+    def _notify_drag(self, dragging: bool) -> None:
+        callback = self.on_drag_state
+        if callback is None:
+            return
+        try:
+            callback(bool(dragging))
+        except Exception:                          # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------ 最小化
     def minimize(self) -> None:

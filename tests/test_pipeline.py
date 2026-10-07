@@ -382,6 +382,29 @@ def test_running_flag_follows_start_and_stop():
     assert pipeline.running is False
 
 
+def test_paused_pipeline_stops_grabbing_frames():
+    """拖窗口期间要能"先别抓屏"（用户反馈拖动不跟手，就靠这个把后台让开）。
+
+    暂停只影响"接下来还抓不抓"，恢复后要照常抓 —— 拖动通常不到一秒，对翻译没影响。
+    """
+    import time as _time
+
+    pipeline = make_pipeline(EchoEngine())
+    pipeline.config["region"] = None          # 不真的截图：只验证状态位 + 抓屏次数不涨
+    pipeline.start()
+    try:
+        assert pipeline.running is True
+        pipeline.set_paused(True)
+        assert pipeline._paused.is_set()
+        first = pipeline.stats.get("frames", 0)
+        _time.sleep(0.4)
+        assert pipeline.stats.get("frames", 0) == first, "暂停期间还在抓屏"
+        pipeline.set_paused(False)
+        assert not pipeline._paused.is_set()
+    finally:
+        pipeline.stop(timeout=1.0)
+
+
 def _with_fake_capture(dxgi_image, gdi_image, pillow_image, backend="auto"):
     """把三种抓屏都换成假的，返回 (pipeline, 调用记录, 还原函数)。
 

@@ -316,7 +316,8 @@ class MainWindow:
         self._configure_tags()
         # 无边框窗口：拖动标题栏/状态栏移动，边缘和右下角缩放
         self.frameless = FramelessWindow(
-            self.root, drag_handles=[top, self.brand, status_bar])
+            self.root, drag_handles=[top, self.brand, status_bar],
+            on_drag_state=self._on_drag_state)
         self.top_frame = top
         self.status_bar = status_bar
         self._status_styles = self._status_style_map(False)
@@ -786,6 +787,18 @@ class MainWindow:
             width = max(1, self.actions.winfo_reqwidth())
             if width != self.actions_holder.winfo_width():
                 self.actions_holder.configure(width=width)
+        except Exception:                          # noqa: BLE001
+            pass
+
+    def _on_drag_state(self, dragging: bool) -> None:
+        """拖窗口/缩放窗口期间，暂停后台抓屏。
+
+        抓屏 + OCR 再省 CPU，也总要用线程和显卡合成器；和"鼠标拖动"挤在一起时，
+        用户感觉就是"拖起来不跟手"。拖动通常不到一秒，暂停这一下对翻译没有实际影响
+        （松手立刻恢复，见 Pipeline.set_paused）。
+        """
+        try:
+            self.pipeline.set_paused(bool(dragging))
         except Exception:                          # noqa: BLE001
             pass
 

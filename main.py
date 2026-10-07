@@ -91,6 +91,13 @@ def _setup_environment() -> str:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     config = _read_early_config()
     _setup_thread_env(config)
+    # 让线程之间更快地让出 GIL：默认 5ms 一次，后台抓屏/OCR 一旦在跑，
+    # 界面线程最坏要等满这 5ms 才能拿到锁 —— 拖动时就是一顿一顿的。
+    # 调到 1ms 后界面跟手得多，代价只是线程切换略多一点点（实测监听时 CPU 无变化）。
+    try:
+        sys.setswitchinterval(0.001)
+    except Exception:
+        pass
     priority = _lower_process_priority(config)
     # DPI 必须在导入/创建 tkinter 窗口之前设好，所以放在最前面
     return "%s / 优先级 %s" % (_setup_dpi(config), priority)
@@ -146,8 +153,15 @@ def main() -> int:
         return update_module.apply_update_from_argv(sys.argv)
     dpi_state = _setup_environment()
     _setup_logging()
-    logging.info("程序启动，DPI 模式：%s", dpi_state)
-    print("DPI 模式：%s" % dpi_state)
+    try:
+        from app import __version__, source_stamp
+
+        stamp = "v%s（%s）" % (__version__, source_stamp())
+    except Exception:                              # noqa: BLE001
+        stamp = "未知"
+    # 反馈问题时先说这一行就够了：能立刻确认"跑的是哪一份代码"
+    logging.info("程序启动，版本 %s，DPI 模式：%s", stamp, dpi_state)
+    print("版本：%s\nDPI 模式：%s" % (stamp, dpi_state))
     # 自检开关：不打开主界面，把每一环走一遍并写报告（打包版出问题时用它定位）
     if "--self-check" in sys.argv or "--selfcheck" in sys.argv:
         from app.selfcheck import run as run_selfcheck
