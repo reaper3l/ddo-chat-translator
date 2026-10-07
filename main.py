@@ -43,10 +43,14 @@ def _setup_thread_env(config: dict) -> None:
 
 
 def _lower_process_priority(config: dict) -> str:
-    """把程序降到"低于正常"优先级。
+    """把程序的**后台线程**降到"低于正常"优先级，但**界面线程提回正常**。
 
-    监听是后台任务，慢一点没关系，但游戏被抢 CPU 就会卡。
-    降优先级后，游戏需要 CPU 时永远先拿到，OCR 自己慢下来。
+    监听是后台任务，慢一点没关系，但游戏被抢 CPU 就会卡；降优先级后游戏永远先拿到 CPU。
+    可**界面线程不能跟着一起降** —— 游戏、串流主机、编码器把机器占满时，界面线程抢不到
+    时间片，用户看到的正是"鼠标拖窗口不跟手"（甚至点按钮都要等）。
+    Win32 的线程优先级是相对进程类的：进程类设成 below-normal 后，把主线程设成
+    THREAD_PRIORITY_HIGHEST（+2）正好等于"正常"这一档的绝对优先级 ——
+    于是：后台的抓屏/OCR 继续让着游戏，界面该跟手还是跟手。
     """
     if sys.platform != "win32":
         return "non-windows"
@@ -56,16 +60,22 @@ def _lower_process_priority(config: dict) -> str:
         import ctypes
 
         below_normal = 0x00004000
+        thread_highest = 2
         kernel32 = ctypes.windll.kernel32
         # 必须声明返回类型：GetCurrentProcess() 返回的是伪句柄（64 位全 1），
         # 不声明会被截成 32 位，导致后面 SetPriorityClass 拿到错误句柄而失败。
         kernel32.GetCurrentProcess.restype = ctypes.c_void_p
         kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         kernel32.SetPriorityClass.restype = ctypes.c_int
+        kernel32.GetCurrentThread.restype = ctypes.c_void_p
+        kernel32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        kernel32.SetThreadPriority.restype = ctypes.c_int
         handle = kernel32.GetCurrentProcess()
-        if kernel32.SetPriorityClass(handle, below_normal):
-            return "below-normal"
-        return "failed"
+        if not kernel32.SetPriorityClass(handle, below_normal):
+            return "failed"
+        ui_ok = bool(kernel32.SetThreadPriority(
+            kernel32.GetCurrentThread(), thread_highest))
+        return "below-normal（界面线程保持正常）" if ui_ok else "below-normal"
     except Exception as exc:
         return "failed: %s" % exc
 
