@@ -28,6 +28,18 @@ from app import capture                      # noqa: E402
 from app.ui.main_window import MainWindow    # noqa: E402
 
 
+def _ensure_dpi_aware():
+    """先设好 DPI 感知，跟程序本体一致 —— 不然窗口坐标和截图像素会差一个缩放，
+    录出来的画面就会偏一格（这个坑实测踩过）。"""
+    try:
+        from app import dpi
+        from app.config import load_config
+
+        dpi.enable(str(load_config().get("dpi_mode", "auto")))
+    except Exception:                            # noqa: BLE001
+        pass
+
+
 def _window_box(app, screen):
     """窗口在屏幕上的**物理像素**框 [左,上,右,下]。
 
@@ -94,6 +106,7 @@ def _trim_dead_border(image, limit: int = 0):
 
 
 def main() -> int:
+    _ensure_dpi_aware()
     parser = argparse.ArgumentParser()
     parser.add_argument("out", nargs="?", help="输出目录（默认 work\\demo）")
     parser.add_argument("--size", default="560x620", help="录制时的窗口大小，如 560x620")
