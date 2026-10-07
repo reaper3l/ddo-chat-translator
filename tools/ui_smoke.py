@@ -1230,6 +1230,39 @@ def main() -> int:
             dialog.add_term()
             if any(item.get("text", "") == "the" for item in app.memory.term_list()):
                 raise AssertionError("普通英文词 the 不该被存成术语")
+
+            # 「记住这句」取消勾选 → 只记进纠错历史，不该把这句话钉死
+            sample = "smokecorrection sample line"
+            dialog_off = CorrectionDialog(app, sample, "烟测译文")
+            try:
+                dialog_off.edit.delete("1.0", "end")
+                dialog_off.edit.insert("1.0", "烟测译文")
+                dialog_off.remember.set(False)
+                dialog_off._save()               # 保存完窗口自己关掉
+            except tk.TclError:
+                pass
+            finally:
+                try:
+                    dialog_off.window.destroy()
+                except Exception:
+                    pass
+            if app.memory.phrase(sample):
+                raise AssertionError("取消勾选「记住这句」之后，这句话还是被记住了")
+            if not any(str(item.get("source", "")).strip() == sample
+                       for item in (app.memory.data.get("corrections") or [])):
+                raise AssertionError("取消勾选「记住这句」之后，纠错历史里也没留下记录")
+            # 勾上（默认）→ 正常记住这句
+            dialog2 = CorrectionDialog(app, sample, "烟测译文")
+            try:
+                dialog2.edit.delete("1.0", "end")
+                dialog2.edit.insert("1.0", "烟测译文2")
+                dialog2._save()
+                if app.memory.phrase(sample) != "烟测译文2":
+                    raise AssertionError("勾着「记住这句」却没记住")
+            finally:
+                dialog2.window.destroy()
+                app.memory.delete_phrase(sample)
+                app.memory.flush(force=True)
         finally:
             if app.memory.delete_term(term):
                 app.memory.flush(force=True)

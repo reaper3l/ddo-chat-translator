@@ -61,3 +61,35 @@ def test_load_config_starts_from_defaults():
         assert key in config, key
     assert Pipeline.is_useful_notice("你加入了某某的队伍")
     assert not Pipeline.is_useful_notice("宝箱信息：被拾取次数 1")
+
+
+def test_loaded_config_does_not_share_mutable_defaults():
+    """默认值里的 list/dict 是模块级对象：每次加载都必须拿到**自己的一份**。
+
+    浅拷的话所有配置共用同一个列表，谁 append 一下就会污染此后每一次加载
+    （channel_colors / channels_enabled 以前是手动 copy 的，dict_sources /
+    muted_speakers 就漏在外面）。
+    """
+    import tempfile
+    from pathlib import Path
+
+    from app import paths as paths_module
+
+    original = paths_module.CONFIG_PATH
+    # 指到一个临时目录，别读用户真实的 config.json（那个是"增量覆盖"，内容随时会变）
+    paths_module.CONFIG_PATH = Path(tempfile.mkdtemp(prefix="ddo_cfg_")) / "config.json"
+    try:
+        first = load_config()
+        first["muted_speakers"].append("Guihao")
+        first["dict_sources"].append({"id": "x"})
+        first["appearance"]["body"]["color"] = "#123456"
+
+        second = load_config()
+        assert second["muted_speakers"] == []
+        assert second["dict_sources"] == []
+        assert second["appearance"]["body"]["color"] != "#123456"
+        assert DEFAULT_CONFIG["muted_speakers"] == []
+        assert DEFAULT_CONFIG["dict_sources"] == []
+        assert DEFAULT_CONFIG["appearance"]["body"]["color"] == ""
+    finally:
+        paths_module.CONFIG_PATH = original

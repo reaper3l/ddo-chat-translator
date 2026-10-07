@@ -29,6 +29,22 @@ def test_repeated_correction_becomes_stable():
     assert stable and stable[0]["zh"] == "干得漂亮"
 
 
+def test_correction_with_remember_off_is_history_only():
+    """纠错窗口里取消勾选「记住这句」= 只记进纠错历史，不记住这句话。
+
+    （以前那个勾选框只改提示文字，句子照样被记住 —— 等于骗用户。）
+    """
+    store = _store()
+    result = store.learn_correction("that was a fluke", "那是侥幸", "那是运气",
+                                    remember=False)
+    assert store.phrase("that was a fluke") is None      # 没记住这句
+    assert store.stats["corrections"] == 1               # 但历史里留着
+    assert store.data["corrections"][-1]["after"] == "那是运气"
+    assert result["exact_hit"] is False and result["stable"] is False
+    # 下一次出现还是走正常翻译（不会被这条特例钉死）
+    assert store.prompt_phrases() == []
+
+
 def test_corrected_source_is_kept_and_matching_stays_on_the_original():
     """用户把英文原文改对了（OCR 读错时）：改动记进历史，但记忆仍按原句匹配。
 

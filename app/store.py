@@ -113,12 +113,17 @@ class MemoryStore:
         self.mark_dirty()
 
     def learn_correction(self, source: str, before: str, after: str,
-                         min_count: int = 2, fixed_source: str = "") -> dict:
+                         min_count: int = 2, fixed_source: str = "",
+                         remember: bool = True) -> dict:
         """记录一次人工纠正，返回这次学习的结果说明。
 
         `fixed_source`：用户在纠错窗口里把**英文原文**改对了（OCR 读错时用）。
         注意记忆的 key 仍然是**原来读到的那句**（`source`）——
         下次 OCR 读成同样的样子才命中；改过的英文只作为历史记录留着参考。
+
+        `remember=False`：只记进纠错历史，**不**把这句话写进句子记忆
+        （纠错窗口里"记住这句"取消勾选就是这个意思：用户知道这次改的是特例，
+        不想让这句话以后永远用这个译文）。
         """
         fp = textutil.fingerprint(source)
         previous = self._phrases.get(fp, {})
@@ -127,13 +132,14 @@ class MemoryStore:
         if same_as_before:
             count = max(count, int(previous.get("count", 0)))
 
-        self._phrases[fp] = {
-            "source": source,
-            "zh": after,
-            "count": count,
-            "stable": count >= min_count or bool(previous.get("stable")),
-            "last": _now(),
-        }
+        if remember:
+            self._phrases[fp] = {
+                "source": source,
+                "zh": after,
+                "count": count,
+                "stable": count >= min_count or bool(previous.get("stable")),
+                "last": _now(),
+            }
 
         corrections = self.data["corrections"]
         corrections.append({
@@ -149,9 +155,9 @@ class MemoryStore:
         self.bump("corrections")
         self.mark_dirty()
         return {
-            "count": count,
-            "stable": self._phrases[fp]["stable"],
-            "exact_hit": True,
+            "count": count if remember else int(previous.get("count", 0)),
+            "stable": bool(self._phrases.get(fp, {}).get("stable")),
+            "exact_hit": bool(remember),
         }
 
     def phrase_rules(self, limit: int = 200) -> List[dict]:

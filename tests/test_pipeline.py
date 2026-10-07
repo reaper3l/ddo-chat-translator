@@ -230,6 +230,55 @@ def test_cache_survives_glossary_change():
     assert item.note == "缓存"
 
 
+def test_rebuilding_the_glossary_keeps_the_whole_cache():
+    """**真实路径**：加词/公共词典更新/自动学习都会重建术语表 —— 不许清空翻译缓存。
+
+    上面那条测试是直接换 `pipeline.glossary`；界面上走的是 `rebuild_glossary()`
+    → `pipeline.reload_glossary()`，而它以前会调 `invalidate_cache()` 把整份缓存
+    （连磁盘上的）清掉 —— 等于把"加词不再清缓存"整个抵消掉。
+    """
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(["(常规)Alice: a fresh sentence here"])
+    pipeline._process(pipeline._jobs.get_nowait())
+    assert len(pipeline._cache) == 1
+
+    pipeline.reload_glossary(Glossary({"shroud": "幽影堡", "another": "另一个"}))
+    assert len(pipeline._cache) == 1, "重建术语表不该清空翻译缓存"
+
+    pipeline.deduper.clear()
+    pipeline.forget_recent()
+    pipeline._handle_lines(["(公会)Bob: a fresh sentence here"])
+    item = pipeline._process(pipeline._jobs.get_nowait())
+    assert engine.calls == 1, "重建术语表后同一句还得能命中缓存"
+    assert item.note == "缓存"
+    # 真需要"整份丢掉"时，invalidate_cache() 还是那个开关
+    pipeline.invalidate_cache()
+    assert len(pipeline._cache) == 0
+
+
+def test_term_wording_change_still_uses_cache_with_the_new_wording():
+    """术语的中文改了：句子占位符没变 → 还是命中缓存，但还原用的是**新**中文。
+
+    这正是"缓存里存的是带占位符的译文"的意义 —— 所以重建术语表完全不需要清缓存。
+    """
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(["(常规)Alice: need heals for shroud"])
+    first = pipeline._process(pipeline._jobs.get_nowait())
+    assert "幽影堡" in first.translated
+    assert engine.calls == 1
+
+    pipeline.reload_glossary(Glossary({"need heals": "需要治疗", "shroud": "幽影要塞"}))
+    pipeline.deduper.clear()
+    pipeline.forget_recent()
+    pipeline._handle_lines(["(常规)Alice: need heals for shroud"])
+    again = pipeline._process(pipeline._jobs.get_nowait())
+    assert engine.calls == 1, "占位符没变就该命中缓存"
+    assert again.note == "缓存"
+    assert "幽影要塞" in again.translated and "幽影堡" not in again.translated
+
+
 def _three_lines():
     return ["(常规)Alice: one two three",
             "(常规)Bob: four five six",

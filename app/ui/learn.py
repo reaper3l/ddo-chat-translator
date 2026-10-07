@@ -118,13 +118,16 @@ class CorrectionDialog:
         current_source = self.source_box.get("1.0", "end").strip() or self.source
         fixed = current_source if current_source != self.source else ""
         min_count = int(self.app.config.get("learn_min_count", 2))
+        remember = bool(self.remember.get())
         result = self.memory.learn_correction(self.source, self.before, after,
-                                              min_count=min_count, fixed_source=fixed)
+                                              min_count=min_count, fixed_source=fixed,
+                                              remember=remember)
         self.app.memory.flush(force=True)
-        self.app.pipeline.invalidate_cache()
+        # 不清翻译缓存：句子记忆在 `_prepare()` 里是**排在缓存前面**查的，
+        # 改过的句子照样第一时间命中；清一次反而让别的句子白花接口钱。
         if self.on_saved:
             self.on_saved(after, result)
-        message = "已记住" if self.remember.get() else "已记录"
+        message = "已记住" if remember else "只记进了纠错历史（没记住这句）"
         if fixed:
             message += "（原文的改动也记下了）"
         if result.get("stable"):

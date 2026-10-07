@@ -1437,7 +1437,8 @@ class MainWindow:
         if not self._phrase_mining_ready(self.PHRASE_MINE_EXIT_GAP):
             return False
         try:
-            self.set_status("正在顺手学一下这次聊天里的高频说法…（最多等几秒）", "info")
+            self.set_status("正在把这次聊天里的高频说法收进词典…"
+                            "（最多等几秒；不会丢东西，只是这次不用再花接口）", "info")
             self.root.update_idletasks()
         except Exception:                          # noqa: BLE001
             pass
@@ -1587,6 +1588,11 @@ class MainWindow:
         return AgreementDialog(self, readonly=True)
 
     def quit_app(self) -> None:
+        # 防重入：关程序时有两处"等后台网络"（自动学习 / 参与改进），用户等急了
+        # 再点一次关闭按钮，不该把整条退出流程跑第二遍。
+        if getattr(self, "_quitting", False):
+            return
+        self._quitting = True
         try:
             self.config["window_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
             self.config["window_size"] = [self.root.winfo_width(),

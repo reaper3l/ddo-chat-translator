@@ -1,6 +1,7 @@
 """配置管理：默认值 + 增量合并 + 原子保存。"""
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict
 
 from . import paths
@@ -172,9 +173,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 
 def load_config() -> Dict[str, Any]:
-    config = dict(DEFAULT_CONFIG)
-    config["channel_colors"] = dict(DEFAULT_CONFIG["channel_colors"])
-    config["channels_enabled"] = dict(DEFAULT_CONFIG["channels_enabled"])
+    # 深拷一份默认值：里面的 list/dict 都是**模块级对象**，浅拷的话所有配置对象共用
+    # 同一个列表 —— 谁 append 一下就会污染此后每一次加载（channel_colors /
+    # channels_enabled 以前是手动 copy 的，后来加的 dict_sources / muted_speakers
+    # 就漏在外面了，属于迟早要踩的坑）。
+    config = copy.deepcopy(DEFAULT_CONFIG)
     user = paths.read_json(paths.CONFIG_PATH, {})
     if isinstance(user, dict):
         for key, value in user.items():

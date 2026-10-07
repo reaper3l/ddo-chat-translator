@@ -341,10 +341,23 @@ class Pipeline:
         return base
 
     def reload_glossary(self, glossary: Glossary) -> None:
+        """术语表换了（加词 / 删词 / 公共词典更新 / 自动学习）→ 只换引用。
+
+        **绝不在这里清翻译缓存**。缓存的 key 是"打完占位符的句子"、value 是"带占位符
+        的译文"，两头都**不含术语本身**：
+        * 术语的中文改了 → 占位符没变 → key 一样 → 命中缓存，而 `_finish()` 里才用
+          **当前**的映射把占位符还原成中文，所以旧译文照样是对的；
+        * 术语被删掉 / 新加了词 → 句子的占位符本身就变了 → key 不同 → 自然不会命中。
+
+        以前这里调 `invalidate_cache()`，后果是**每次加词、每次公共词典更新、每次自动
+        学习、每次保存设置都把整份缓存（连磁盘上的）清空** —— v3.0.32 特意把缓存键改成
+        不含术语表正是为了不再白花这笔钱，这条把它整个抵消掉了（实测：重建术语表后同一句
+        又调了一次接口）。
+        """
         self.glossary = glossary
-        self.invalidate_cache()
 
     def invalidate_cache(self) -> None:
+        """整份丢弃翻译缓存（key 与 value 都作废的那种场景才用；见上）。"""
         self._cache.clear()
         self._cache_dirty = True
 
