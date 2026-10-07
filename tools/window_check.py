@@ -26,6 +26,8 @@ sys.path.insert(0, str(ROOT))
 
 from app.ui import theme                    # noqa: E402
 from app import disclaimer                  # noqa: E402
+from app import dpi                         # noqa: E402
+from app.config import load_config          # noqa: E402
 from app.ui.cn2en import CnToEnDialog       # noqa: E402
 from app.ui.main_window import MainWindow   # noqa: E402
 
@@ -93,6 +95,9 @@ def main() -> int:
     print("窗口自检：焦点 + 工具条收起动画（会短暂显示窗口）")
     print("=" * 62)
 
+    # 和真实程序一样先开"按显示器感知 DPI"：不开的话 Windows 会把窗口坐标按缩放虚拟化，
+    # 自检里量出来的位置/尺寸全是虚拟值，跟用户实际看到的对不上（下面那条 1:1 检查要靠它）。
+    dpi.enable(str(load_config().get("dpi_mode", "auto")))
     app = MainWindow()
     snapshot = _config_snapshot()
     app.config["public_dict_enabled"] = False    # 自检不联网（不拉公共词典）
@@ -551,6 +556,76 @@ def main() -> int:
     check("新手教学开着时：金框跟着目标一起移动（拖窗口不会错位）",
           followed, "金框 x %d → %d（窗口移动 %d）"
           % (spot_before, spot_after, after[0] - before[0]))
+
+    # ------------- 教学不能把主线程的 DPI 感知改坏（用户实测：一开教学拖动就不跟手） ----
+    # 根因：金框要"鼠标穿透"，theme.make_click_through() 会临时把线程切成"按物理像素"
+    # 算坐标，收尾时却写死了 -1（不感知 DPI）。主线程一旦变成"不感知"，Windows 会把之后
+    # 所有窗口位置/尺寸按显示缩放虚拟化 —— 125% 缩放下 `geometry("+1000+400")` 真的把
+    # 窗口放到 (1250,500)、343×295 变成 429×369，拖动时窗口就跑得比鼠标快 25%。
+    def physical_rect(window, hwnd: int):
+        """**在另一个线程里**按物理像素量窗口矩形（不动主线程的 DPI 上下文）。"""
+        import ctypes
+        import threading
+        from ctypes import wintypes
+
+        out = {}
+
+        def work():
+            try:
+                user32 = ctypes.windll.user32
+                user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+                rect = wintypes.RECT()
+                user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect))
+                out["rect"] = (rect.left, rect.top,
+                               rect.right - rect.left, rect.bottom - rect.top)
+            except Exception as exc:               # noqa: BLE001
+                out["error"] = exc
+
+        thread = threading.Thread(target=work)
+        thread.start()
+        thread.join(5)
+        return out.get("rect"), out.get("error")
+
+    def dpi_survives_tour():
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        before_level = theme.thread_dpi_awareness()
+        if before_level is None:
+            return None
+        app.root.update_idletasks()
+        hwnd = int(user32.GetAncestor(wintypes.HWND(int(app.root.winfo_id())), 2)
+                   or app.root.winfo_id())
+        app.root.geometry("+1000+400")
+        pump(app, 0.3)
+        rect_before, error = physical_rect(app.root, hwnd)
+        if error is not None or rect_before is None:
+            raise AssertionError("量不到窗口矩形：%s" % error)
+        app.open_tour()                            # ← 这一步以前会把主线程改成"不感知"
+        pump(app, 0.8)
+        after_level = theme.thread_dpi_awareness()
+        app.root.geometry("+1000+400")
+        pump(app, 0.3)
+        rect_after, error = physical_rect(app.root, hwnd)
+        if app._tour is not None:
+            app._tour.close()
+            app._tour = None
+        pump(app, 0.2)
+        return before_level, after_level, rect_before, rect_after
+
+    levels = dpi_survives_tour()
+    if levels is None:
+        check("新手教学不会改坏 DPI 感知（拖动要 1:1）", True, "非 Windows，跳过")
+    else:
+        before_level, after_level, rect_before, rect_after = levels
+        check("新手教学不会把主线程改成「不感知 DPI」",
+              before_level == after_level,
+              "感知等级 %s → %s（0=不感知 会毁掉所有坐标）"
+              % (before_level, after_level))
+        check("开完教学后，窗口位置/尺寸仍然是 1:1（不被系统缩放）",
+              rect_before == rect_after,
+              "要求 +1000+400：教学前 %r，教学后 %r" % (rect_before, rect_after))
 
     # ---------------- 弹窗要开在主窗口旁边（不是屏幕左上角） ----------------
     # ---------------- 右键「过滤这个说话人」（用户要求：能过滤某一个人，比如自己） ------

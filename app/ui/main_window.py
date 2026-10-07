@@ -184,9 +184,15 @@ class MainWindow:
 
         self.brand = ttk.Label(top, text="DDO 聊天翻译", style="SurfaceMuted.TLabel")
         self.brand.pack(side="left", padx=(8, 8), pady=7)
-        self.brand.bind("<Button-1>", lambda _e: self._toggle_toolbar())
+        # 标题既是"点一下收放工具条"，也是拖窗口的把手。必须在**松手时**看鼠标有没有
+        # 挪动过：以前按下去就收放，用户想拖窗口（按住 DDO 拖）会顺手把工具条收了，
+        # 还带一串展开/收起动画，拖动就变得一顿一顿的。
+        self._brand_press_at = None
+        self.brand.bind("<ButtonPress-1>", self._on_brand_press, add="+")
+        self.brand.bind("<ButtonRelease-1>", self._on_brand_release, add="+")
         # 折叠开关就做在标题上（不再单独放一个小三角按钮，省地方）
-        self.brand_tooltip = theme.Tooltip(self.brand, "点「DDO」展开工具按钮")
+        self.brand_tooltip = theme.Tooltip(
+            self.brand, "点「DDO」展开 / 收起工具按钮（按住可以拖动窗口）")
         try:
             self.brand.configure(cursor="hand2")
         except Exception:
@@ -676,6 +682,19 @@ class MainWindow:
             self.set_status("切换无边框按钮失败：%s" % exc, "warn")
 
     # ---------------------------------------------------- 工具条折叠 / 透明
+    def _on_brand_press(self, event) -> None:
+        self._brand_press_at = (event.x_root, event.y_root)
+
+    def _on_brand_release(self, event) -> None:
+        """松手时才知道这次是"点一下"还是"拖窗口"（挪过就不算点）。"""
+        start = self._brand_press_at
+        self._brand_press_at = None
+        if start is None:
+            return
+        if abs(event.x_root - start[0]) > 4 or abs(event.y_root - start[1]) > 4:
+            return                      # 刚才是在拖窗口，别顺手把工具条收放了
+        self._toggle_toolbar()
+
     def _toggle_toolbar(self) -> None:
         """点标题或 ▸ 展开/收起工具按钮。"""
         self.config["toolbar_collapsed"] = not bool(
@@ -694,8 +713,9 @@ class MainWindow:
                       else ("DDO" if self.config.get("toolbar_icons_only", False)
                             else "DDO 聊天翻译")))
             try:
-                self.brand_tooltip.text = ("点「DDO」展开工具按钮" if collapsed
-                                           else "点「DDO」收起工具按钮")
+                self.brand_tooltip.text = (
+                    "点「DDO」展开工具按钮（按住可以拖动窗口）" if collapsed
+                    else "点「DDO」收起工具按钮（按住可以拖动窗口）")
             except Exception:
                 pass
             # 折叠后整个窗口可以收得更小（无边框下我们自己限制缩放，标准窗口用 minsize）

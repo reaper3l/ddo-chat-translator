@@ -6,6 +6,7 @@ Tk 没有圆角和图标字体，所以用「扁平 + 内边距 + 1px 描边 + �
 """
 from __future__ import annotations
 
+import contextlib
 import tkinter as tk
 import sys
 from tkinter import ttk
@@ -407,6 +408,68 @@ def prepare_window(window: tk.Misc, config: Optional[dict] = None) -> None:
     apply_dark_titlebar(window)
 
 
+@contextlib.contextmanager
+def _physical_pixel_scope():
+    """进入时把当前线程切成"按物理像素"算坐标，退出时**还原成原来的** DPI 上下文。
+
+    为什么必须是"还原"：以前这里收尾统一写 `SetThreadDpiAwarenessContext(-1)`，
+    那不是还原，是把**调用它的线程**（也就是 Tk 的主线程）改成"不感知 DPI"。
+    主线程一旦不感知，Windows 会把之后所有窗口位置/尺寸按显示缩放虚拟化 —— 实测
+    125% 缩放下 `geometry("+1000+400")` 真的把窗口放到 (1250,500)、343×295 变成
+    429×369。表现出来就是：拖动窗口时窗口跑得比鼠标快 25%、框选/截图坐标错位。
+
+    用户实测踩坑路径：新手教学的金框要"鼠标穿透"，走的正是 make_click_through，
+    于是"一开教学，拖动就不跟手"，重启程序只要再开一次教学又坏 —— 所以放在这里修。
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    user32 = None
+    previous = None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        # 老系统没有 GetThreadDpiAwarenessContext：那就只切不还原（切换本身仍有意义）
+        user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        previous = user32.GetThreadDpiAwarenessContext()
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:                              # noqa: BLE001
+        previous = None
+    try:
+        yield
+    finally:
+        if previous is not None and user32 is not None:
+            try:
+                user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(previous))
+            except Exception:                      # noqa: BLE001
+                pass
+
+
+def thread_dpi_awareness() -> Optional[int]:
+    """当前线程的 DPI 感知等级（自检用）：0=不感知 1=系统 2=按显示器 3=按显示器 v2。
+
+    非 Windows / 拿不到时返回 None（自检据此跳过）。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        user32.GetAwarenessFromDpiAwarenessContext.restype = ctypes.c_int
+        context = user32.GetThreadDpiAwarenessContext()
+        if not context:
+            return None
+        return int(user32.GetAwarenessFromDpiAwarenessContext(context))
+    except Exception:                              # noqa: BLE001
+        return None
+
+
 def make_click_through(window: tk.Misc) -> bool:
     """让一个窗口"只显示、不吃鼠标"（Windows：扩展样式加 WS_EX_TRANSPARENT）。
 
@@ -422,9 +485,9 @@ def make_click_through(window: tk.Misc) -> bool:
         from ctypes import wintypes
 
         user32 = ctypes.windll.user32
-        # 先按物理像素拿句柄（和截图/窗口矩形一套坐标，避免高 DPI 下拿错窗口）
-        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
-        try:
+        # 先按物理像素拿句柄（和截图/窗口矩形一套坐标，避免高 DPI 下拿错窗口），
+        # 用完必须**还原**成原来的 DPI 上下文，见 _physical_pixel_scope。
+        with _physical_pixel_scope():
             hwnd = wintypes.HWND(int(window.winfo_id()))
             gwl_exstyle = -20
             ws_ex_layered = 0x00080000
@@ -442,11 +505,6 @@ def make_click_through(window: tk.Misc) -> bool:
             new_style = style | ws_ex_layered | ws_ex_transparent | ws_ex_noactivate
             set_long(hwnd, gwl_exstyle, new_style)
             return True
-        finally:
-            try:
-                user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))
-            except Exception:                      # noqa: BLE001
-                pass
     except Exception:                              # noqa: BLE001
         return False
 
@@ -488,8 +546,7 @@ def window_rect(window: tk.Misc) -> Optional[tuple]:
         from ctypes import wintypes
 
         user32 = ctypes.windll.user32
-        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
-        try:
+        with _physical_pixel_scope():
             user32.GetWindowRect.argtypes = [wintypes.HWND,
                                              ctypes.POINTER(wintypes.RECT)]
             # Tk 的顶层窗外面还有一层系统包装窗（分层窗口尤其明显）：
@@ -504,11 +561,6 @@ def window_rect(window: tk.Misc) -> Optional[tuple]:
             rect = wintypes.RECT()
             if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
                 return (rect.left, rect.top, rect.right, rect.bottom)
-        finally:
-            try:
-                user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))
-            except Exception:                      # noqa: BLE001
-                pass
     except Exception:                              # noqa: BLE001
         pass
     return None

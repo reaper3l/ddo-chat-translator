@@ -85,6 +85,20 @@ def main() -> int:
     dpi = system_dpi()
     print("系统 DPI：%d（缩放 %.0f%%）" % (dpi, dpi / 96 * 100))
 
+    # 按真实程序的做法开一次 DPI 感知（main.py 就是这么干的，而且必须在建 Tk 之前）。
+    # 必须在这里调：程序一旦把主线程改成"不感知"，Tk 报的坐标就会被缩放虚拟化，
+    # 于是"框选的区域"和"截到的画面"对不上 —— 这个工具的存在就是为了抓这种情况。
+    try:
+        from app import dpi as dpi_module
+        from app.config import load_config
+
+        mode = str(load_config().get("dpi_mode", "auto"))
+        print("按配置开 DPI 感知（dpi_mode=%s）：%s"
+              % (mode, dpi_module.enable(mode)))
+        print("开完之后进程 DPI 感知：%s" % process_awareness())
+    except Exception as exc:                       # noqa: BLE001
+        print("开 DPI 感知失败：%s" % exc)
+
     try:
         import tkinter as tk
 
@@ -102,7 +116,9 @@ def main() -> int:
         return 1
 
     full = capture.grab(None)
-    print("整屏截图尺寸：%s" % (full.size if full else "失败"))
+    # 注意：full.size 是 (宽, 高) 元组，直接塞进 "%s" % 会被当成多个参数（以前这里
+    # 会直接抛 TypeError，工具跑一半就断了）。
+    print("整屏截图尺寸：%s" % ((full.size,) if full else ("失败",)))
 
     if args.cursor:
         position = cursor_position()

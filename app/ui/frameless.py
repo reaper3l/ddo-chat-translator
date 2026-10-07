@@ -7,14 +7,26 @@ Tk 用 overrideredirect(True) 去掉标题栏后，系统提供的拖动和缩�
 * 关闭按钮始终可用；最小化会**先恢复系统边框再 iconify**，保证任务栏里能找回来；
 * 缩放有最小尺寸限制，不会把窗口拖成一团；
 * 关掉无边框（设置里取消勾选）时把所有绑定解掉，回到标准窗口。
+
+两个"用户实测踩过"的坑（都写在下面的实现里）：
+* 拖动把手是几个 Frame / Label（工具条、标题、状态栏）。Tk 的绑定只认**那个控件自己**，
+  按在它的子控件（按钮旁边的留白、状态栏文字上）是收不到的 —— 所以判定改成"从按到的
+  控件往上找，能找到把手就算"，站在留白/文字上也能拖；
+* 事件里的 x/y 是**按到那个控件**的局部坐标，不能拿去和窗口宽高比 —— 以前这么比，
+  按在聊天区底部会被判成"贴着下边"，一拖就变成缩放窗口。现在统一换算成窗口坐标。
 """
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import ttk
 from typing import List, Sequence, Tuple
 
 EDGE = 6                      # 贴边多少像素内算缩放区
 DEFAULT_MIN_SIZE = (420, 300)
+
+# 这些控件自己有"点一下要干的事"（按钮、输入框、聊天区…），按在它们身上不该算拖窗口
+_CLICKABLE = (tk.Button, tk.Entry, tk.Text, tk.Canvas, tk.Listbox, tk.Spinbox,
+              ttk.Button, ttk.Entry, ttk.Combobox, ttk.Spinbox)
 
 _CURSORS = {
     "n": "size_ns", "s": "size_ns", "e": "size_we", "w": "size_we",
@@ -54,10 +66,8 @@ class FramelessWindow:
         self.window.bind("<B1-Motion>", self._on_drag, add="+")
         self.window.bind("<ButtonRelease-1>", self._on_release, add="+")
         self.window.bind("<Map>", self._on_map, add="+")
-        for handle in self.drag_handles:
-            handle.bind("<ButtonPress-1>", self._on_handle_press, add="+")
-            handle.bind("<B1-Motion>", self._on_drag, add="+")
-            handle.bind("<ButtonRelease-1>", self._on_release, add="+")
+        # 只绑在顶层窗口上就够了：Tk 的 bindtags 里每个子控件都带着所属顶层窗口，
+        # 所以按在工具条/状态栏的子控件上，这个回调一样会被叫到（再用 _is_drag_zone 判定）。
 
     def disable(self) -> None:
         if not self.enabled:
@@ -77,20 +87,26 @@ class FramelessWindow:
                 self.window.unbind(sequence, callback)
             except Exception:
                 pass
-        for handle in self.drag_handles:
-            for sequence, callback in (("<ButtonPress-1>", self._on_handle_press),
-                                       ("<B1-Motion>", self._on_drag),
-                                       ("<ButtonRelease-1>", self._on_release)):
-                try:
-                    handle.unbind(sequence, callback)
-                except Exception:
-                    pass
         try:
             self.window.configure(cursor="")
         except Exception:
             pass
 
     # ------------------------------------------------------------------ 事件
+    def _window_coords(self, event) -> Tuple[int, int]:
+        """把事件坐标换算成"相对窗口左上角"。
+
+        事件里的 event.x / event.y 是相对**被按到的那个控件**的（子控件上就是子控件
+        自己的坐标），拿它和窗口宽高比会得出莫名其妙的结论（实测：按在聊天区底部
+        被当成"贴着窗口下边"，一拖就变成缩放）。这里统一减去窗口自己的屏幕位置。
+        """
+        try:
+            left = self.window.winfo_rootx()
+            top = self.window.winfo_rooty()
+        except Exception:
+            return event.x, event.y
+        return event.x_root - left, event.y_root - top
+
     def _edges_at(self, x: int, y: int) -> str:
         try:
             width = self.window.winfo_width()
@@ -108,42 +124,45 @@ class FramelessWindow:
             edge += "s"
         return edge
 
+    def _is_drag_zone(self, widget) -> bool:
+        """从"被按到的控件"往上找拖动把手（工具条/标题/状态栏）。
+
+        走到按钮、输入框、聊天区这种"自己有点击行为"的控件就停下（不然点按钮会变成
+        拖窗口、点频道小灯会拖着窗口跑）。
+        """
+        handles = set(self.drag_handles)
+        node = widget
+        while node is not None and node not in handles:
+            if isinstance(node, _CLICKABLE):
+                return False
+            node = getattr(node, "master", None)
+        return node is not None and node in handles
+
     def _on_motion(self, event) -> None:
         if not self.enabled or self._mode:
             return
-        cursor = _CURSORS.get(self._edges_at(event.x, event.y), "")
+        x, y = self._window_coords(event)
+        cursor = _CURSORS.get(self._edges_at(x, y), "")
         try:
             self.window.configure(cursor=cursor)
         except Exception:
             pass
 
     def _on_press(self, event) -> None:
-        if not self.enabled:
+        if not self.enabled or self._mode:
             return
-        edge = self._edges_at(event.x, event.y)
-        if not edge:
+        x, y = self._window_coords(event)
+        edge = self._edges_at(x, y)
+        if edge:
+            self._begin("resize", edge, event)
             return
-        self._begin("resize", edge, event)
-
-    def _on_handle_press(self, event) -> None:
-        """拖动标题栏区域移动窗口（按钮上的点击不会触发这里）。"""
-        if not self.enabled:
-            return
-        self._begin("move", "", event)
+        if self._is_drag_zone(getattr(event, "widget", None)):
+            self._begin("move", "", event)
 
     def start_resize(self, edge: str, event) -> None:
         """给右下角的缩放角用。"""
         if self.enabled:
             self._begin("resize", edge, event)
-
-    def start_move(self, event) -> None:
-        """开始"移动窗口"。
-
-        给"别人替我转发拖动"用的：新手教学的压暗层盖住了标题栏，用户在上面按下时
-        要把这次拖动转交到这里（否则鼠标会被压暗层吃掉，表现为"拖动框体不跟手"）。
-        """
-        if self.enabled:
-            self._begin("move", "", event)
 
     def drag(self, event) -> None:
         """给缩放角绑 <B1-Motion> 用（公开包装，避免外部调用私有方法）。"""

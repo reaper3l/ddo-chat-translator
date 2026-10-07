@@ -34,6 +34,7 @@ MODULES = [
     "test_store",
     "test_pipeline",
     "test_style",
+    "test_dpi_scope",
     "test_capture",
     "test_preprocess",
     "test_public_dict",
