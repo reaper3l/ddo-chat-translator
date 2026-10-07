@@ -599,6 +599,15 @@ def frameless_dialog(window: tk.Misc, title: str, topmost: bool = True,
                              min_size=(360, 240))
     helper.set_enabled(True)
     place_near(window, size)
+    # 各对话框的内容是在**这个函数返回之后**才往窗口里塞的（各自的 _build），
+    # 所以上面那次只知道目标尺寸。等窗口空闲、内容建完，再按**实际内容**摆一次：
+    # 内容比目标大时以内容为准，否则底部那排按钮会被挤出窗口
+    # （用户实测："纠正界面没有确认按钮"）。只会变大、不会变小 ——
+    # 作者给的目标尺寸仍然是最小值。
+    try:
+        window.after_idle(lambda: place_near(window, size))
+    except Exception:
+        pass
     install_dialog_focus(window, autofocus=autofocus)
     return header, helper
 
@@ -638,17 +647,25 @@ def place_near(window: tk.Misc, size=None, gap: int = 14) -> None:
 
     为什么要这么绕：设置分类页（560 宽）从"设置中心"弹出来时，右边常常放不下，
     直接翻到左边就会盖住主窗口 —— 用户要的是"在主窗口旁边"，不是"盖住它"。
+
+    `size` 是作者给的**目标**大小；内容实际需要更大时**以内容为准**（两个取大的）
+    —— 这里会把窗口尺寸写死，尺寸比内容小的话，底部那排按钮会被排到窗口外面
+    （用户实测："纠正界面没有确认按钮"，界面缩放 1.1 + 高 DPI 时就会这样）。
+    再大也不超出桌面：不然窗口会跑到屏幕外边去。
     """
     parent = getattr(window, "master", None)
     if parent is not None and not isinstance(parent, (tk.Tk, tk.Toplevel)):
         parent = None
     try:
         window.update_idletasks()
+        need_w = max(1, int(window.winfo_reqwidth()))
+        need_h = max(1, int(window.winfo_reqheight()))
         if size:
-            width, height = int(size[0]), int(size[1])
+            width = max(int(size[0]), need_w)
+            height = max(int(size[1]), need_h)
         else:
-            width = max(360, int(window.winfo_reqwidth()))
-            height = max(240, int(window.winfo_reqheight()))
+            width = max(360, need_w)
+            height = max(240, need_h)
         if parent is not None:
             px, py = parent.winfo_rootx(), parent.winfo_rooty()
             pw, ph = parent.winfo_width(), parent.winfo_height()
@@ -670,6 +687,8 @@ def place_near(window: tk.Misc, size=None, gap: int = 14) -> None:
             else window.winfo_screenwidth()
         vh = window.winfo_vrootheight() if hasattr(window, "winfo_vrootheight") \
             else window.winfo_screenheight()
+        width = min(width, max(320, int(vw) - 16))          # 别超出桌面
+        height = min(height, max(240, int(int(vh) * 0.94)))
 
         protected = [(px, py, pw, ph)]
         if rw and rh:

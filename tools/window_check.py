@@ -419,6 +419,82 @@ def main() -> int:
     app.root.geometry("414x300")
     pump(app, 0.3)
 
+    # ---------------- 每个对话框的按钮都得在窗口里 ----------------
+    def _all_buttons(widget):
+        found = []
+        for child in widget.winfo_children():
+            if isinstance(child, ttk.Button):
+                found.append(child)
+            found.extend(_all_buttons(child))
+        return found
+
+    def dialog_buttons_inside():
+        """用户实测："纠正界面没有确认按钮"。
+
+        根因：对话框尺寸原来是用作者给的数字**写死**的（`theme.place_near` 里
+        `geometry("%dx%d...")`），界面缩放 1.1 + 高 DPI 时内容比它高，底部那排按钮
+        要么被压成 1px、要么被排到窗口外面（Tk 干脆不映射它）—— 两种都实测到了。
+        修法：内容比目标尺寸大时以内容为准（只变大不变小），并在内容建好后按真实内容
+        再摆一次。这里把每个对话框都真开一遍，逐个确认按钮在窗口可视范围内。
+        """
+        from app.ui.agreement import AgreementDialog
+        from app.ui.cn2en import CnToEnDialog
+        from app.ui.contribute import ContributionDialog
+        from app.ui.dict_sources import DictSourcesDialog
+        from app.ui.learn import (CorrectionDialog, DictionaryDialog,
+                                  LearningCenterDialog)
+        from app.ui.phrase_mining import PhraseMiningDialog
+
+        cases = (
+            ("纠错窗口", lambda: CorrectionDialog(
+                app, "need heals for shroud on elite, tr pls",
+                "需要治疗 for 幽影堡 on 精英难度, 真轮回 请")),
+            ("中译英", lambda: CnToEnDialog(app, auto_suggest=False)),
+            ("学习中心", lambda: LearningCenterDialog(app)),
+            ("词典", lambda: DictionaryDialog(app)),
+            ("词典源", lambda: DictSourcesDialog(app)),
+            ("挖掘高频短语", lambda: PhraseMiningDialog(app)),
+            ("参与改进", lambda: ContributionDialog(app)),
+            ("使用须知", lambda: AgreementDialog(app, readonly=True)),
+            ("反馈问题", lambda: app.open_bug_report()),
+        )
+        bad = []
+        for name, make in cases:
+            dialog = make()
+            window = getattr(dialog, "window", None)
+            try:
+                pump(app, 0.4)
+                # 根因判据：窗口不能比内容小（只看"映射没映射/位置"会漏掉其中一种，
+                # 两种栽法都实测到了，所以直接量尺寸）
+                if (window.winfo_height() < window.winfo_reqheight() - 1
+                        or window.winfo_width() < window.winfo_reqwidth() - 1):
+                    bad.append("%s(窗口 %dx%d 比内容 %dx%d 小)"
+                               % (name, window.winfo_width(), window.winfo_height(),
+                                  window.winfo_reqwidth(), window.winfo_reqheight()))
+                top = window.winfo_rooty()
+                bottom = top + window.winfo_height()
+                for button in _all_buttons(window):
+                    if not button.winfo_ismapped():
+                        continue          # 没选中的标签页里的按钮，不显示是正常的
+                    b_top = button.winfo_rooty()
+                    b_bottom = b_top + button.winfo_height()
+                    if (b_bottom > bottom + 2 or b_top < top - 2
+                            or button.winfo_height() <= 2):
+                        bad.append("%s「%s」(y=%d..%d，窗口 %dx%d)"
+                                   % (name, str(button.cget("text"))[:12],
+                                      b_top - top, b_bottom - top,
+                                      window.winfo_width(), window.winfo_height()))
+            finally:
+                try:
+                    window.destroy()
+                except Exception:
+                    pass
+        return bad
+
+    clipped = dialog_buttons_inside()
+    check("对话框的按钮都在窗口里（内容比目标尺寸大时窗口会自己撑开）",
+          not clipped, "全部正常" if not clipped else "；".join(clipped))
+
     # ---------------- 弹窗要开在主窗口旁边（不是屏幕左上角） ----------------
     # ---------------- 右键「过滤这个说话人」（用户要求：能过滤某一个人，比如自己） ------
     from app.pipeline import DisplayItem
