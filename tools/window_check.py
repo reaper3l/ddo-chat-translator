@@ -520,9 +520,10 @@ def main() -> int:
         # 注意：透明/分层窗口的 winfo_rootx() 不可靠（实测一直返回 0），
         # 这里看教学自己记着的目标矩形 —— 金框就是按它摆的
         spot_before = (tour.target_rect or (0,))[0]
-        # 用**压暗层**当拖动起点：这正是用户"拖动框体不跟手"的场景
-        # （压暗层盖住了标题栏，按下要先被它接到、再转交给主窗口）
-        header = tour.overlays[0] if tour.overlays else app.root
+        # 拖动起点用**标题栏本身**：这正是用户"拖动框体不跟手"的场景。
+        # 压暗层现在会把标题栏那一条抠出来（不清空标题栏 = 标准的窗口拖动），
+        # 所以按在标题栏上应该直接落到主窗口上、拖动照常。
+        header = getattr(app, "top_frame", None) or app.root
         header.event_generate("<ButtonPress-1>", x=30, y=8,
                               rootx=before[0] + 30, rooty=before[1] + 8)
         app.root.update()

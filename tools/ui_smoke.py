@@ -614,8 +614,8 @@ def main() -> int:
             raise AssertionError("新手教学没有打开说明窗口")
         if tour.highlight is None or not tour.highlight.winfo_exists():
             raise AssertionError("新手教学没有画出高亮框")
-        if len(tour.overlays) != 4:
-            raise AssertionError("新手教学没有把目标以外压暗（应有 4 块，实际 %d）"
+        if len(tour.overlays) < 4:
+            raise AssertionError("新手教学没有把目标以外压暗（至少 4 块，实际 %d）"
                                  % len(tour.overlays))
         # 金框必须"不吃鼠标"（它压在目标上，不能挡住用户点那个按钮）。
         # 压暗层**故意**不做成不吃鼠标（那样会把压暗渲染弄坏，实测过）——
@@ -633,7 +633,7 @@ def main() -> int:
                 raise AssertionError("中途说明窗口没了")
             if tour.highlight is None or not tour.highlight.winfo_exists():
                 raise AssertionError("中途没有高亮框")
-            if len(tour.overlays) != 4:
+            if len(tour.overlays) < 4:
                 raise AssertionError("换步之后压暗层数量不对：%d" % len(tour.overlays))
         # 最后一步点「完成」→ 教学自己收尾（窗口收掉、打开的设置页也收掉）
         tour._go_next()
