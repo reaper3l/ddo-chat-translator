@@ -511,8 +511,8 @@ def main() -> int:
         if tour.panel is None or tour.highlight is None:
             raise AssertionError("新手教学没开起来")
         # ① 金框必须"只显示、不吃鼠标"（它是压在目标上的，不能挡住用户点那个按钮）。
-        #    压暗层故意不做成不吃鼠标（实测那样会把压暗渲染弄坏）——
-        #    它靠"把标题栏位置的拖动转交主窗口"，所以下面直接**在压暗层上拖**来验证。
+        #    （早先还有一层"目标以外压暗"的半透明窗，实测会让主窗口拖动变得很卡，
+        #     已经去掉 —— 现在教学只有金框 + 说明卡片。）
         if not theme_module.is_click_through(tour.highlight):
             raise AssertionError("金框会吃鼠标（点不到它圈住的按钮）")
         # ② 教学开着时拖动标题栏，窗口要动，而且高亮/卡片要跟着目标走

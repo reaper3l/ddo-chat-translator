@@ -1,9 +1,10 @@
 """新手教学（首次使用引导）：逐个功能指着界面讲"在哪儿、怎么设置"。
 
 为什么做成这样（用户目标：程序初次使用时逐个说明功能）：
-  * **压暗 + 抠出目标**：目标控件以外全部盖一层半透明黑（四块窗把目标"抠"出来），
-    视线自然落在要讲的那个按钮上 —— 比只画一圈金框醒目得多（金框也留着）。
-    目标那块**没有被盖住**，所以用户想直接点它试试也没问题。
+  * **金框 + 说明卡片**：要讲的那个控件用金框圈出来，旁边一张卡片写"这是什么、怎么用"。
+    （早先还试过"目标以外压暗"的四块半透明窗：视觉更聚焦，但**会让主窗口拖动变得很卡**
+    —— 用户实测反馈"拖动起来延时很高不跟手"，而且 Tk 上"鼠标穿透"与"半透明渲染"
+    没法兼得，所以去掉了。）
   * **一次只讲一件事**：每步一句话 + 上一步 / 下一步 / 完成，7 步讲完主要功能。
   * **能代劳就代劳**：要讲设置页就先把设置页打开（设置 → 翻译 / 频道），
     要讲互译就把互译窗口打开并圈出输入框，省得用户自己找。
@@ -11,7 +12,7 @@
     `tour_done`，以后不再自动弹（右键菜单 / 设置→关于 里可随时重看）。
 
 三条纪律（界面自检里钉着）：
-  * **只高亮、不改设置**（为了指按钮临时展开的工具条，结束会还原）；
+  * **只画金框、不改设置**（为了指按钮临时展开的工具条，结束会还原）；
   * **不联网、不写学习库**（互译窗口用 `auto_suggest=False` 打开）；
   * 教学里打开的窗口、盖的半透明层，换步/结束/关程序时全部收掉。
 """
@@ -22,7 +23,6 @@ from tkinter import ttk
 
 from . import theme
 
-DIM_ALPHA = 0.55            # 目标之外压暗多少（0=不压，1=全黑）
 SPOT_KEY = "#0b0c0e"        # 高亮框窗里当作"透明"的键色
 SPOT_LINE = "#ffcc4d"       # 高亮框颜色
 WRAP = 470                  # 说明文字的换行宽度
@@ -47,7 +47,6 @@ class GuidedTour:
         self.first_run = bool(first_run)
         self.index = 0
         self.highlight = None
-        self.overlays = []
         self.panel = None
         self._opened = []
         self._title = None
@@ -118,14 +117,14 @@ class GuidedTour:
         if not app.records:
             app.insert_demo_lines(2)
         app.set_status("新手教学：跟着圈出来的地方走一遍就会了（不会改你的任何设置）", "info")
-        # 窗口被拖动/缩放时，压暗层和金框要跟着目标走（只挪位置、不重建窗口，
+        # 窗口被拖动/缩放时，金框和说明卡片要跟着目标走（只挪位置、不重建窗口，
         # 不然拖起来会卡）。用 after 去抖，别在拖动过程中疯狂重画。
         try:
             self._configure_bind = app.root.bind("<Configure>", self._on_root_configure,
                                                  add="+")
         except Exception:                          # noqa: BLE001
             self._configure_bind = None
-        # 记下"用户正在拖窗口"：拖动过程中**不要**再去 lift 那些压暗层
+        # 记下"用户正在拖窗口"：拖动过程中**不要**再去 lift 金框、也不重摆卡片
         # （每次 lift 都会让窗口重新映射一次，拖动就变得很卡 —— 用户反馈"不跟手"）
         for widget in (app.root, getattr(app, "top_frame", None), app.status_bar):
             if widget is None:
@@ -143,6 +142,10 @@ class GuidedTour:
         """主窗口被拖动/缩放 → 稍后重新摆一次（去抖：拖动过程中不狂重画）。"""
         if self.panel is None:
             return
+        if self._dragging:
+            # 拖动期间**什么都不做**：一点点额外工作都会变成可见的顿挫
+            # （实测拖动中事件耗时从 2ms 跳到 28ms）。松手后 _on_drag_end 会统一对齐。
+            return
         if self._reposition_job is not None:
             try:
                 self.app.root.after_cancel(self._reposition_job)
@@ -151,8 +154,7 @@ class GuidedTour:
         try:
             # 拖动中故意等久一点：连续拖动时就**完全不重摆**（重摆 8 个窗口要二三十毫秒，
             # 那一下就会觉得"不跟手"）；停下来或者松手之后再对齐一次就够了。
-            delay = 400 if self._dragging else 80
-            self._reposition_job = self.app.root.after(delay, self._reposition)
+            self._reposition_job = self.app.root.after(80, self._reposition)
         except Exception:                          # noqa: BLE001
             self._reposition_job = None
 
@@ -174,16 +176,6 @@ class GuidedTour:
         if rect is None:
             return
         self.target_rect = rect
-        for window, box in zip(self.overlays, self._band_rects(rect)):
-            try:
-                if not self._dragging:
-                    # 拖动过程中**不要 lift**：每次 lift 都会重新映射窗口，拖动会变卡。
-                    # 松手后 _restack() 会统一把它们提到最前面。
-                    window.lift()
-                window.geometry("%dx%d+%d+%d"
-                                % (box[2] - box[0], box[3] - box[1], box[0], box[1]))
-            except Exception:                      # noqa: BLE001
-                pass
         if self.highlight is not None:
             x, y, width, height = rect
             pad = 6
@@ -201,59 +193,21 @@ class GuidedTour:
         self._dragging = True
 
     def _on_drag_end(self, _event=None) -> None:
-        """松手：拖动结束，重新对齐一次并把压暗层/金框统一提回最前面。"""
+        """松手：拖动结束，重新对齐一次并把金框提回最前面。"""
         self._dragging = False
         self._reposition()
         self._restack()
 
     def _restack(self) -> None:
-        """把压暗层、金框提到最前面（主窗口自己也是 topmost，不提就会被压在下面）。"""
-        for window in list(self.overlays) + [self.highlight]:
-            if window is None:
-                continue
+        """把金框提到最前面（主窗口自己也是 topmost，不提就会被压在下面）。"""
+        if self.highlight is not None:
             try:
-                window.lift()
+                self.highlight.lift()
             except Exception:                      # noqa: BLE001
                 pass
         # lift 会把无边框窗口的位置打回 (0,0)，所以紧接着重新摆一次
         if self.target_rect is not None:
             self._reposition()
-
-    # ------------------------------------------------- 压暗层上的拖动转发
-    def _dim_hits_title(self, event) -> bool:
-        """这次按下是不是落在"主窗口顶部那一条"（标题/工具条 = 系统的拖动区）。"""
-        try:
-            strip = getattr(self.app, "top_frame", None) or self.app.actions
-            left = self.app.root.winfo_rootx()
-            right = left + self.app.root.winfo_width()
-            top = strip.winfo_rooty() - 4
-            bottom = strip.winfo_rooty() + strip.winfo_height() + 6
-        except Exception:                          # noqa: BLE001
-            return False
-        x = getattr(event, "x_root", -1)
-        y = getattr(event, "y_root", -1)
-        return left <= x <= right and top <= y <= bottom
-
-    def _on_dim_press(self, event) -> None:
-        """压在压暗层上、但位置是标题栏 → 当成"拖窗口"，转交给主窗口。"""
-        if not self._dim_hits_title(event):
-            return
-        try:
-            self.app.frameless.start_move(event)
-        except Exception:                          # noqa: BLE001
-            pass
-
-    def _on_dim_drag(self, event) -> None:
-        try:
-            self.app.frameless.drag(event)
-        except Exception:                          # noqa: BLE001
-            pass
-
-    def _on_dim_release(self, event) -> None:
-        try:
-            self.app.frameless.release(event)
-        except Exception:                          # noqa: BLE001
-            pass
 
     def close(self, finished: bool = False) -> None:
         # 自己要收掉时，把主窗口那份引用也清掉 —— 否则"走完自动关闭"之后，
@@ -283,7 +237,6 @@ class GuidedTour:
         self._dragging = False
         self._restore_toolbar()
         self._destroy_highlight()
-        self._destroy_overlays()
         self._close_opened()
         if self.panel is not None:
             try:
@@ -326,7 +279,13 @@ class GuidedTour:
         self._point_at(target)
 
     def _point_at(self, target) -> None:
-        """压暗目标以外的地方 + 套一圈金框 + 把说明卡片摆到旁边。"""
+        """给要讲的那个控件套一圈金框 + 把说明卡片摆到旁边。
+
+        早先版本还会把"目标以外"压暗（四块半透明黑窗），视觉上更聚焦，
+        但那几块盖在屏幕上的窗**会明显拖慢主窗口的拖动**（用户实测"拖动起来延时很高"），
+        而且 Tk 上"鼠标穿透"和"半透明渲染"没法兼得。现在**只留金框 + 说明卡片**，
+        指引一样清楚，拖动和平时一样跟手。
+        """
         self._target_widget = target
         rect = None
         if target is not None:
@@ -344,10 +303,9 @@ class GuidedTour:
             except Exception:                      # noqa: BLE001
                 rect = None
         self.target_rect = rect
-        self._draw_overlays(rect)
         self._draw_highlight(rect)
         self._place_panel(rect)
-        # 说明卡片要压在所有"压暗层"上面：先 lift 再重新摆一次位置
+        # 说明卡片要压在最上面：先 lift 再重新摆一次位置
         # （无边框窗口 lift 之后位置会被系统打回 (0,0)，实测踩过）
         if self.panel is not None:
             try:
@@ -359,105 +317,12 @@ class GuidedTour:
                 self.panel.after(40, lambda r=rect: self._place_panel(r))
             except Exception:                      # noqa: BLE001
                 pass
-        # 压暗层/金框在"改样式 → 设位置"之后再兜一次：某些系统上仍会被打回 (0,0)
-        if self.overlays or self.highlight is not None:
+        # 金框在"改样式 → 设位置"之后再兜一次：某些系统上仍会被打回 (0,0)
+        if self.highlight is not None:
             try:
                 self.app.root.after(60, self._reposition)
             except Exception:                      # noqa: BLE001
                 pass
-
-    def _band_rects(self, rect):
-        """目标以外压暗用的四块"上 / 下 / 左 / 右"矩形（拖动时也用它重新摆位）。
-
-        固定返回 4 块（退化成一两像素也给一块），这样 `self.overlays` 和这里的顺序
-        永远一一对应，拖动窗口时直接按顺序摆就行。
-        """
-        try:
-            screen_w = self.app.root.winfo_screenwidth()
-            screen_h = self.app.root.winfo_screenheight()
-        except Exception:                          # noqa: BLE001
-            return []
-        pad = 8
-        x0 = max(0, rect[0] - pad)
-        y0 = max(0, rect[1] - pad)
-        x1 = min(screen_w, rect[0] + rect[2] + pad)
-        y1 = min(screen_h, rect[1] + rect[3] + pad)
-        # **标题栏那一条也要留出来**：它不只是"讲的东西"，还是拖窗口的地方。
-        # 抠掉它之后，用户在标题栏上按下就是标准的窗口拖动，不用靠事件转发兜底
-        # （用户反馈"拖动框体不跟手"就是被压暗层挡住标题栏造成的）。
-        strip = self._title_strip_rect()
-        bands = [(0, 0, screen_w, y0),                 # 上
-                 (0, y1, screen_w, screen_h),          # 下
-                 (0, y0, x0, y1),                      # 左
-                 (x1, y0, screen_w, y1)]               # 右
-        if strip:
-            # **无论目标在哪，都把标题栏那一条挖出来**：它是拖窗口的地方，被盖住就"不跟手"。
-            # 目标正好在标题栏里时（比如"框选区域"按钮），金框仍然精确指着它，只是
-            # 那一条整体不变暗 —— 换来的是拖动永远好使，不再依赖事件转发。
-            bands[0] = (0, 0, screen_w, strip[1])
-            bands += [(strip[2], strip[1], screen_w, strip[3]),      # 条右侧
-                      (0, strip[1], strip[0], strip[3]),             # 条左侧
-                      (0, strip[3], screen_w, y0)]                   # 条与目标之间
-        fixed = []
-        for left, top, right, bottom in bands:
-            if right - left < 1:
-                right = min(screen_w, left + 1)
-            if bottom - top < 1:
-                bottom = min(screen_h, top + 1)
-            fixed.append((left, top, right, bottom))
-        return fixed
-
-    def _title_strip_rect(self):
-        """主窗口顶部那一条（标题/工具条 = 系统规定的拖动区），屏幕物理坐标。"""
-        try:
-            strip = getattr(self.app, "top_frame", None) or self.app.actions
-            strip.update_idletasks()
-            left = self.app.root.winfo_rootx()
-            top = strip.winfo_rooty()
-            right = left + self.app.root.winfo_width()
-            bottom = top + max(1, strip.winfo_height())
-        except Exception:                          # noqa: BLE001
-            return None
-        if right <= left or bottom <= top:
-            return None
-        return (max(0, left), max(0, top - 2), right, bottom + 2)
-
-    def _draw_overlays(self, rect) -> None:
-        """目标之外压暗：四块半透明黑窗把目标"抠"出来（目标那块保持原样、照样能点）。"""
-        self._destroy_overlays()
-        if rect is None:
-            return
-        for left, top, right, bottom in self._band_rects(rect):
-            try:
-                # 顺序很挑（实测踩了两遍）：**先隐藏 → 改扩展样式 → 设透明度 → 设位置
-                # → 最后才显示**。已经显示的窗口再改扩展样式，会把 Tk 的分层渲染弄坏
-                # （画面就不压暗了），位置也会被打回 (0,0)。
-                band = tk.Toplevel(self.app.root)
-                band.withdraw()
-                band.overrideredirect(True)
-                band.attributes("-topmost", True)
-                band.configure(bg="#000000")
-                # 压暗层**不**做成"不吃鼠标"：实测那样会把它的压暗渲染弄坏
-                # （改扩展样式会清掉 Tk 的分层属性，画面就不暗了）。
-                # 改成：它照常压暗，但把"落在标题栏上的拖动"转交给主窗口 ——
-                # 用户实测的"鼠标拖动框体不跟手"就是压暗层把标题栏盖住了。
-                try:
-                    band.attributes("-alpha", DIM_ALPHA)
-                except Exception:                  # noqa: BLE001
-                    pass
-                band.bind("<ButtonPress-1>", self._on_dim_press)
-                band.bind("<B1-Motion>", self._on_dim_drag)
-                band.bind("<ButtonRelease-1>", self._on_dim_release)
-                band.geometry("%dx%d+%d+%d"
-                              % (right - left, bottom - top, left, top))
-                band.deiconify()
-                # 提到最前面：主窗口自己也是 topmost 的，不 lift 的话压暗层会压在它下面
-                # （窗口本身就不变暗）。lift 会把位置打回 (0,0)，后面那次"重新摆位"
-                # （_point_at 里 after 60ms 安排的）会把位置再设对一次。
-                band.lift()
-                self.overlays.append(band)
-            except Exception:                      # noqa: BLE001
-                continue
 
     def _draw_highlight(self, rect) -> None:
         self._destroy_highlight()
@@ -482,7 +347,7 @@ class GuidedTour:
             canvas = tk.Canvas(window, bg=SPOT_KEY, highlightthickness=0)
             canvas.pack(fill="both", expand=True)
             canvas.create_rectangle(3, 3, width + pad * 2 - 3, height + pad * 2 - 3,
-                                    outline=SPOT_LINE, width=3)
+                                    outline=SPOT_LINE, width=4)
             window.geometry("%dx%d+%d+%d"
                             % (width + pad * 2, height + pad * 2, x - pad, y - pad))
             window.deiconify()
@@ -642,14 +507,6 @@ class GuidedTour:
             except Exception:                      # noqa: BLE001
                 pass
             self.highlight = None
-
-    def _destroy_overlays(self) -> None:
-        for band in self.overlays:
-            try:
-                band.destroy()
-            except Exception:                      # noqa: BLE001
-                pass
-        self.overlays = []
 
     def _close_opened(self) -> None:
         for window in self._opened:

@@ -614,12 +614,9 @@ def main() -> int:
             raise AssertionError("新手教学没有打开说明窗口")
         if tour.highlight is None or not tour.highlight.winfo_exists():
             raise AssertionError("新手教学没有画出高亮框")
-        if len(tour.overlays) < 4:
-            raise AssertionError("新手教学没有把目标以外压暗（至少 4 块，实际 %d）"
-                                 % len(tour.overlays))
         # 金框必须"不吃鼠标"（它压在目标上，不能挡住用户点那个按钮）。
-        # 压暗层**故意**不做成不吃鼠标（那样会把压暗渲染弄坏，实测过）——
-        # 它靠"把标题栏上的拖动转交主窗口"来解决挡住拖动的问题。
+        # （早先还有一层"目标以外压暗"的半透明窗，会让主窗口拖动变得很卡，已经去掉：
+        #   用户实测"拖动起来延时很高不跟手"。现在只有金框 + 说明卡片。）
         if tour.highlight is not None and not theme_module.is_click_through(tour.highlight):
             raise AssertionError("金框会吃鼠标（点不到它圈住的按钮）")
         if not app.records:
@@ -633,15 +630,11 @@ def main() -> int:
                 raise AssertionError("中途说明窗口没了")
             if tour.highlight is None or not tour.highlight.winfo_exists():
                 raise AssertionError("中途没有高亮框")
-            if len(tour.overlays) < 4:
-                raise AssertionError("换步之后压暗层数量不对：%d" % len(tour.overlays))
         # 最后一步点「完成」→ 教学自己收尾（窗口收掉、打开的设置页也收掉）
         tour._go_next()
         pump(1)
         if tour.panel is not None or tour.highlight is not None:
             raise AssertionError("点完成后教学没有收起来")
-        if tour.overlays:
-            raise AssertionError("教学关了但压暗层没收掉")
         if tour._opened:
             raise AssertionError("教学关了但没把打开的设置页收掉")
         if app._tour is not None:
