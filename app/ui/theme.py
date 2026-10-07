@@ -418,8 +418,9 @@ def _physical_pixel_scope():
     125% 缩放下 `geometry("+1000+400")` 真的把窗口放到 (1250,500)、343×295 变成
     429×369。表现出来就是：拖动窗口时窗口跑得比鼠标快 25%、框选/截图坐标错位。
 
-    用户实测踩坑路径：新手教学的金框要"鼠标穿透"，走的正是 make_click_through，
+    用户实测踩坑路径：以前新手教学的金框是"鼠标穿透"的浮窗，拿句柄时走的正是这里，
     于是"一开教学，拖动就不跟手"，重启程序只要再开一次教学又坏 —— 所以放在这里修。
+    （那个浮窗现在已经没有了：教学改成主窗口内部的一页，不再需要穿透。）
     """
     if sys.platform != "win32":
         yield
@@ -468,63 +469,6 @@ def thread_dpi_awareness() -> Optional[int]:
         return int(user32.GetAwarenessFromDpiAwarenessContext(context))
     except Exception:                              # noqa: BLE001
         return None
-
-
-def make_click_through(window: tk.Misc) -> bool:
-    """让一个窗口"只显示、不吃鼠标"（Windows：扩展样式加 WS_EX_TRANSPARENT）。
-
-    新手教学的压暗层必须这样：它盖住屏幕上除目标以外的所有地方，如果吃鼠标，
-    用户想拖窗口、点别的地方就全被挡住了（用户实测反馈："鼠标拖动框体不跟手"）。
-    加上这个之后，压暗层纯属画面效果，鼠标事件直接穿过去给底下的窗口。
-    顺手也加 WS_EX_NOACTIVATE：免得点它的时候把焦点从主窗口抢走。
-    """
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.windll.user32
-        # 先按物理像素拿句柄（和截图/窗口矩形一套坐标，避免高 DPI 下拿错窗口），
-        # 用完必须**还原**成原来的 DPI 上下文，见 _physical_pixel_scope。
-        with _physical_pixel_scope():
-            hwnd = wintypes.HWND(int(window.winfo_id()))
-            gwl_exstyle = -20
-            ws_ex_layered = 0x00080000
-            ws_ex_transparent = 0x00000020
-            ws_ex_noactivate = 0x08000000
-            if hasattr(user32, "GetWindowLongPtrW"):
-                get_long, set_long = user32.GetWindowLongPtrW, user32.SetWindowLongPtrW
-            else:                                  # 32 位 Python
-                get_long, set_long = user32.GetWindowLongW, user32.SetWindowLongW
-            get_long.restype = ctypes.c_ssize_t
-            get_long.argtypes = [wintypes.HWND, ctypes.c_int]
-            set_long.restype = ctypes.c_ssize_t
-            set_long.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
-            style = int(get_long(hwnd, gwl_exstyle) or 0)
-            new_style = style | ws_ex_layered | ws_ex_transparent | ws_ex_noactivate
-            set_long(hwnd, gwl_exstyle, new_style)
-            return True
-    except Exception:                              # noqa: BLE001
-        return False
-
-
-def is_click_through(window: tk.Misc) -> bool:
-    """这个窗口现在是不是"只显示、不吃鼠标"（自检用：抓不到就返回 False）。"""
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.windll.user32
-        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
-        user32.GetWindowLongW.restype = ctypes.c_ssize_t
-        style = int(user32.GetWindowLongW(
-            wintypes.HWND(int(window.winfo_id())), -20) or 0)
-        return bool(style & 0x00000020)        # WS_EX_TRANSPARENT
-    except Exception:                              # noqa: BLE001
-        return False
 
 
 def window_rect(window: tk.Misc) -> Optional[tuple]:
@@ -783,15 +727,15 @@ def _top_window(widget: tk.Misc):
     return None
 
 
-def _all_toplevels(node: tk.Misc, found=None):
-    """递归收集所有 Toplevel（对话框可能挂在别的对话框下面）。"""
+def all_toplevels(node: tk.Misc, found=None):
+    """递归收集所有 Toplevel（对话框可能挂在别的对话框下面；自检也用它数窗口）。"""
     if found is None:
         found = []
     try:
         for child in node.winfo_children():
             if isinstance(child, tk.Toplevel):
                 found.append(child)
-            _all_toplevels(child, found)
+            all_toplevels(child, found)
     except Exception:
         pass
     return found
@@ -857,7 +801,7 @@ def place_near(window: tk.Misc, size=None, gap: int = 14) -> None:
         if root is not None:
             try:
                 # 注意要**递归**找：设置分类页挂在"设置中心"下面，不是主窗口的直接子窗口
-                for child in _all_toplevels(root):
+                for child in all_toplevels(root):
                     if child in (window, root, parent):
                         continue
                     if not child.winfo_ismapped():

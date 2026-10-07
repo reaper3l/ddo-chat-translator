@@ -137,6 +137,10 @@ def main() -> int:
         app.config["public_dict_enabled"] = False   # 也一样：自检不去拉公共词典
         # 使用须知已经同意过了：这一关单独用下面的步骤测（否则会弹出来挡住后面的步骤）
         app.config["agreement_version"] = disclaimer.DISCLAIMER_VERSION
+        # 「第一次用会自动弹教学」是真实行为，而且教学一开就会把正在播的「演示一下」
+        # 停掉（教学优先）。自检必须独立于用户当前的配置 —— 这里先标成"看过教学"，
+        # 自动弹那条路由下面的教学自检单独测（它自己会把 tour_done 设回 False）。
+        app.config["tour_done"] = True
         app.root.withdraw()
         app.root.update_idletasks()
         holder["app"] = app
@@ -587,14 +591,16 @@ def main() -> int:
     step("演示一下：只画到显示区（不联网、不写学习库、做完还原设置）", demo_playback)
 
     def guided_tour():
-        """新手教学：一步步指着界面说明"这个功能在哪儿、怎么设置"。
+        """新手教学：主窗口内部翻页讲功能（**不许再摆浮窗**）。
 
         用户要求：演示不能只给结果，还要教**怎么操作/设置**（填接口、纠错、过滤人名、
-        中英互译、调颜色）。这里把每一步都走一遍，确认：
-        * 每一步都能画出高亮框 + 说明卡片（不报错、不卡住）；
-        * **目标以外压暗**（4 块半透明层）而且**没有一块盖住目标**（盖住就没法点/看不全）；
+        中英互译、调颜色）。同时明确反馈过"教学浮在主窗口上会影响拖动" ——
+        所以这里钉住：
+        * 教学页是**主窗口内部的一页**（占显示区，讲完把显示区还回去），
+          全程**不新增任何顶层窗口**（也就不可能抢鼠标/压住主窗口）；
+        * 每一步都能翻（不报错、不卡住）；
         * **不改配置、不写学习库、不调接口**（互译窗口要用 auto_suggest=False）；
-        * 教学里打开的窗口，换步/结束时都收掉；
+        * 用户点「打开 xx」开出来的窗口，换步/结束时都收掉；
         * 第一次用会自动弹（`tour_done`），走完/跳过之后不再自动弹。
         """
         from app.ui.tour import GuidedTour
@@ -605,36 +611,43 @@ def main() -> int:
         terms_before = len(app.memory.term_list())
         cache_before = len(app.pipeline._cache)
         config_before = dict(app.config)
+        windows_before = len(theme_module.all_toplevels(app.root))
 
         app.clear_display()
         tour = GuidedTour(app)
         app._tour = tour
         tour.start()
         if tour.panel is None or not tour.panel.winfo_exists():
-            raise AssertionError("新手教学没有打开说明窗口")
-        if tour.highlight is None or not tour.highlight.winfo_exists():
-            raise AssertionError("新手教学没有画出高亮框")
-        # 金框必须"不吃鼠标"（它压在目标上，不能挡住用户点那个按钮）。
-        # （早先还有一层"目标以外压暗"的半透明窗，会让主窗口拖动变得很卡，已经去掉：
-        #   用户实测"拖动起来延时很高不跟手"。现在只有金框 + 说明卡片。）
-        if tour.highlight is not None and not theme_module.is_click_through(tour.highlight):
-            raise AssertionError("金框会吃鼠标（点不到它圈住的按钮）")
-        if not app.records:
-            raise AssertionError("教学没有先放两条示例消息（④⑤ 两步要指着它们）")
+            raise AssertionError("新手教学没有开起来")
+        if tour.panel.winfo_toplevel() is not app.root:
+            raise AssertionError("教学页又是独立窗口了（用户要求：别在屏幕上再摆浮窗）")
+        if app.text.winfo_manager():
+            raise AssertionError("教学页没让显示区让位")
+        if len(theme_module.all_toplevels(app.root)) != windows_before:
+            raise AssertionError("教学开了新窗口（教学必须只在主窗口内部）")
 
         steps = tour._steps()
-        for _ in range(len(steps) - 1):
+        if len(steps) < 6:
+            raise AssertionError("教学步骤太少（至少要讲到框选/接口/外观/纠错/过滤/互译）")
+        for index in range(len(steps) - 1):
             tour._go_next()
             pump(1)
             if tour.panel is None or not tour.panel.winfo_exists():
-                raise AssertionError("中途说明窗口没了")
-            if tour.highlight is None or not tour.highlight.winfo_exists():
-                raise AssertionError("中途没有高亮框")
+                raise AssertionError("中途教学页没了")
+            # 注意：这个自检里主窗口是 withdraw 的，控件没有"显示"，画不出高亮圈是正常的
+            # （真实窗口下由 tools\window_check.py 检查）。
+            if app.root.winfo_ismapped() and tour._target is not None and (
+                    tour._ring is None or not tour._ring.winfo_exists()):
+                raise AssertionError("第 %d 步指着一个按钮，却没画出高亮圈" % (index + 2))
+            if len(theme_module.all_toplevels(app.root)) != windows_before:
+                raise AssertionError("第 %d 步冒出了新窗口" % (index + 2))
         # 最后一步点「完成」→ 教学自己收尾（窗口收掉、打开的设置页也收掉）
         tour._go_next()
         pump(1)
-        if tour.panel is not None or tour.highlight is not None:
+        if tour.panel is not None or tour._ring is not None:
             raise AssertionError("点完成后教学没有收起来")
+        if not app.text.winfo_manager():
+            raise AssertionError("教学结束后显示区没有还回来")
         if tour._opened:
             raise AssertionError("教学关了但没把打开的设置页收掉")
         if app._tour is not None:
@@ -647,6 +660,24 @@ def main() -> int:
         for key, value in config_before.items():          # 配置一个字都不许被改
             if app.config.get(key) != value:
                 raise AssertionError("教学改了配置项：%s" % key)
+
+        # 「打开 xx」是用户点了才开，而且换步会把它收掉
+        app.open_tour()
+        pump(1)
+        tour = app._tour
+        tour.index = 1                                    # ② 是"打开设置（翻译）"
+        tour._show()
+        pump(1)
+        tour._run_action()
+        pump(1)
+        if not tour._opened:
+            raise AssertionError("点「打开设置」没有把设置页开出来")
+        tour._go_next()
+        pump(1)
+        if tour._opened:
+            raise AssertionError("换步之后，上一步打开的窗口没收掉")
+        app.stop_tour()
+        pump(1)
 
         # 再开一次，确认"再点一次收起"能用
         app.open_tour()

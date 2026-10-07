@@ -2,17 +2,23 @@
 
 用法（需要有图形界面的机器）：
     python tools\\demo_media.py [输出目录] [--size 560x620] [--fps 4]
+    python tools\\demo_media.py --tour          # 录「新手教学」每一步
 
-它会真的把程序窗口打开，放一遍「演示一下」里的那段示例聊天，同时把窗口区域截下来：
+它会真的把程序窗口打开，放一遍「演示一下」里的那段示例聊天（或走一遍新手教学），
+同时把**主窗口**区域截下来：
 
-    演示_主窗口.png    最后一屏（内容最满）的静态图
-    演示_主窗口.gif    整个过程（约十几秒）的动图
+    演示_主窗口.png / 演示_主窗口.gif
+    教学_步骤1.png … 教学_步骤N.png（--tour 时每一步一张）
 
 注意：
 * 窗口大小默认取 560x620 —— 比日常用的紧凑尺寸大一点，发到群里看得清；
   想按你平时的样子录就传 --size（例如 `--size 343x295`）。
 * **不会动你的配置和学习库**：演示只往显示区画（不联网、不写学习库），
   这个工具也不走 quit_app()，所以不会回写窗口位置之类的配置。
+* 教学现在是"主窗口内部翻一页"（不再有金框/说明卡片那些浮窗），所以录教学就是录主窗口
+  —— 以前那套"每个窗口单独抓再拼到干净底色上"的复杂逻辑跟着删掉了。
+* 录之前**把别的窗口最小化**（录制期间别动鼠标）：录的是主窗口那一块屏幕，
+  别的窗口压在上面就会一起录进去。
 """
 from __future__ import annotations
 
@@ -25,10 +31,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app import capture                      # noqa: E402
+from app.ui import theme                     # noqa: E402
 from app.ui.main_window import MainWindow    # noqa: E402
 
 
-def _ensure_dpi_aware():
+def _ensure_dpi_aware() -> None:
     """先设好 DPI 感知，跟程序本体一致 —— 不然窗口坐标和截图像素会差一个缩放，
     录出来的画面就会偏一格（这个坑实测踩过）。"""
     try:
@@ -41,198 +48,39 @@ def _ensure_dpi_aware():
 
 
 def _window_box(app, screen):
-    """窗口在屏幕上的**物理像素**框 [左,上,右,下]。
+    """主窗口在屏幕上的**物理像素**框 [左,上,右,下]。
 
-    坑（实测踩过）：Tk 报的坐标是按显示缩放**虚拟化**过的（125% 下 560 会报成 560
-    但实际是 700 像素），而框选区域的坐标又走另一套换算 —— 直接拿 `winfo_*` 去乘
-    屏幕比例，抓出来的画面会整整偏一格、还把旁边的桌面也录进去。所以这里用 Win32
-    的 `GetWindowRect`，并且**先把本线程设成"按物理像素报"**（DPI 感知上下文 -4）：
-    实测拿到的矩形和逐像素扫描出来的窗口边缘完全一致。
+    直接走 `theme.window_rect()`：它就是"用 Win32 量、临时按物理像素报、用完还原"
+    那一套（这个工具以前自己写了一份，收尾还把线程写死成"不感知 DPI"）。
     """
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    try:
-        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
-        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
-        rect = wintypes.RECT()
-        if user32.GetWindowRect(app.root.winfo_id(), ctypes.byref(rect)):
-            return [rect.left, rect.top, rect.right, rect.bottom]
-    except Exception:                              # noqa: BLE001
-        pass
-    finally:
-        try:
-            user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))
-        except Exception:                          # noqa: BLE001
-            pass
-    # 退路：按 Tk 的值乘屏幕比例（可能偏一点，但总比不录强）
-    left = app.root.winfo_rootx()
+    rect = theme.window_rect(app.root)
+    if rect:
+        return [int(value) for value in rect]
+    left = app.root.winfo_rootx()                # 退路：按 Tk 的值换算（可能偏一点）
     top = app.root.winfo_rooty()
     width = max(80, app.root.winfo_width())
     height = max(80, app.root.winfo_height())
     return capture.convert_region([left, top, left + width, top + height], screen)
 
 
-def _rect_of(widget):
-    """任意窗口的**物理像素**矩形（和 `_window_box` 同一套办法）。"""
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    try:
-        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
-        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
-        rect = wintypes.RECT()
-        if user32.GetWindowRect(widget.winfo_id(), ctypes.byref(rect)):
-            return [rect.left, rect.top, rect.right, rect.bottom]
-    except Exception:                              # noqa: BLE001
-        pass
-    finally:
-        try:
-            user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))
-        except Exception:                          # noqa: BLE001
-            pass
-    try:
-        return [widget.winfo_rootx(), widget.winfo_rooty(),
-                widget.winfo_rootx() + widget.winfo_width(),
-                widget.winfo_rooty() + widget.winfo_height()]
-    except Exception:                              # noqa: BLE001
-        return None
-
-
-def _toplevels(widget):
-    """递归找出所有"真窗口"（教程里的设置页挂在"设置中心"下面，不是主窗口的直接子窗口）。
-
-    只认 master 是 主窗口 / 别的真窗口 的那些；**鼠标悬停提示窗会被跳过** ——
-    它是以某个按钮为父建的，录进去就是一块莫名其妙的白条（实测在成图里出现过）。
-    """
-    import tkinter as tk
-
-    found = []
-    for child in widget.winfo_children():
-        if isinstance(child, tk.Toplevel) and isinstance(
-                getattr(child, "master", None), (tk.Tk, tk.Toplevel)):
-            found.append(child)
-        found.extend(_toplevels(child))
-    return found
-
-
-def _app_box(app):
-    """把程序当前所有可见窗口圈在一起的框（教学要连设置页一起录进去）。
-
-    结果会**夹在屏幕范围内**：超出屏幕的部分抓出来是黑块/残影（用户反馈的"撕裂"），
-    而窗口跑到屏幕外也会在图里被切掉（"显示不全"）。
-    """
-    boxes = []
-    for window in [app.root] + _toplevels(app.root):
-        try:
-            if not window.winfo_ismapped():
-                continue
-            rect = _rect_of(window)
-            if rect:
-                boxes.append(rect)
-        except Exception:                          # noqa: BLE001
-            continue
-    if not boxes:
-        return _window_box(app, (0, 0))
-    box = [min(b[0] for b in boxes), min(b[1] for b in boxes),
-           max(b[2] for b in boxes), max(b[3] for b in boxes)]
-    area = capture.virtual_screen_rect()
-    if area:
-        box = [max(box[0], area[0]), max(box[1], area[1]),
-               min(box[2], area[2]), min(box[3], area[3])]
-    return box
-
-
-def _keep_windows_on_screen(app) -> None:
-    """把已经跑到屏幕外的窗口挪回屏幕里（只挪位置、不改大小）。
-
-    为什么要它：设置页/说明卡片有时会被摆在屏幕边缘之外，抓出来就是"缺一块"。
-    """
+def _keep_on_screen(app) -> None:
+    """主窗口跑到屏幕外就挪回屏幕里（只挪位置、不改大小）—— 不然抓出来就是"缺一块"。"""
     area = capture.virtual_screen_rect()
     if not area:
         return
     left, top, right, bottom = area
-    for window in [app.root] + _toplevels(app.root):
-        try:
-            if not window.winfo_ismapped():
-                continue
-            rect = _rect_of(window)
-            if not rect:
-                continue
-            width = max(1, rect[2] - rect[0])
-            height = max(1, rect[3] - rect[1])
-            x = max(left, min(rect[0], right - width))
-            y = max(top, min(rect[1], bottom - height))
-            if (x, y) != (rect[0], rect[1]):
-                window.wm_geometry("+%d+%d" % (x, y))     # 只挪位置，不动大小
-        except Exception:                          # noqa: BLE001
-            continue
-
-
-def _app_windows(app):
-    """程序当前可见的窗口及它们的物理矩形：[(是不是高亮框, [左,上,右,下]), ...]。"""
-    from app.ui.tour import SPOT_KEY                 # noqa: F401  （只为确认模块在）
-
-    found = []
-    for window in [app.root] + _toplevels(app.root):
-        try:
-            if not window.winfo_ismapped():
-                continue
-            rect = _rect_of(window)
-            if not rect:
-                continue
-            is_spot = False
-            try:
-                is_spot = str(window.attributes("-transparentcolor")) == SPOT_KEY
-            except Exception:                        # noqa: BLE001
-                is_spot = False
-            found.append((is_spot, rect))
-        except Exception:                            # noqa: BLE001
-            continue
-    return found
-
-
-def _compose_on_clean_background(screen_image, box, windows,
-                                 background=(12, 14, 20)):
-    """把"程序自己的窗口"拼到干净底色上：每个窗口**单独抓**，再按它们的真实相对位置贴。
-
-    为什么不整块抓：教学同时开着主窗口 / 设置页 / 说明卡片，整块抓外接矩形会把中间的
-    桌面录进去（用户的桌面上还有别的软件），而且窗口一挪位置，框就跟不上 ——
-    结果是"图片显示不全 + 撕裂"（用户实测反馈的正是这个）。
-    单独抓每个窗口则永远完整；透明的高亮框抓不了（它背后是桌面），按它的矩形画一圈金框。
-    """
-    from PIL import Image, ImageDraw
-
-    # 先量出"这些窗口合起来占多大"，再开一张这么大的干净底
-    lefts = [rect[0] for _s, rect in windows] or [0]
-    tops = [rect[1] for _s, rect in windows] or [0]
-    rights = [rect[2] for _s, rect in windows] or [1]
-    bottoms = [rect[3] for _s, rect in windows] or [1]
-    origin = (min(lefts), min(tops))
-    size = (max(1, max(rights) - origin[0]), max(1, max(bottoms) - origin[1]))
-    canvas = Image.new("RGB", size, background)
-
-    # 先把所有窗口贴好，**最后**再画高亮框 —— 高亮框是"透明窗"，被后面贴的窗口
-    # 盖住就看不见了（顺序反了金框会消失）
-    ordered = [item for item in windows if not item[0]] + \
-              [item for item in windows if item[0]]
-    for is_spot, rect in ordered:
-        dx, dy = rect[0] - origin[0], rect[1] - origin[1]
-        if is_spot:                                  # 高亮框：只画边框
-            ImageDraw.Draw(canvas).rectangle(
-                [dx + 3, dy + 3, dx + (rect[2] - rect[0]) - 3,
-                 dy + (rect[3] - rect[1]) - 3],
-                outline=(255, 204, 77), width=3)
-            continue
-        piece = capture.grab_fast(rect, None)        # 这个窗口自己那块，永远完整
-        if piece is None:
-            piece = capture.grab_dxgi(rect)
-        if piece is None:
-            continue
-        canvas.paste(piece, (dx, dy))
-    return canvas
+    try:
+        rect = theme.window_rect(app.root)
+        if not rect:
+            return
+        width = max(1, rect[2] - rect[0])
+        height = max(1, rect[3] - rect[1])
+        x = max(left, min(rect[0], right - width))
+        y = max(top, min(rect[1], bottom - height))
+        if (x, y) != (rect[0], rect[1]):
+            app.root.wm_geometry("+%d+%d" % (x, y))       # 只挪位置，不动大小
+    except Exception:                            # noqa: BLE001
+        pass
 
 
 def _trim_dead_border(image, limit: int = 0):
@@ -275,9 +123,9 @@ def main() -> int:
     parser.add_argument("--gif-scale", type=float, default=0.6,
                         help="动图缩小到多少（默认 0.6，发群有大小限制）")
     parser.add_argument("--tour", action="store_true",
-                        help="录「新手教学」（分步高亮 + 怎么设置）而不是示例聊天")
-    parser.add_argument("--tour-step", type=float, default=4.0,
-                        help="教学每一步停留几秒（默认 4）")
+                        help="录「新手教学」（一步一步怎么设置）而不是示例聊天")
+    parser.add_argument("--tour-step", type=float, default=3.0,
+                        help="教学每一步停留几秒（默认 3）")
     args = parser.parse_args()
 
     out_dir = Path(args.out) if args.out else ROOT.parent / "work" / "demo"
@@ -288,6 +136,7 @@ def main() -> int:
     app.config["check_update"] = False
     app.config["contribute_invite_done"] = True
     app.config["contribute_invite_version"] = "demo"
+    app.config["tour_done"] = True               # 教学由本工具手动放，别自动弹
     app.root.geometry(args.size)
     app.root.update()
     app.root.deiconify()
@@ -300,19 +149,17 @@ def main() -> int:
 
     frames = []
     shot = None
-    base = None            # 固定坐标系原点：整个录制过程都用它，画面才不会跳
-    canvas_size = [0, 0]
 
-    def snap(box_now, windows_now):
-        """抓一帧（每个窗口单独抓再拼）。box_now 只用来保证坐标系不跳。"""
-        nonlocal shot, base, canvas_size
-        if base is None:
-            base = (box_now[0], box_now[1])
-        image = _compose_on_clean_background(None, None, windows_now)
-        canvas_size[0] = max(canvas_size[0], image.width)
-        canvas_size[1] = max(canvas_size[1], image.height)
-        frames.append(image)
-        shot = image
+    def snap() -> None:
+        """抓一帧主窗口（教学现在也在主窗口里面，所以只录主窗口就够）。"""
+        nonlocal shot
+        _keep_on_screen(app)
+        box = _window_box(app, screen)
+        image = capture.grab_fast(box, None) or capture.grab_dxgi(box)
+        if image is None:
+            return
+        frames.append(_trim_dead_border(image))
+        shot = frames[-1]
 
     prefix = "教学" if args.tour else "演示"
     if args.tour:
@@ -326,24 +173,17 @@ def main() -> int:
             return 1
         steps = len(tour._steps())
         per_step = max(2, int(round(max(1.0, args.tour_step) / max(0.05, interval))))
-        step_last = {}      # 每一步"最后那一帧"（等窗口画稳再抓，不带白块）
+        step_last = {}
         # 按"一步一录"来，别用计时循环 —— 那样录到哪一步全看机器快慢（实测会漏掉后半段）
         for step_index in range(steps):
-            # 换步后**先等窗口画好再抓**：新开的窗口（设置页 / 互译窗口）在被画出来之前
-            # 是一片白的，抢着抓就会在成图里留一条白条，看着像撕裂（用户实测反馈过）
-            for _ in range(8):
+            for _ in range(6):                     # 换步后先等窗口画好再抓
                 app.root.update()
                 time.sleep(0.12)
-            _keep_windows_on_screen(app)
-            app.root.update()
             for _ in range(per_step):
                 app.root.update()
-                _keep_windows_on_screen(app)       # 先保证窗口都在屏幕里，不然会被切
-                # 说明卡片是"延后 40ms 再摆一次"才定下来的（见 tour._point_at），
-                # 这里等它落位再抓 —— 边挪边抓会抓到"撕开"的半张图
                 time.sleep(0.2)
                 app.root.update()
-                snap(_app_box(app), _app_windows(app))
+                snap()
                 time.sleep(interval)
             if frames:
                 step_last[step_index] = frames[-1]
@@ -352,7 +192,7 @@ def main() -> int:
                     tour._go_next()
                 except Exception:                  # noqa: BLE001
                     break
-        # 每一步单独存一张图（发群时按 1~6 顺序发，比挤在一张里清楚得多）
+        # 每一步单独存一张图（发群时按序号发，比挤在一张里清楚得多）
         for index, image in sorted(step_last.items()):
             path = out_dir / ("教学_步骤%d.png" % (index + 1))
             image.save(path)
@@ -363,32 +203,17 @@ def main() -> int:
     else:
         print("正在放演示并录制（约十几秒，请别动鼠标…）")
         app.play_demo()
-        deadline = time.time() + 45
+        deadline = time.time() + 60
         while time.time() < deadline:
             app.root.update()
-            _keep_windows_on_screen(app)
-            box = _window_box(app, screen)      # 演示模式只录主窗口
-            screen_image = capture.grab_fast(box, None) or capture.grab_dxgi(box)
-            if screen_image is not None:
-                if base is None:
-                    base = (box[0], box[1])
-                canvas_size[0] = max(canvas_size[0], box[2] - base[0])
-                canvas_size[1] = max(canvas_size[1], box[3] - base[1])
-                frames.append(_trim_dead_border(screen_image))
-                shot = frames[-1]
+            snap()
             if not getattr(app, "_demo_timer", None):
                 break                           # 演示放完了
             time.sleep(interval)
-    if not args.tour:
-        # 演示模式：再补最后两帧，让动图结尾停一下（别一放完就跳走）。
-        # 注意只在演示模式补 —— 教学模式下这两帧只有主窗口，补进去会让动图结尾
-        # 突然"跳"成一张小图（看着就是撕裂）。
+        # 结尾再补两帧，让动图停一下（别一放完就跳走）
         for _ in range(2):
             app.root.update()
-            image = capture.grab_fast(_window_box(app, screen), None)
-            if image is not None:
-                frames.append(_trim_dead_border(image))
-                shot = frames[-1]
+            snap()
             time.sleep(0.3)
 
     app.stop_demo()
@@ -398,31 +223,29 @@ def main() -> int:
         return 1
 
     png_path = out_dir / ("%s_主窗口.png" % prefix)
-    # 教学模式的 shot 已经在上面按"每一步最后那一帧"取好了（步骤 6 那张最全）
     shot.save(png_path)
     print("截图：%s（%dx%d）" % (png_path, shot.width, shot.height))
 
-    gif_path = out_dir / ("%s_主窗口.gif" % prefix)
-    # 缩小 + 256 色，压到能直接发群（不然 700x775 的十几秒动图要好几 MB）
-    scale = max(0.2, min(1.0, float(args.gif_scale)))
-    # 教学每一步的窗口不一样大 → 先统一到同一张画布（左上对齐），否则动图会花
     if frames:
         from PIL import Image
 
+        gif_path = out_dir / ("%s_主窗口.gif" % prefix)
+        # 缩小 + 256 色，压到能直接发群（不然十几秒的动图要好几 MB）
+        scale = max(0.2, min(1.0, float(args.gif_scale)))
+        # 每一步的窗口大小可能不一样 → 先统一到同一张画布（左上对齐），否则动图会花
         width = max(frame.width for frame in frames)
         height = max(frame.height for frame in frames)
-        unified = []
+        gif_frames = []
         for frame in frames:
             canvas = Image.new("RGB", (width, height), (12, 14, 20))
             canvas.paste(frame, (0, 0))
-            unified.append(canvas)
-        frames = unified
-    gif_frames = []
-    for frame in frames:
-        size = (max(1, int(frame.width * scale)), max(1, int(frame.height * scale)))
-        gif_frames.append(frame.resize(size).convert("P", palette=1, colors=128))
-    if gif_frames:
-        gif_frames[0].save(gif_path, save_all=True, append_images=gif_frames[1:],
+            if scale < 1.0:
+                canvas = canvas.resize(
+                    (max(1, int(canvas.width * scale)), max(1, int(canvas.height * scale))),
+                    Image.LANCZOS)
+            gif_frames.append(canvas.convert("P", palette=Image.ADAPTIVE, colors=256))
+        gif_frames[0].save(str(gif_path), save_all=True,
+                           append_images=gif_frames[1:],
                            duration=int(1000 * interval), loop=0, optimize=True)
         print("动图：%s（%d 帧，%.1f MB，%dx%d）"
               % (gif_path, len(gif_frames),

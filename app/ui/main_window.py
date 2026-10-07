@@ -182,6 +182,13 @@ class MainWindow:
         top = ttk.Frame(self.root, style="Surface.TFrame")
         top.pack(side="top", fill="x")
 
+        # 窗口按钮（— ✕）**最先 pack**：Tk 的 pack 是"先 pack 的先分到地方"，
+        # 放最后的话，窗口很窄 + 功能条又展开时它们会被挤出去（"✕ 点不到"是用户最怕的）。
+        # 先 pack 又是 side="right"，所以它们依然在最右边。
+        window_buttons = ttk.Frame(top, style="Surface.TFrame")
+        window_buttons.pack(side="right", padx=(4, 6))
+        self.window_buttons = window_buttons
+
         self.brand = ttk.Label(top, text="DDO 聊天翻译", style="SurfaceMuted.TLabel")
         self.brand.pack(side="left", padx=(8, 8), pady=7)
         # 标题既是"点一下收放工具条"，也是拖窗口的把手。必须在**松手时**看鼠标有没有
@@ -221,8 +228,6 @@ class MainWindow:
 
         # 窗口按钮：**关闭在最右、最小化在它左边**（和 Windows 一致）。
         # 侧边 pack 的顺序决定位置：先 pack 的在最右边，所以先 pack 关闭键。
-        window_buttons = ttk.Frame(top, style="Surface.TFrame")
-        window_buttons.pack(side="right", padx=(4, 6))
         self.quit_button = ttk.Button(window_buttons, text="✕", width=2,
                                       style="WindowClose.TButton",
                                       command=self.quit_app)
@@ -231,8 +236,6 @@ class MainWindow:
         self.min_button = ttk.Button(window_buttons, text="—", width=2,
                                      style="Window.TButton", command=self._minimize)
         theme.Tooltip(self.min_button, "最小化（无边框模式下会先恢复系统边框，方便从任务栏找回）")
-        self.window_buttons = window_buttons
-
         # 灯条容器放在最后 pack：右边那两个窗口按钮要先占住地方，
         # 免得窗口很窄时灯条把它们挤出去（✕ 都点不到就麻烦了）
         strip_holder = tk.Frame(top, bg=TOOLBAR_BG,
@@ -748,6 +751,13 @@ class MainWindow:
             if not self.actions.winfo_manager():
                 self.actions.pack(side="left", fill="y")
             self.actions_holder.configure(width=max(1, self.actions.winfo_reqwidth()))
+            # 刚建好窗口（或刚把按钮 pack 出来）时 reqwidth 还可能量到 1 —— 那样功能
+            # 按钮会"展开了却看不见"（实测：启动时就是展开状态的话，工具条只剩一条空白，
+            # 得手动点两次 DDO 才恢复）。这里等真正布局完再量一次。
+            try:
+                self.root.after_idle(self._fit_expanded_actions)
+            except Exception:                      # noqa: BLE001
+                pass
             if not self.separator.winfo_manager():
                 self.separator.pack(side="left", fill="y", padx=4, pady=6,
                                     before=self.actions_holder)
@@ -764,6 +774,20 @@ class MainWindow:
                 self._strip_width = self.channel_strip.winfo_reqwidth()
             self._sync_strip_width()
             self.channel_strip.after_idle(self._ensure_window_buttons)
+
+    def _fit_expanded_actions(self) -> None:
+        """展开状态下，把功能按钮容器的宽度调到按钮真正需要的宽度（布局好之后再量）。"""
+        try:
+            if bool(self.config.get("toolbar_collapsed", True)):
+                return
+            if not self.actions.winfo_manager():
+                return
+            self.root.update_idletasks()
+            width = max(1, self.actions.winfo_reqwidth())
+            if width != self.actions_holder.winfo_width():
+                self.actions_holder.configure(width=width)
+        except Exception:                          # noqa: BLE001
+            pass
 
     def _animate_toolbar(self, expanded: bool) -> None:
         """工具条收起/展开的过渡动画（两个容器宽度此消彼长，约 130ms）。"""
@@ -1699,15 +1723,6 @@ class MainWindow:
         if hasattr(self, "_demo_show_notes"):
             self.config["show_notes"] = self._demo_show_notes
             del self._demo_show_notes
-
-    def insert_demo_lines(self, count: int = 2) -> None:
-        """往显示区放几条示例消息 —— **只画**，不联网、不写学习库（新手教学用）。"""
-        for index, (_delay, row) in enumerate(self.DEMO_LINES[:max(1, int(count))]):
-            kind, channel, speaker, source, translated, note = row
-            self._render(DisplayItem(seq=950000 + index, kind=kind, channel=channel,
-                                     speaker=speaker, source=source,
-                                     translated=translated or source, note=note,
-                                     prefix="(%s): " % channel))
 
     # ---------------------------------------------------------------- 新手教学
     def open_tour(self, first_run: bool = False) -> None:

@@ -100,6 +100,10 @@ def main() -> int:
     dpi.enable(str(load_config().get("dpi_mode", "auto")))
     app = MainWindow()
     snapshot = _config_snapshot()
+    # 「第一次用会自动弹教学」是真实行为：它会占住显示区、推迟"参与改进"的邀请，
+    # 于是焦点检查和邀请检查会莫名其妙地失败。自检必须独立于用户当前的配置 ——
+    # 这里先标成"看过教学"，自动弹那条路由下面的教学自检单独测（它自己会设回 False）。
+    app.config["tour_done"] = True
     app.config["public_dict_enabled"] = False    # 自检不联网（不拉公共词典）
     # 条款版本升过级时，主窗口 200ms 后会自动弹同意框并 grab 输入 —— 那会干扰焦点检查，
     # 所以自检里直接标成"已同意"（同意流程本身由 ui_smoke 单独测）。
@@ -409,6 +413,27 @@ def main() -> int:
     check("收窄窗口时最小化/关闭按钮一直完整（不会被灯条挤掉）",
           not bad, "全部正常" if not bad else "出问题的宽度：" + "、".join(bad))
 
+    # 工具条**展开**时也要保住 — / ✕：功能按钮占的位置比灯条多得多，
+    # 窗口一窄就会把它们挤出去（实测：300px 宽 + 展开时 ✕ 直接不见了）。
+    app.config["toolbar_collapsed"] = False
+    app.apply_settings()
+    pump(app, 0.3)
+    bad_expanded = []
+    for width in (700, 560, 460, 400, 360, 343, 320, 300, 270):
+        app.root.geometry("%dx300" % width)
+        pump(app, 0.3)
+        if not app.min_button.winfo_ismapped() or not app.quit_button.winfo_ismapped():
+            bad_expanded.append("%dpx(按钮没映射)" % width)
+        elif squeezed(app.min_button) or squeezed(app.quit_button):
+            bad_expanded.append("%dpx(✕=%d/%d)" % (
+                width, app.quit_button.winfo_width(), app.quit_button.winfo_reqwidth()))
+    app.config["toolbar_collapsed"] = True
+    app.apply_settings()
+    pump(app, 0.3)
+    check("工具条展开时，收窄窗口也不会挤掉最小化/关闭按钮",
+          not bad_expanded,
+          "全部正常" if not bad_expanded else "出问题的宽度：" + "、".join(bad_expanded))
+
     # 用户实测的 bug：窗口很窄时灯条会整条收起来，但再拖宽它不会自己回来
     # （必须点一下 DDO 收放工具条才恢复）。
     for width in (300, 260, 230):
@@ -503,31 +528,33 @@ def main() -> int:
     # 还没散掉的窗口挡住，偶发地判成"开太远"（实测遇到过一次）
     pump(app, 0.4)
 
-    # ---------------- 新手教学：压暗层不能挡住鼠标，拖动时高亮要跟着走 ----------------
+    # ------- 新手教学：只在主窗口内部（不摆浮窗、不抢鼠标），开着也能正常拖窗口 -------
     def tour_keeps_mouse_and_follows_drag():
+        """教学现在是"主窗口里的一页"：不新增任何顶层窗口，拖动照常且 1:1。
+
+        用户反馈过两轮"教学影响拖动"；早先的浮窗方案（金框窗 + 说明卡片窗 + 目标以外
+        压暗）无论怎么补都会和拖动纠缠，改成窗口内部一页之后这些纠缠就都不存在了。
+        """
         from app.ui import theme as theme_module
         from app.ui.tour import GuidedTour
 
         app.config["tour_done"] = True         # 别让下面的检查触发"首次自动弹"
+        windows_before = len(theme_module.all_toplevels(app.root))
         tour = GuidedTour(app, first_run=False)
         app._tour = tour
         tour.start()
         pump(app, 0.6)
-        if tour.panel is None or tour.highlight is None:
+        if tour.panel is None:
             raise AssertionError("新手教学没开起来")
-        # ① 金框必须"只显示、不吃鼠标"（它是压在目标上的，不能挡住用户点那个按钮）。
-        #    （早先还有一层"目标以外压暗"的半透明窗，实测会让主窗口拖动变得很卡，
-        #     已经去掉 —— 现在教学只有金框 + 说明卡片。）
-        if not theme_module.is_click_through(tour.highlight):
-            raise AssertionError("金框会吃鼠标（点不到它圈住的按钮）")
-        # ② 教学开着时拖动标题栏，窗口要动，而且高亮/卡片要跟着目标走
+        inside = tour.panel.winfo_toplevel() is app.root
+        # 走到"指着工具条按钮"的那一步：高亮圈也必须是主窗口内部的普通控件
+        tour.index = 1
+        tour._show()
+        pump(app, 0.5)
+        ring_inside = tour._ring is not None and tour._ring.winfo_toplevel() is app.root
+        no_new_window = len(theme_module.all_toplevels(app.root)) == windows_before
+        # 教学开着时拖动"标题栏"（正是用户"拖动框体不跟手"的场景）
         before = (app.root.winfo_x(), app.root.winfo_y())
-        # 注意：透明/分层窗口的 winfo_rootx() 不可靠（实测一直返回 0），
-        # 这里看教学自己记着的目标矩形 —— 金框就是按它摆的
-        spot_before = (tour.target_rect or (0,))[0]
-        # 拖动起点用**标题栏本身**：这正是用户"拖动框体不跟手"的场景。
-        # 压暗层现在会把标题栏那一条抠出来（不清空标题栏 = 标准的窗口拖动），
-        # 所以按在标题栏上应该直接落到主窗口上、拖动照常。
         header = getattr(app, "top_frame", None) or app.root
         header.event_generate("<ButtonPress-1>", x=30, y=8,
                               rootx=before[0] + 30, rooty=before[1] + 8)
@@ -540,28 +567,30 @@ def main() -> int:
         pump(app, 0.5)
         after = (app.root.winfo_x(), app.root.winfo_y())
         moved = abs(after[0] - before[0]) >= 20 or abs(after[1] - before[1]) >= 20
-        spot_after = (tour.target_rect or (0,))[0]
-        followed = tour.target_rect is not None and (
-            abs((spot_after - spot_before) - (after[0] - before[0])) <= 12)
+        # 鼠标挪了 (60, 20)，窗口就该正好挪 (60, 20) —— 多走 25% 就是"不跟手"的老毛病
+        exact = (abs((after[0] - before[0]) - 60) <= 1
+                 and abs((after[1] - before[1]) - 20) <= 1)
         tour.close()
         app._tour = None
-        snap = getattr(app, "_window_positions", None)
-        _ = snap
-        return moved, followed, before, after, spot_before, spot_after
+        return inside, no_new_window, ring_inside, moved, exact, before, after
 
-    moved, followed, before, after, spot_before, spot_after = \
+    inside, no_new_window, ring_inside, moved, exact, before, after = \
         tour_keeps_mouse_and_follows_drag()
-    check("新手教学开着时：窗口能正常拖动（压暗层不吃鼠标）",
+    check("新手教学全程只在主窗口内部（不摆浮窗、不抢鼠标、不新增窗口）",
+          inside and no_new_window and ring_inside,
+          "教学页在主窗口里=%s；高亮圈在主窗口里=%s；新增顶层窗口=%s"
+          % (inside, ring_inside, not no_new_window))
+    check("新手教学开着时：窗口能正常拖动",
           moved, "窗口 (%d,%d) → (%d,%d)" % (before + after))
-    check("新手教学开着时：金框跟着目标一起移动（拖窗口不会错位）",
-          followed, "金框 x %d → %d（窗口移动 %d）"
-          % (spot_before, spot_after, after[0] - before[0]))
+    check("新手教学开着时：拖动 1:1（鼠标挪 60,20，窗口就挪 60,20）",
+          exact, "窗口实际挪了 (%d,%d)" % (after[0] - before[0], after[1] - before[1]))
 
     # ------------- 教学不能把主线程的 DPI 感知改坏（用户实测：一开教学拖动就不跟手） ----
-    # 根因：金框要"鼠标穿透"，theme.make_click_through() 会临时把线程切成"按物理像素"
-    # 算坐标，收尾时却写死了 -1（不感知 DPI）。主线程一旦变成"不感知"，Windows 会把之后
-    # 所有窗口位置/尺寸按显示缩放虚拟化 —— 125% 缩放下 `geometry("+1000+400")` 真的把
-    # 窗口放到 (1250,500)、343×295 变成 429×369，拖动时窗口就跑得比鼠标快 25%。
+    # 根因（v3.0.34 的浮窗方案）：拿窗口句柄时会把线程临时切成"按物理像素"算坐标，
+    # 收尾却写死了 -1（不感知 DPI）。主线程一旦变成"不感知"，Windows 会把之后所有窗口
+    # 位置/尺寸按显示缩放虚拟化 —— 125% 缩放下 `geometry("+1000+400")` 真的把窗口放到
+    # (1250,500)、343×295 变成 429×369，拖动时窗口就跑得比鼠标快 25%。
+    # 现在浮窗没了、临时切 DPI 的逻辑也用完即还原，这条检查继续钉着（防止再犯）。
     def physical_rect(window, hwnd: int):
         """**在另一个线程里**按物理像素量窗口矩形（不动主线程的 DPI 上下文）。"""
         import ctypes

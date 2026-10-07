@@ -1,42 +1,33 @@
-"""新手教学（首次使用引导）：逐个功能指着界面讲"在哪儿、怎么设置"。
+"""新手教学（首次使用引导）：逐个功能说明"在哪儿、怎么设置、怎么用"。
 
-为什么做成这样（用户目标：程序初次使用时逐个说明功能）：
-  * **金框 + 说明卡片**：要讲的那个控件用金框圈出来，旁边一张卡片写"这是什么、怎么用"。
-    （早先还试过"目标以外压暗"的四块半透明窗：视觉更聚焦，但**会让主窗口拖动变得很卡**
-    —— 用户实测反馈"拖动起来延时很高不跟手"，而且 Tk 上"鼠标穿透"与"半透明渲染"
-    没法兼得，所以去掉了。）
-  * **一次只讲一件事**：每步一句话 + 上一步 / 下一步 / 完成，7 步讲完主要功能。
-  * **能代劳就代劳**：要讲设置页就先把设置页打开（设置 → 翻译 / 频道），
-    要讲互译就把互译窗口打开并圈出输入框，省得用户自己找。
-  * **首次使用自动走一遍**：同意使用须知后 2.5 秒出现；走完或点「跳过」都记进
-    `tour_done`，以后不再自动弹（右键菜单 / 设置→关于 里可随时重看）。
+**为什么改成"主窗口里翻一页"，不再用浮在主窗口上的小窗**（用户反馈"还是影响拖动，
+换一种方式呈现"）：
+  * 早先的做法是"金框（独立置顶窗）+ 说明卡片（另一个置顶窗）+ 目标以外压暗"，
+    好几个置顶窗压在屏幕上，用户拖窗口时鼠标会落到这些窗上 —— 拖动被抢、卡顿、
+    金框还会跟不上（拖动时不重摆就落后，重摆又卡）。试过"鼠标穿透"“拖动中不重摆"
+    等一堆补丁，都不干净：只要还有浮窗，就会跟拖动/置顶/合成器纠缠。
+  * 现在教学就是**主窗口内部的一页**：占住显示区，显示区先收起来，讲完原样还回去。
+    整页都在主窗口里，**没有任何浮窗、没有压暗层、不碰置顶、不碰鼠标**，
+    拖窗口、点按钮和平时完全一样。
+  * 要指着某个功能时，在**主窗口内部**给那个按钮套一圈金框（一个 Frame + place，
+    并且 `lower()` 到目标下面，只露出外面那一圈）—— 不吃鼠标，也不会有第二个窗口。
 
 三条纪律（界面自检里钉着）：
-  * **只画金框、不改设置**（为了指按钮临时展开的工具条，结束会还原）；
-  * **不联网、不写学习库**（互译窗口用 `auto_suggest=False` 打开）；
-  * 教学里打开的窗口、盖的半透明层，换步/结束/关程序时全部收掉。
+  * **只讲不改**：为了讲工具条按钮临时展开的工具条，结束会还原；改配置一个字都不行；
+  * **不联网、不写学习库**：教学自己从不调接口，需要联网的窗口一律由用户点按钮才开；
+  * 教学里由用户点开的窗口，换步/结束/关程序时全部收掉。
 """
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from tkinter import font as tkfont
 
 from . import theme
 
-SPOT_KEY = "#0b0c0e"        # 高亮框窗里当作"透明"的键色
-SPOT_LINE = "#ffcc4d"       # 高亮框颜色
-WRAP = 470                  # 说明文字的换行宽度
-LAMP_KEYS = ("F8 开始/停止监听", "F9 剪贴板中英互译", "F10 纠错", "F5 测试识别")
-
-
-def _widgets(widget, kinds):
-    """递归找出某一类控件（找"要指的那个控件"用）。"""
-    found = []
-    for child in widget.winfo_children():
-        if isinstance(child, kinds):
-            found.append(child)
-        found.extend(_widgets(child, kinds))
-    return found
+SPOT_LINE = "#ffcc4d"        # 高亮圈的颜色
+RING = 2                     # 高亮圈比目标大多少（每边）
+WRAP_MIN = 180               # 说明文字的最小换行宽度
 
 
 class GuidedTour:
@@ -46,63 +37,71 @@ class GuidedTour:
         self.app = app
         self.first_run = bool(first_run)
         self.index = 0
-        self.highlight = None
-        self.panel = None
-        self._opened = []
+        self.panel = None                 # 教学页（主窗口内部的一个 Frame）
         self._title = None
         self._text = None
         self._counter = None
         self._prev = None
         self._next = None
-        self.target_rect = None
-        self._target_widget = None
-        self._configure_bind = None
-        self._reposition_job = None
-        self._drag_binds = []
-        self._dragging = False
+        self._action_button = None
+        self._hidden = []                 # 为了教学让位的控件（显示区 / 滚动条）
+        self._ring = None                 # 给目标按钮套的那圈金框
+        self._ring_job = None
+        self._ring_bind = None
+        self._target = None
+        self._opened = []                 # 用户点开的窗口（换步/结束要一起收掉）
         self._toolbar_was_collapsed = None
+        self._last_action = None
+        self._raw_text = ""               # 当前这一步的原文（换行是自己算的）
+        self._text_job = None
+        family = str(getattr(app, "config", {}).get("font_family", "Microsoft YaHei"))
+        self._font = tkfont.Font(family=family, size=10)
 
     # ---------------------------------------------------------------- 步骤
     def _steps(self):
         app = self.app
         return [
-            dict(title="① 先框住游戏聊天框，再开监听",
-                 text="点工具栏的「⊞ 区域」，在游戏里拖一个框：**框住聊天框就行**，\n"
-                      "松手后会自动抓一帧给你确认框得准不准（不准就再框一次）。\n"
-                      "之后按 F8（或点左边的 ▶）开始 / 停止监听。",
-                 target=lambda: self._show_toolbar_and_find("区域")),
+            dict(title="① 先框住游戏里的聊天框",
+                 text="点顶部的「⊞区域」，到游戏里拖一个框、把聊天框圈进去"
+                      "（松手会自动抓一帧给你确认框得准不准）。\n"
+                      "之后按 F8，或点左边的「▶」开始 / 停止监听。",
+                 target=lambda: self._toolbar_button("区域"),
+                 action=("现在就框选", app.select_region)),
             dict(title="② 填翻译接口（第一次用必须做）",
                  text="「设置 → 翻译」里填上 DeepSeek 的 API Key，点「测试连接」通过就行。\n"
-                      "Key 只存在你自己电脑上（data\\config.json），作者那边看不到。\n"
-                      "嫌慢/嫌贵可以在同一页把「翻译模式」改成 fast，或者换别的模型。",
-                 target=lambda: self._open_settings("翻译", "deepseek_key")),
+                      "Key 只存在你自己电脑上（data\\config.json），作者那边看不到。",
+                 target=lambda: self._toolbar_button("设置"),
+                 action=("打开设置（翻译）", lambda: self._open_settings("翻译"))),
             dict(title="③ 颜色、字体、描边",
-                 text="「设置 → 频道」：每个频道一行 —— 名字、颜色（点「选色」）、显不显示、\n"
-                      "小灯里有没有它。频道名要和游戏里一致（英文客户端就写 Party / Guild / Tell）。\n"
-                      "「设置 → 外观」：字体、字号、粗细、底色、边框，右边有实时预览。",
-                 target=lambda: self._open_settings("频道", "channel_row")),
+                 text="「设置 → 频道」：每个频道一行 —— 名字、颜色、显不显示、小灯里有没有它。\n"
+                      "频道名要和游戏里一致（英文客户端就写 Party / Guild / Tell）。\n"
+                      "「设置 → 外观」：字体、字号、粗细、底色、边框，右边实时预览。",
+                 target=lambda: self._toolbar_button("设置"),
+                 action=("打开设置（频道）", lambda: self._open_settings("频道"))),
             dict(title="④ 翻错了就纠错（F10）",
-                 text="选中翻错的那一条 → 按 F10 → 把中文改成你要的 → 「保存并生效」。\n"
-                      "以后遇到同样的句子直接用它（不花接口钱）。\n"
-                      "只想改**一个词**：选中那个英文词和对应的中文，点「加进术语表」——\n"
-                      "所有含这个词的句子都会跟着变准。",
-                 target=lambda: app.text),
+                 text="在显示区选中翻错的那一条，按 F10（或点「✎纠错」），"
+                      "把中文改成你要的，再点「保存并生效」。\n"
+                      "以后遇到同样的句子直接用它，不花接口钱。\n"
+                      "只想改一个词：选中那个英文词和对应的中文，点「加进术语表」。",
+                 target=lambda: self._toolbar_button("纠错")),
             dict(title="⑤ 不想看谁说话：过滤他",
-                 text="对着他说的一句话点右键 →「过滤这个说话人」，以后他的话就不翻译、不显示了\n"
-                      "（想过滤自己也一样）。再点一次同一个菜单项就是取消。\n"
-                      "也可以到「设置 → 监控 → 过滤的说话人」里一次填好几个名字。",
-                 target=lambda: app.text),
+                 text="对着他说的那句话点右键，选「过滤这个说话人」，"
+                      "以后他的话就不翻译、不显示了（想过滤自己也一样）。\n"
+                      "也可以到「设置 → 监控」里的「过滤的说话人」一次填好几个名字。",
+                 target=None),
             dict(title="⑥ 中文 → 英文（跟队友交流）",
-                 text="按 F9 直接翻剪贴板里的中文；或者点「⇄ 互译」打开这个窗口：\n"
-                      "输入框里打中文 → 出英文（自动复制到剪贴板），游戏里粘贴就行。\n"
-                      "它还会按最近几句聊天给你几句「可以这么回」的中英对照。",
-                 target=lambda: self._open_cn2en()),
+                 text="按 F9 直接翻剪贴板里的中文；或者点「⇄ 互译」打开窗口：\n"
+                      "输入框里打中文就出英文（自动复制到剪贴板），游戏里 Ctrl+V 粘贴。\n"
+                      "它还会按最近的聊天，给你几句「可以这么回」的中英对照。",
+                 target=lambda: self._toolbar_button("互译"),
+                 action=("打开互译窗口", self._open_cn2en)),
             dict(title="⑦ 词典与学习：越用越准",
-                 text="「▤ 词典」里是你自己的术语表 —— 里面的词不会被模型乱翻；\n"
-                      "「✦ 学习」里能看纠错历史、把常出现的生词收进词典。\n"
-                      "程序自己也会学：你改过的句子、反复出现的高频说法都会自动记住，\n"
+                 text="「▤词典」里是你自己的术语表，里面的词不会被模型乱翻；\n"
+                      "「✦学习」里能看纠错历史、把常出现的生词收进词典。\n"
+                      "程序自己也会学：你改过的句子、反复出现的高频说法都会自动记住，"
                       "以后这些句子本地直接翻，不花接口钱。",
-                 target=lambda: self._show_toolbar_and_find("词典")),
+                 target=lambda: self._toolbar_button("词典"),
+                 action=("打开词典", app.open_dictionary)),
         ]
 
     # ---------------------------------------------------------------- 生命周期
@@ -113,137 +112,42 @@ class GuidedTour:
             return
         app.stop_demo()
         self.index = 0
-        # ④⑤ 两步要指着"某条消息"：窗口空着就先放两条示例（只画，不联网、不写学习库）
-        if not app.records:
-            app.insert_demo_lines(2)
-        app.set_status("新手教学：跟着圈出来的地方走一遍就会了（不会改你的任何设置）", "info")
-        # 窗口被拖动/缩放时，金框和说明卡片要跟着目标走（只挪位置、不重建窗口，
-        # 不然拖起来会卡）。用 after 去抖，别在拖动过程中疯狂重画。
-        try:
-            self._configure_bind = app.root.bind("<Configure>", self._on_root_configure,
-                                                 add="+")
-        except Exception:                          # noqa: BLE001
-            self._configure_bind = None
-        # 记下"用户正在拖窗口"：拖动过程中**不要**再去 lift 金框、也不重摆卡片
-        # （每次 lift 都会让窗口重新映射一次，拖动就变得很卡 —— 用户反馈"不跟手"）
-        for widget in (app.root, getattr(app, "top_frame", None), app.status_bar):
-            if widget is None:
-                continue
-            try:
-                press = widget.bind("<ButtonPress-1>", self._on_drag_start, add="+")
-                release = widget.bind("<ButtonRelease-1>", self._on_drag_end, add="+")
-                self._drag_binds.append((widget, press, release))
-            except Exception:                      # noqa: BLE001
-                continue
+        self._build_panel()
+        app.set_status("新手教学：跟着走一遍就会了（不改你的设置）", "info")
         self._show()
-
-    # ------------------------------------------------- 跟着窗口走（拖动/缩放时）
-    def _on_root_configure(self, _event=None) -> None:
-        """主窗口被拖动/缩放 → 稍后重新摆一次（去抖：拖动过程中不狂重画）。"""
-        if self.panel is None:
-            return
-        if self._dragging:
-            # 拖动期间**什么都不做**：一点点额外工作都会变成可见的顿挫
-            # （实测拖动中事件耗时从 2ms 跳到 28ms）。松手后 _on_drag_end 会统一对齐。
-            return
-        if self._reposition_job is not None:
-            try:
-                self.app.root.after_cancel(self._reposition_job)
-            except Exception:                      # noqa: BLE001
-                pass
-        try:
-            # 拖动中故意等久一点：连续拖动时就**完全不重摆**（重摆 8 个窗口要二三十毫秒，
-            # 那一下就会觉得"不跟手"）；停下来或者松手之后再对齐一次就够了。
-            self._reposition_job = self.app.root.after(80, self._reposition)
-        except Exception:                          # noqa: BLE001
-            self._reposition_job = None
-
-    def _reposition(self) -> None:
-        """只改几何、不重建窗口 —— 拖动时才跟得住（重建会闪、也会卡）。"""
-        self._reposition_job = None
-        rect = None
-        target = self._target_widget
-        if target is not None:
-            try:
-                target.update_idletasks()
-                width, height = target.winfo_width(), target.winfo_height()
-                if width > 1 and height > 1:
-                    rect = (target.winfo_rootx(), target.winfo_rooty(), width, height)
-            except Exception:                      # noqa: BLE001
-                rect = None
-        if rect is None:
-            rect = self.target_rect
-        if rect is None:
-            return
-        self.target_rect = rect
-        if self.highlight is not None:
-            x, y, width, height = rect
-            pad = 6
-            try:
-                if not self._dragging:
-                    self.highlight.lift()
-                self.highlight.geometry("%dx%d+%d+%d"
-                                        % (width + pad * 2, height + pad * 2,
-                                           x - pad, y - pad))
-            except Exception:                      # noqa: BLE001
-                pass
-        self._place_panel(rect)
-
-    def _on_drag_start(self, _event=None) -> None:
-        self._dragging = True
-
-    def _on_drag_end(self, _event=None) -> None:
-        """松手：拖动结束，重新对齐一次并把金框提回最前面。"""
-        self._dragging = False
-        self._reposition()
-        self._restack()
-
-    def _restack(self) -> None:
-        """把金框提到最前面（主窗口自己也是 topmost，不提就会被压在下面）。"""
-        if self.highlight is not None:
-            try:
-                self.highlight.lift()
-            except Exception:                      # noqa: BLE001
-                pass
-        # lift 会把无边框窗口的位置打回 (0,0)，所以紧接着重新摆一次
-        if self.target_rect is not None:
-            self._reposition()
 
     def close(self, finished: bool = False) -> None:
         # 自己要收掉时，把主窗口那份引用也清掉 —— 否则"走完自动关闭"之后，
         # 用户再点一次「新手教学」会变成"收掉一个已经关掉的窗口"，什么也不会发生。
         if getattr(self.app, "_tour", None) is self:
             self.app._tour = None
-        if self._reposition_job is not None:
+        self._cancel_ring_job()
+        if self._text_job is not None:
             try:
-                self.app.root.after_cancel(self._reposition_job)
+                self.app.root.after_cancel(self._text_job)
             except Exception:                      # noqa: BLE001
                 pass
-            self._reposition_job = None
-        if self._configure_bind is not None:
+            self._text_job = None
+        if self._ring_bind is not None:
             try:
-                self.app.root.unbind("<Configure>", self._configure_bind)
+                self.app.root.unbind("<Configure>", self._ring_bind)
             except Exception:                      # noqa: BLE001
                 pass
-            self._configure_bind = None
-        for widget, press, release in self._drag_binds:
-            for sequence, funcid in (("<ButtonPress-1>", press),
-                                     ("<ButtonRelease-1>", release)):
-                try:
-                    widget.unbind(sequence, funcid)
-                except Exception:                  # noqa: BLE001
-                    pass
-        self._drag_binds = []
-        self._dragging = False
+            self._ring_bind = None
+        self._clear_ring()
         self._restore_toolbar()
-        self._destroy_highlight()
         self._close_opened()
-        if self.panel is not None:
+        panel = self.panel
+        self.panel = None
+        if panel is not None:
             try:
-                self.panel.destroy()
+                panel.destroy()
             except Exception:                      # noqa: BLE001
                 pass
-            self.panel = None
+        self._restore_display()
+        self._title = self._text = self._counter = None
+        self._prev = self._next = self._action_button = None
+        self._target = None
         if self.first_run:                         # 走完 / 跳过都算"看过了"，不再自动弹
             self.app.config["tour_done"] = True
             try:
@@ -256,201 +160,183 @@ class GuidedTour:
             self.app.set_status("新手教学结束 —— 想再看一次：右键 →「新手教学」"
                                 "（或 设置 → 关于）", "ok")
 
+    # ---------------------------------------------------------------- 教学页
+    def _build_panel(self) -> None:
+        """把教学页搭在显示区的位置上（显示区先收起来，讲完原样还回去）。"""
+        app = self.app
+        parent = getattr(app, "card", None) or app.root
+        self._hide_display()
+        panel = tk.Frame(parent, bg=theme.PALETTE["surface"])
+        panel.pack(fill="both", expand=True, padx=1, pady=1)
+        self.panel = panel
+
+        # 排版分三段：说明在上、按钮贴底、中间留白（留白不归任何控件，窗口小也不会挤掉按钮）。
+        # pack 的 side="bottom" 是"越先 pack 越贴底"，所以先摆导航行、再摆动作行。
+        row = tk.Frame(panel, bg=theme.PALETTE["surface"])
+        row.pack(side="bottom", fill="x", padx=12, pady=(6, 10))
+        action_row = tk.Frame(panel, bg=theme.PALETTE["surface"])
+        action_row.pack(side="bottom", fill="x", padx=12, pady=(2, 0))
+        self._action_row = action_row
+        self._prev = ttk.Button(row, text="上一步", width=8, style="Compact.TButton",
+                                command=self._go_prev, state="disabled")
+        self._prev.pack(side="left")
+        self._next = ttk.Button(row, text="下一步", width=9, style="CompactAccent.TButton",
+                                command=self._go_next)
+        self._next.pack(side="left", padx=6)
+
+        head = tk.Frame(panel, bg=theme.PALETTE["surface"])
+        head.pack(fill="x", padx=12, pady=(10, 0))
+        tk.Label(head, text="新手教学", bg=theme.PALETTE["surface"],
+                 fg=theme.PALETTE["muted"], font=("Microsoft YaHei", 9)).pack(side="left")
+        self._counter = tk.Label(head, text="", bg=theme.PALETTE["surface"],
+                                 fg=theme.PALETTE["accent"],
+                                 font=("Microsoft YaHei", 9, "bold"))
+        self._counter.pack(side="right")
+
+        self._title = tk.Label(panel, text="", bg=theme.PALETTE["surface"],
+                               fg=theme.PALETTE["text"], justify="left", anchor="w",
+                               font=("Microsoft YaHei", 11, "bold"))
+        self._title.pack(fill="x", padx=12, pady=(4, 4))
+        # 说明文字**不加 expand**：只占它需要的高度，多余的空间留在它和按钮之间
+        # （加了 expand 就会在正文下面撑出一大块空白，群里截图很难看）。
+        # wraplength=0：换行不交给 Label 自己做 —— 它只在空格处断行，中文会被断得
+        # 坑坑洼洼（实测「点顶部的「⊞」后面就断了）。换行在 _render_text 里按像素算。
+        self._text = tk.Label(panel, text="", bg=theme.PALETTE["surface"],
+                              fg=theme.PALETTE["text"], justify="left", anchor="nw",
+                              wraplength=0, font=self._font)
+        self._text.pack(fill="x", padx=12)
+
+        # 窗口被拖动/缩放时，那圈金框要跟着目标走（只挪自己画的 Frame，很便宜）
+        try:
+            self._ring_bind = app.root.bind("<Configure>", self._on_configure, add="+")
+        except Exception:                          # noqa: BLE001
+            self._ring_bind = None
+        # 换行宽度跟着"文字自己拿到的宽度"走（窗口拉宽拉窄都要重排）
+        try:
+            self._text.bind("<Configure>", self._on_text_configure, add="+")
+        except Exception:                          # noqa: BLE001
+            pass
+
+    def _on_text_configure(self, event=None) -> None:
+        """文字控件宽度变了 → 过一会儿（去抖）重新排一次版。"""
+        if self._text_job is not None:
+            return
+        try:
+            self._text_job = self.app.root.after(60, self._render_text)
+        except Exception:                          # noqa: BLE001
+            self._text_job = None
+
+    def _render_text(self) -> None:
+        """按控件实际宽度把说明重排一遍（**自己按像素断行**，中文才断得整齐）。"""
+        self._text_job = None
+        if self.panel is None or self._text is None:
+            return
+        try:
+            width = max(WRAP_MIN, self._text.winfo_width() - 4)
+        except Exception:                          # noqa: BLE001
+            return
+        wrapped = self._wrap_by_pixels(self._raw_text, width)
+        try:
+            if self._text.cget("text") != wrapped:  # 一样就别再设，免得 Configure 打乒乓
+                self._text.configure(text=wrapped)
+        except Exception:                          # noqa: BLE001
+            pass
+
+    def _wrap_by_pixels(self, text: str, width: int) -> str:
+        """把一段文字按像素宽度断行：中文没有空格，交给 Label 的 wraplength 会断得很难看。"""
+        lines = []
+        for paragraph in str(text).split("\n"):
+            line = ""
+            for char in paragraph:
+                try:
+                    too_wide = line and self._font.measure(line + char) > width
+                except Exception:                  # noqa: BLE001
+                    too_wide = False
+                if too_wide:
+                    lines.append(line)
+                    line = char
+                else:
+                    line += char
+            lines.append(line)
+        return "\n".join(lines)
+
+    def _hide_display(self) -> None:
+        app = self.app
+        self._hidden = []
+        for widget in (getattr(app, "scrollbar", None), getattr(app, "text", None)):
+            if widget is None:
+                continue
+            try:
+                if widget.winfo_manager():
+                    widget.pack_forget()
+                    self._hidden.append(widget)
+            except Exception:                      # noqa: BLE001
+                continue
+
+    def _restore_display(self) -> None:
+        """把显示区按原来的顺序放回去（滚动条在右、正文在左撑满）。"""
+        app = self.app
+        for widget in self._hidden:
+            try:
+                if widget is getattr(app, "scrollbar", None):
+                    widget.pack(side="right", fill="y")
+                else:
+                    widget.pack(side="left", fill="both", expand=True, padx=1, pady=1)
+            except Exception:                      # noqa: BLE001
+                pass
+        self._hidden = []
+
     # ---------------------------------------------------------------- 每步渲染
     def _show(self) -> None:
         steps = self._steps()
         if self.index >= len(steps):
             self.close(finished=True)
             return
-        step = steps[self.index]
-        self._close_opened()                       # 上一步开的窗口先收掉，别越开越多
-        target = None
-        try:
-            target = step["target"]()
-        except Exception:                          # noqa: BLE001
-            target = None
         if self.panel is None:
-            self._build_panel()
+            return
+        step = steps[self.index]
+        self._close_opened()                       # 上一步打开的窗口先收掉，别越开越多
         self._title.configure(text=step["title"])
-        self._text.configure(text=step["text"])
+        self._raw_text = step["text"]
+        self._text.configure(text=self._raw_text)
         self._counter.configure(text="第 %d / %d 步" % (self.index + 1, len(steps)))
         self._next.configure(text="完成" if self.index >= len(steps) - 1 else "下一步")
         self._prev.configure(state="normal" if self.index else "disabled")
-        self._point_at(target)
+        self._show_action(step.get("action"))
+        self._point_at(step.get("target"))
+        self._render_text()                        # 立刻按当前宽度排一次版
 
-    def _point_at(self, target) -> None:
-        """给要讲的那个控件套一圈金框 + 把说明卡片摆到旁边。
-
-        早先版本还会把"目标以外"压暗（四块半透明黑窗），视觉上更聚焦，
-        但那几块盖在屏幕上的窗**会明显拖慢主窗口的拖动**（用户实测"拖动起来延时很高"），
-        而且 Tk 上"鼠标穿透"和"半透明渲染"没法兼得。现在**只留金框 + 说明卡片**，
-        指引一样清楚，拖动和平时一样跟手。
-        """
-        self._target_widget = target
-        rect = None
-        if target is not None:
-            try:
-                target.update_idletasks()
-                width, height = target.winfo_width(), target.winfo_height()
-                if width > 1 and height > 1:
-                    rect = (target.winfo_rootx(), target.winfo_rooty(), width, height)
-            except Exception:                      # noqa: BLE001
-                rect = None
-        if rect is None:                           # 目标这会儿没显示 → 就框住主窗口
-            try:
-                rect = (self.app.root.winfo_rootx(), self.app.root.winfo_rooty(),
-                        self.app.root.winfo_width(), self.app.root.winfo_height())
-            except Exception:                      # noqa: BLE001
-                rect = None
-        self.target_rect = rect
-        self._draw_highlight(rect)
-        self._place_panel(rect)
-        # 说明卡片要压在最上面：先 lift 再重新摆一次位置
-        # （无边框窗口 lift 之后位置会被系统打回 (0,0)，实测踩过）
-        if self.panel is not None:
-            try:
-                self.panel.lift()
-            except Exception:                      # noqa: BLE001
-                pass
-            self._place_panel(rect)
-            try:
-                self.panel.after(40, lambda r=rect: self._place_panel(r))
-            except Exception:                      # noqa: BLE001
-                pass
-        # 金框在"改样式 → 设位置"之后再兜一次：某些系统上仍会被打回 (0,0)
-        if self.highlight is not None:
-            try:
-                self.app.root.after(60, self._reposition)
-            except Exception:                      # noqa: BLE001
-                pass
-
-    def _draw_highlight(self, rect) -> None:
-        self._destroy_highlight()
-        if rect is None:
+    def _show_action(self, action) -> None:
+        for child in self._action_row.winfo_children():
+            child.destroy()
+        self._last_action = action
+        if not action:
             return
-        x, y, width, height = rect
-        pad = 6
-        try:
-            window = tk.Toplevel(self.app.root)
-            window.withdraw()
-            window.overrideredirect(True)
-            window.attributes("-topmost", True)
-            window.configure(bg=SPOT_KEY)
-            # 金框要"只显示、不吃鼠标"（它盖在目标上，不能挡住用户点那个按钮）；
-            # 内部抠透明也要在窗口还没显示的时候设好
-            theme.make_click_through(window)
-            try:
-                # 内部抠成透明，只留一圈金框（和"只透明背景"用的是同一个招）
-                window.attributes("-transparentcolor", SPOT_KEY)
-            except Exception:                      # noqa: BLE001
-                pass
-            canvas = tk.Canvas(window, bg=SPOT_KEY, highlightthickness=0)
-            canvas.pack(fill="both", expand=True)
-            canvas.create_rectangle(3, 3, width + pad * 2 - 3, height + pad * 2 - 3,
-                                    outline=SPOT_LINE, width=4)
-            window.geometry("%dx%d+%d+%d"
-                            % (width + pad * 2, height + pad * 2, x - pad, y - pad))
-            window.deiconify()
-            window.lift()
-            self.highlight = window
-        except Exception:                          # noqa: BLE001
-            self.highlight = None
+        label, command = action
+        self._action_button = ttk.Button(self._action_row, text="%s →" % label,
+                                         style="CompactAccent.TButton",
+                                         command=self._run_action)
+        self._action_button.pack(side="left")
+        _ = command
 
-    def _build_panel(self) -> None:
-        panel = tk.Toplevel(self.app.root)
-        panel.overrideredirect(True)
-        panel.attributes("-topmost", True)
-        theme.prepare_window(panel, self.app.config)
-        card = tk.Frame(panel, bg=theme.PALETTE["surface"], highlightthickness=2,
-                        highlightbackground=SPOT_LINE)
-        card.pack(fill="both", expand=True)
-
-        head = tk.Frame(card, bg=theme.PALETTE["surface"])
-        head.pack(fill="x", padx=14, pady=(12, 2))
-        tk.Label(head, text="新手教学", bg=theme.PALETTE["surface"],
-                 fg=theme.PALETTE["muted"], font=("Microsoft YaHei", 10)).pack(side="left")
-        self._counter = tk.Label(head, text="", bg=theme.PALETTE["surface"],
-                                 fg=theme.PALETTE["accent"],
-                                 font=("Microsoft YaHei", 10, "bold"))
-        self._counter.pack(side="right")
-
-        self._title = tk.Label(card, text="", bg=theme.PALETTE["surface"],
-                               fg=theme.PALETTE["text"], justify="left",
-                               anchor="w", font=("Microsoft YaHei", 13, "bold"))
-        self._title.pack(fill="x", padx=14, pady=(6, 6))
-        self._text = tk.Label(card, text="", bg=theme.PALETTE["surface"],
-                              fg=theme.PALETTE["text"], justify="left", anchor="w",
-                              wraplength=WRAP, font=("Microsoft YaHei", 11))
-        self._text.pack(fill="x", padx=14)
-
-        row = tk.Frame(card, bg=theme.PALETTE["surface"])
-        row.pack(fill="x", padx=14, pady=(14, 12))
-        self._prev = ttk.Button(row, text="上一步", width=8,
-                                command=self._go_prev, state="disabled")
-        self._prev.pack(side="left")
-        self._next = ttk.Button(row, text="下一步", width=10, style="Accent.TButton",
-                                command=self._go_next)
-        self._next.pack(side="left", padx=8)
-        skip_text = "跳过教学（以后不再自动弹）" if self.first_run else "结束"
-        ttk.Button(row, text=skip_text,
-                   command=lambda: self.close(finished=True)).pack(side="right")
-        self.panel = panel
-
-    def _place_panel(self, rect) -> None:
-        """说明卡片摆在目标旁边：优先右边，放不下换左边，绝不超出屏幕。"""
-        panel = self.panel
-        if panel is None:
+    def _run_action(self) -> None:
+        """用户自己点"打开 xx"才去开窗口 —— 教学自己绝不偷偷开。"""
+        action = self._last_action
+        if not action:
             return
         try:
-            panel.update_idletasks()
-            width = max(340, panel.winfo_reqwidth())
-            height = max(180, panel.winfo_reqheight())
-            screen_w = panel.winfo_screenwidth()
-            screen_h = panel.winfo_screenheight()
-            if rect:
-                x, y, target_w, _target_h = rect
-            else:
-                x, y, target_w = 200, 200, 0
-            px = x + target_w + 20
-            if px + width > screen_w - 8:
-                px = x - width - 20
-            px = max(8, min(px, screen_w - width - 8))
-            py = max(8, min(y, screen_h - height - 8))
-            panel.geometry("%dx%d+%d+%d" % (width, height, px, py))
-        except Exception:                          # noqa: BLE001
-            pass
+            result = action[1]()
+        except Exception as exc:                   # noqa: BLE001
+            self.app.set_status("打不开：%s" % exc, "warn")
+            return
+        if result is not None:
+            self._opened.append(result)
+        self.app.set_status("用完关掉那个窗口，回到主窗口点「下一步」继续", "info")
 
-    # ---------------------------------------------------------------- 动作
-    def _go_next(self) -> None:
-        self.index += 1
-        self._show()
-
-    def _go_prev(self) -> None:
-        self.index = max(0, self.index - 1)
-        self._show()
-
-    # ---------------------------------------------------------------- 打开目标
-    def _open_settings(self, title: str, highlight: str = ""):
-        """打开某个设置页；尽量返回"要指给用户看的那个控件"。"""
-        from .settings import SettingsDialog
-
-        dialog = SettingsDialog(self.app)
-        page = dialog.open_category(title)
-        self._opened.extend([dialog.window, page])
-        page.update_idletasks()
-        if highlight == "deepseek_key":
-            found = self._find_by_var(page, dialog.vars.get("deepseek_key"))
-            return found or page
-        if highlight == "channel_row":
-            rows = getattr(dialog, "channel_rows", None) or []
-            if rows:
-                return rows[0].get("frame") or page
-        return page
-
-    def _show_toolbar_and_find(self, label: str):
-        """要指工具栏按钮时先把收起的工具条展开 —— 不然指着一个看不见的按钮，
-        用户只会一脸问号（他的设置是"默认收起"）。教学结束时再还原回去。
-        """
+    # ------------------------------------------------- 指着某个控件（主窗口内部）
+    def _toolbar_button(self, label: str):
+        """要指工具条上的按钮时，先把收起的工具条展开 —— 不然指着一个看不见的按钮，
+        用户只会一脸问号（他的设置是"默认收起"）。教学结束时再还原回去。"""
         app = self.app
         if self._toolbar_was_collapsed is None:
             self._toolbar_was_collapsed = bool(app.config.get("toolbar_collapsed", True))
@@ -463,29 +349,91 @@ class GuidedTour:
                 pass
         return (getattr(app, "_action_buttons", None) or {}).get(label)
 
+    def _point_at(self, target) -> None:
+        self._target = target() if callable(target) else target
+        self._draw_ring()
+
+    def _draw_ring(self) -> None:
+        """给目标套一圈金框：一个 Frame，放在目标**下面**，只露出外面那一圈。
+
+        放在目标下面有两个好处：绝不抢鼠标（目标照常能点），也不用管置顶/合成器
+        （它就是主窗口里的一个普通控件）。窗口移动、缩放、展开工具条都会重画一次。
+        """
+        self._clear_ring()
+        widget = self._target
+        if widget is None or self.panel is None:
+            return
+        try:
+            if not widget.winfo_exists() or not widget.winfo_ismapped():
+                return
+            widget.update_idletasks()
+            width, height = widget.winfo_width(), widget.winfo_height()
+            if width <= 1 or height <= 1:
+                return
+            ring = tk.Frame(widget.master, bg=SPOT_LINE, bd=0, highlightthickness=0)
+            ring.place(x=widget.winfo_x() - RING, y=widget.winfo_y() - RING,
+                       width=width + RING * 2, height=height + RING * 2)
+            ring.lower(widget)                     # 压到目标下面：只留外面那一圈
+            self._ring = ring
+        except Exception:                          # noqa: BLE001
+            self._ring = None
+
+    def _clear_ring(self) -> None:
+        ring = self._ring
+        self._ring = None
+        if ring is not None:
+            try:
+                ring.destroy()
+            except Exception:                      # noqa: BLE001
+                pass
+
+    def _on_configure(self, _event=None) -> None:
+        """窗口在动/在变 → 过一会儿把金框重新对齐一次（去抖，拖动时不狂重画）。"""
+        if self.panel is None or self._ring_job is not None:
+            return
+        try:
+            self._ring_job = self.app.root.after(80, self._reposition_ring)
+        except Exception:                          # noqa: BLE001
+            self._ring_job = None
+
+    def _reposition_ring(self) -> None:
+        self._ring_job = None
+        if self.panel is not None:
+            self._draw_ring()
+
+    def _cancel_ring_job(self) -> None:
+        job = self._ring_job
+        self._ring_job = None
+        if job is not None:
+            try:
+                self.app.root.after_cancel(job)
+            except Exception:                      # noqa: BLE001
+                pass
+
+    # ---------------------------------------------------------------- 翻页
+    def _go_next(self) -> None:
+        self.index += 1
+        self._show()
+
+    def _go_prev(self) -> None:
+        self.index = max(0, self.index - 1)
+        self._show()
+
+    # ---------------------------------------------------------------- 打开目标
+    def _open_settings(self, title: str):
+        """打开某个设置页（只有用户点「打开设置」才会走到这里）。"""
+        from .settings import SettingsDialog
+
+        dialog = SettingsDialog(self.app)
+        dialog.open_category(title)
+        return dialog.window
+
     def _open_cn2en(self):
         from .cn2en import CnToEnDialog
 
         # auto_suggest=False：教学里不许偷偷调接口（推荐回复要靠接口生成）
         dialog = CnToEnDialog(self.app, auto_suggest=False)
-        self._opened.append(dialog.window)
-        dialog.window.update_idletasks()
-        return dialog.input
-
-    @staticmethod
-    def _find_by_var(root, record):
-        """按 textvariable 找到那个输入框（比如设置页里的 API Key 输入框）。"""
-        try:
-            wanted = str(record[1])
-        except Exception:                          # noqa: BLE001
-            return None
-        for widget in _widgets(root, (ttk.Entry, tk.Entry, ttk.Combobox, ttk.Spinbox)):
-            try:
-                if str(widget.cget("textvariable")) == wanted:
-                    return widget
-            except Exception:                      # noqa: BLE001
-                continue
-        return None
+        return dialog.window
 
     # ---------------------------------------------------------------- 收尾
     def _restore_toolbar(self) -> None:
@@ -499,14 +447,6 @@ class GuidedTour:
             self.app._apply_toolbar_collapsed(animate=False)
         except Exception:                          # noqa: BLE001
             pass
-
-    def _destroy_highlight(self) -> None:
-        if self.highlight is not None:
-            try:
-                self.highlight.destroy()
-            except Exception:                      # noqa: BLE001
-                pass
-            self.highlight = None
 
     def _close_opened(self) -> None:
         for window in self._opened:
