@@ -48,6 +48,23 @@ def test_band_includes_overlap():
     assert end > int(26 * 480 / 48)           # 终点也更靠下
 
 
+def test_band_rows_allows_scroll_starting_at_top():
+    """聊天框框得偏上时，日志一滚动就是从第 0 行开始变 —— 这种也要能只认变化的那几行。
+
+    旧版要求"变化起点 ≥ 第 6 行"，于是这种框法下每一次滚动都被判成整帧重来
+    （实测白花 3~4 倍时间，游戏也跟着卡）。
+    """
+    assert frame.band_rows_for(0, 13) == (0, 13)
+    assert frame.band_rows_for(2, 30) == (2, 30)
+    assert frame.band_rows_for(24, 47) == (24, 47)
+
+
+def test_band_rows_rejects_whole_frame_and_top_only():
+    assert frame.band_rows_for(0, 47) is None      # 整块都在变 → 老实整帧重来
+    assert frame.band_rows_for(0, 5) is None       # 只动了上半部分 → 不值得省
+    assert frame.band_rows_for(-1, -1) is None
+
+
 def test_keep_lines_above_drops_overlapping():
     lines = [(10.0, 30.0, "a"), (40.0, 60.0, "b"), (70.0, 90.0, "c")]
     kept = frame.keep_lines_above(lines, 50.0)

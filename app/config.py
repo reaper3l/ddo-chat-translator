@@ -144,7 +144,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "learn_min_count": 2,        # 同一句被修正多少次后写入长期规则
     "candidate_min_count": 3,    # 陌生词出现多少次后进入"待学习"列表
     # 高频短语挖掘（把反复出现的词组自动收进术语表，减少接口调用）
-    "phrase_auto_enabled": False,      # 默认关：术语影响所有句子，先让人扫一眼（窗口里有开关）
+    # 默认**开**：多数玩家不会去翻设置，学习这件事得自己跑起来才有用
+    # （收错了可以在词典窗口里删；想完全自己掌控就在那个窗口里关掉）
+    "phrase_auto_enabled": True,
     "phrase_auto_min_count": 5,        # 自动采纳的门槛：至少出现在这么多句不同的英文里
     "phrase_auto_last_at": 0,          # 上次自动挖掘的时间戳（避免频繁调用）
     "dedup_ttl_seconds": 90,

@@ -13,6 +13,15 @@ def test_filter_switch_is_on_by_default():
     assert DEFAULT_CONFIG["show_system"] is True
 
 
+def test_learning_runs_by_itself_by_default():
+    """多数玩家不会去翻设置：自动收高频词组默认就该是开的。
+
+    （这是唯一一个"默认替玩家做主"的学习开关：只收出现在 ≥N 句不同英文里的词组，
+    收错了能在词典里删，想自己掌控可以在词典窗口里关掉。）
+    """
+    assert DEFAULT_CONFIG["phrase_auto_enabled"] is True
+
+
 def test_boolean_switches_used_by_settings_exist():
     switches = (
         "show_system", "system_whitelist", "show_notes", "show_original",

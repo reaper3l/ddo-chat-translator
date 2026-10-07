@@ -9,7 +9,7 @@
 OCR 时间能降到原来的 1/4~1/5。
 """
 from __future__ import annotations
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 DEFAULT_GRID = 48
 
@@ -51,6 +51,26 @@ def band_pixels(band_rows: Tuple[int, int], height: int, grid: int = DEFAULT_GRI
     if end <= start:
         end = height
     return start, end
+
+
+def band_rows_for(first_row: int, last_row: int, max_rows: int = 30,
+                  bottom_min_row: int = 6) -> Optional[Tuple[int, int]]:
+    """决定"这一次只重新识别哪几行"；要整帧重来时返回 None。
+
+    * 变化范围超过 max_rows（基本整块都在变）→ 整帧重来，别硬省；
+    * 变化没触及中下部（bottom_min_row 以下）→ 整帧重来。聊天新内容总是出现在
+      日志下面，所以"只有上半部分变了"多半是背景闪动或面板文字，没必要为它
+      少认了什么；
+    * 变化的起点在第几行**不作要求**：聊天框框得偏上时，日志一滚动就是从第 0 行
+      开始变（旧版要求起点 ≥6，于是每次滚动都被判成整帧重来，白花 3~4 倍时间）。
+    """
+    if first_row < 0 or last_row < first_row:
+        return None
+    if (last_row - first_row + 1) > max(1, int(max_rows)):
+        return None
+    if last_row < int(bottom_min_row):
+        return None
+    return int(first_row), int(last_row)
 
 
 def keep_lines_above(lines: Sequence[Tuple[float, float, str]],

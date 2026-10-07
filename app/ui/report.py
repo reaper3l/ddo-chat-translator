@@ -80,10 +80,14 @@ class BugReportDialog:
             last_lines = [row[2] if isinstance(row, tuple) else row for row in last_lines]
         except Exception:
             last_lines = []
+        try:
+            pipeline_stats = dict(app.pipeline.status().get("stats") or {})
+        except Exception:
+            pipeline_stats = None
         return diagnose.build_report(
             problem=self.problem.get("1.0", "end"),
             config=app.config, records=records, last_lines=last_lines,
-            memory=app.memory)
+            memory=app.memory, pipeline_stats=pipeline_stats)
 
     def generate(self) -> None:
         report = self._report_text()

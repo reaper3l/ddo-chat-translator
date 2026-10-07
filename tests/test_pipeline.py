@@ -333,6 +333,65 @@ def test_running_flag_follows_start_and_stop():
     assert pipeline.running is False
 
 
+def test_changed_frame_is_read_from_a_band_without_a_second_screen_grab():
+    """监听时的抓屏次数：每帧只抓一次。
+
+    抓屏在这台机器上固定要等一个刷新周期（实测 ~16.6ms，抓 8×8 也一样），
+    所以"只识别变化的那几行"必须**从已经抓到的那一帧上裁**，不能为它再抓一次屏
+    —— 否则每条新消息都要多打扰一次桌面合成器，游戏就会卡。
+    """
+    from PIL import Image, ImageDraw
+
+    pipeline = make_pipeline(EchoEngine())
+    pipeline.config["region"] = [0, 0, 100, 300]      # 只作参数，_capture_frame 已被替换
+    pipeline.config["interval_ms"] = 300              # 让循环跑得快一点
+
+    def make_frame(mark):
+        # 变化发生在**最上面那一段**：这正是"聊天框框得偏上"的实况 ——
+        # 日志一滚动就是从第 0 行开始变。旧版要求起点 ≥ 第 6 行，于是这里会被
+        # 判成整帧重来；现在照样只认变化到的那一块。
+        # 画的是几根细线，不是一整块白色：真实聊天框背后是半透明的，程序先做
+        # "背景压平"再看差异，只有细笔画那样的相对明暗才表示"多了/少了字"。
+        image = Image.new("RGB", (100, 300), (0, 0, 0))
+        if mark:
+            draw = ImageDraw.Draw(image)
+            for top in (4, 20, 36, 52, 68, 84):
+                draw.rectangle([0, top, 99, top + 1], fill=(255, 255, 255))
+        return image
+
+    frames = [make_frame(False), make_frame(True)]
+    grabs = []
+
+    def fake_capture(region):
+        grabs.append(tuple(region))
+        if len(grabs) >= 2:
+            pipeline._stop.set()                       # 抓完第二帧就收工
+        return frames[min(len(grabs), len(frames)) - 1]
+
+    pipeline._capture_frame = fake_capture
+    seen = []
+
+    class FakeOcr:
+        @staticmethod
+        def available():
+            return True
+
+        @staticmethod
+        def recognize(image, scale=1.0):
+            seen.append(image.size)
+            box = [[0, 0], [60, 0], [60, 10], [0, 10]]
+            return [("(小队):[小队] Sckham: omw", box)]
+
+    pipeline.ocr = FakeOcr()
+    pipeline._capture_loop()
+
+    assert len(grabs) == 2, grabs                 # 两帧两次抓屏，没有"为条带再抓一次"
+    assert seen[0] == (100, 300)                  # 第一帧没有上一帧可比 → 整帧
+    assert seen[1][0] == 100 and seen[1][1] < 300  # 第二帧只认变化到的那一块
+    assert pipeline.stats["band_ocr"] == 1
+    assert pipeline.stats["full_ocr"] == 1
+
+
 def test_display_order_matches_game_order():
     """系统消息不用翻译会先就绪，但必须等它前面的玩家发言翻完再显示，
     否则窗口里的顺序和游戏聊天框对不上。"""

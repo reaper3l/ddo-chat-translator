@@ -75,6 +75,10 @@ class Pipeline:
     CACHE_TRIM_KEEP = 2500          # 超了就只留最新的这么多
     CACHE_PERSIST_ITEMS = 3000      # 落盘保留多少（下次启动还能直接命中）
 
+    # "只识别变化的那几条"的门槛：变化范围超过这么多格（共 48 格）就不再局部识别，
+    # 改成整帧重来。48 格 ≈ 半个屏幕高度，30 格已经是"基本整块都在变"了。
+    BAND_MAX_ROWS = 30
+
     # 面板特征：命中任意一条就认为不是聊天内容（数字+天/时、拾取次数、重置时间…）。
     # 这些是"面板长得什么样"，所以对错字有免疫力 —— 不管 OCR 把"宝箱"读成什么，
     # "被拾取次数 / 重置时间 / X天Y时" 这些结构都还在。
@@ -181,6 +185,7 @@ class Pipeline:
             "untranslated": 0,
             "skipped_frame": 0,
             "band_ocr": 0,
+            "full_ocr": 0,
         }
         self._load_cache()
 
@@ -487,25 +492,30 @@ class Pipeline:
             self.last_frame_image = image      # 留一张给"反馈问题"当证据（只有框选区域）
 
             # 默认只重新识别"变了的那几行"：上面没变的部分直接沿用上一帧的识别结果。
-            # 前提是变化发生在中下部、且不是整屏大改；每隔若干帧或变化太大时
-            # 做一次整帧识别来校准，避免滚动/淡出导致的偏差累积。
+            # 两条要说清楚的地方：
+            # * 条带图**直接从这一帧上裁**，不再为它多抓一次屏。无边框全屏的游戏上
+            #   每次抓屏都要等桌面合成器一个刷新周期（本机实测固定 ~16.6ms，
+            #   而且跟区域大小无关 —— 抓 8×8 也是 16.6ms），少抓一次就少卡一下；
+            #   裁出来的和画面对比用的是同一帧，也不会出现"两次抓到的画面不一样"。
+            # * 只要求"变化触及中下部"，**不再要求变化起点在第 6 行以下**。聊天框
+            #   框得偏上的时候（日志一滚动就是从第 0 行开始变），旧条件会把每一次
+            #   滚动都判成"整帧重来"，白白多花 3~4 倍时间。
+            rows = frame.band_rows_for(first_row, last_row,
+                                       max_rows=self.BAND_MAX_ROWS)
             use_band = bool(
                 self.config.get("band_ocr", True)
                 and self._last_lines
-                and first_row >= 6
-                and (last_row - first_row + 1) <= 30
+                and rows is not None
                 and self._frames_since_full < 20
             )
             band_image, offset = image, 0.0
             if use_band:
-                y_start, _y_end = frame.band_pixels((first_row, last_row), image.height)
-                offset = self._pixel_offset_to_tk(region, image, y_start)
-                band_region = [region[0], int(region[1] + offset), region[2], region[3]]
-                band = self._capture_frame(band_region)
-                if band is not None and band.height > 4:
-                    band_image = band
+                y_start, y_end = frame.band_pixels(rows, image.height)
+                band = image.crop((0, y_start, image.width, y_end))
+                if band.height > 4:
+                    band_image, offset = band, float(y_start)
                 else:
-                    use_band, offset = False, 0.0
+                    use_band = False
 
             items = self.ocr.recognize(band_image, scale)
             if self.config.get("merge_same_row", True):
@@ -518,6 +528,7 @@ class Pipeline:
             else:
                 all_lines = fresh_lines
                 self._frames_since_full = 0
+                self.stats["full_ocr"] = self.stats.get("full_ocr", 0) + 1
             self._last_lines = all_lines
             lines = [text for _top, _bottom, text in all_lines]
             self.stats["ocr_lines"] = len(lines)
@@ -526,17 +537,6 @@ class Pipeline:
 
             elapsed = time.time() - started
             self._stop.wait(max(0.2, interval - elapsed))
-
-    @staticmethod
-    def _pixel_offset_to_tk(region, image, y_pixels: float) -> float:
-        """把"截图像素里的 y 偏移"换算成 Tk 坐标偏移（两者可能因 DPI 差一个比例）。"""
-        try:
-            tk_height = float(region[3]) - float(region[1])
-            if image.height <= 0 or tk_height <= 0:
-                return float(y_pixels)
-            return float(y_pixels) * tk_height / float(image.height)
-        except Exception:
-            return float(y_pixels)
 
     def _calibrate_once(self) -> None:
         """启动时实测一次"截图空间 / Tk 空间"的比例，不一致就自动校正并提示。"""

@@ -56,7 +56,7 @@ def main() -> int:
 
     tk_screen = _tk_screen()
 
-    # 1) 截图
+    # 1) 截图：程序实际走的是"只抓指定区域"的快速方式（失败才回退 Pillow）
     samples = []
     image = None
     for _ in range(8):
@@ -66,8 +66,33 @@ def main() -> int:
         if image is None:
             print("截图失败：区域是否在屏幕范围内？")
             return 1
-    print("\n截图：%dx%d，平均 %.1f ms" % (image.width, image.height,
-                                          sum(samples) / len(samples)))
+    fast_samples = []
+    fast_image = None
+    for _ in range(8):
+        started = time.perf_counter()
+        fast_image = capture.grab_fast(region, tk_screen)
+        fast_samples.append((time.perf_counter() - started) * 1000.0)
+    print("\n截图：%dx%d" % (image.width, image.height))
+    if fast_image is not None:
+        print("　只抓区域（程序默认走这条）：平均 %.1f ms"
+              % (sum(fast_samples) / len(fast_samples)))
+    print("　Pillow 兜底（先抓整屏再裁剪）：平均 %.1f ms"
+          % (sum(samples) / len(samples)))
+
+    # 1b) 抓屏的"固定开销"：抓一小块和抓一大块花的时间差不多，说明慢的不是
+    #     拷像素，而是在等桌面合成器（游戏是无边框全屏时画面由它合成）。
+    #     结论很实用：**少抓一次屏**比"抓小一点"有用得多 —— 程序里"只识别变化
+    #     的那几行"就是从已经抓到的那一帧上裁，不再为它多抓一次。
+    tiny = [region[0], region[1], region[0] + 8, region[1] + 8]
+    tiny_samples = []
+    for _ in range(8):
+        started = time.perf_counter()
+        capture.grab_fast(tiny, tk_screen)
+        tiny_samples.append((time.perf_counter() - started) * 1000.0)
+    tiny_ms = sum(tiny_samples) / len(tiny_samples)
+    print("抓屏固定开销：抓 8×8 那么大也要 %.1f ms（和抓整块差不多）——" % tiny_ms)
+    print("　　　　　　　慢的是「等桌面合成器」，不是拷像素；所以程序只在必要时抓屏，")
+    print("　　　　　　　而且「只识别变化的那几行」是从已抓到的那一帧上裁，不再多抓一次。")
 
     # 2) 变化检测（每帧都要做的廉价步骤）
     signature = capture.frame_signature(image)
@@ -113,7 +138,9 @@ def main() -> int:
     print("按当前截图间隔 %.1f 秒算，最坏情况（每帧都在变）约占单核 %.0f%%。"
           % (interval, min(full_ms, band_ms) / (interval * 1000) * 100))
     print("实际聊天框多数时间是静止的 → 被「变化检测」跳过，几乎不花 CPU。")
-    print("如果游戏仍卡：把 OCR 线程数调到 1，或把局部识别关掉、放大倍数调成 1，再跑一次对比。")
+    print("如果游戏仍卡：先试「设置 → 监控」把截图间隔调成 1500~2000（每次抓屏都要")
+    print("　　　　　　等合成器一个刷新周期，间隔大了打扰就少），再试 OCR 线程数调成 1。")
+    print("注：「只识别变化的那几行」是**从已经抓到的那一帧上裁**的，不会再抓一次屏。")
     return 0
 
 

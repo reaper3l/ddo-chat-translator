@@ -109,6 +109,7 @@ def _environment(app_dir: Optional[Path] = None) -> str:
 
 def build_report(problem: str = "", config: Optional[dict] = None,
                  records=None, last_lines=None, memory=None,
+                 pipeline_stats=None,
                  app_dir: Optional[Path] = None,
                  log_path: Optional[Path] = None) -> str:
     """生成报告文本（已脱敏）。"""
@@ -125,6 +126,18 @@ def build_report(problem: str = "", config: Optional[dict] = None,
     lines_text = "\n".join(str(line) for line in (last_lines or []))
     sections.append(("最近一次识别到的原始行（OCR 结果，排查识别问题用）",
                      scrub(lines_text or "（还没有识别过）", secrets, home)))
+    if pipeline_stats:
+        # 监听时的实际开销分布：整帧 vs 只认变化的那几行、跳过了多少帧。
+        # 玩家报"游戏卡"时，看这几个数就知道程序有没有在做多余的事。
+        try:
+            stats = dict(pipeline_stats)
+            sections.append(("监听性能计数", json.dumps(
+                {key: stats.get(key, 0) for key in
+                 ("frames", "skipped_frame", "band_ocr", "full_ocr",
+                  "ocr_lines", "api_calls", "batched", "filtered")},
+                ensure_ascii=False)))
+        except Exception as exc:
+            sections.append(("监听性能计数", "读取失败：%s" % exc))
     if memory is not None:
         try:
             stats = dict(getattr(memory, "stats", {}) or {})
