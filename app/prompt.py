@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 # 常用缩写/俚语速查（写进 prompt，模型对没进术语表的缩写也能翻对）
 SLANG_TABLE = """\
@@ -254,7 +254,48 @@ def build_messages(system_prompt: str,
     return messages
 
 
+BATCH_RULE = ("【这次要翻 %d 行】每行开头的 [1] [2] … 是行号："
+              "输出必须**原样带回行号和方括号**，一行对一行、顺序不变，"
+              "不要合并、不要漏行、不要写任何解释：")
+
+
+def build_batch_messages(system_prompt: str,
+                         context: Sequence[Tuple[str, str]],
+                         system_events: Sequence[str],
+                         texts: Sequence[str]) -> List[Dict[str, str]]:
+    """一屏里同时来了好几条新消息 → **一次请求**翻完（省接口调用次数）。
+
+    格式卡死（每条带回 [行号]），因为调用方要靠它对回原来的消息：对不上就逐条重试，
+    宁可多花一次调用，也绝不把译文串行错位。玩家聊天里有大量"一屏同时来两三条"
+    的情况（尤其是打本的时候），这一下就能把调用次数降到 1/N。
+    """
+    messages = build_messages(system_prompt, context, system_events, "")
+    body = "\n".join("[%d] %s" % (index, str(text))
+                     for index, text in enumerate(texts or [], 1))
+    messages[-1]["content"] = BATCH_RULE % len(texts or []) + "\n" + body
+    return messages
+
+
+def parse_batch_reply(text: str, count: int) -> List[Optional[str]]:
+    """把「[1] 译文」解析成按行号的列表；缺的行给 None（调用方逐条重试）。
+
+    容错：方括号可有可无（模型偶尔写成 "1. 译文"），只要行首是行号就认。
+    """
+    out: List[Optional[str]] = [None] * max(0, int(count))
+    for raw in (text or "").splitlines():
+        match = re.match(r"^\s*[\[\【]?\s*(\d{1,2})\s*[\]\】]?\s*[.、:：)）]?\s*(.+)$",
+                         raw)
+        if not match:
+            continue
+        index = int(match.group(1)) - 1
+        body = match.group(2).strip()
+        if 0 <= index < len(out) and body and out[index] is None:
+            out[index] = body
+    return out
+
+
 def summarize_for_log(messages: Sequence[Dict[str, str]], limit: int = 120) -> str:
+    """给日志用的一行摘要（超长截断）。"""
     parts = []
     for message in messages:
         content = re.sub(r"\s+", " ", message.get("content", ""))

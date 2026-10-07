@@ -284,6 +284,10 @@ class SettingsDialog:
                   text="quality=完整术语提示词 + 上下文（推荐）；fast=短提示词，更快更省"
                   ).pack(anchor="w", pady=(0, 6))
         self._spin(tab, "context_turns", "上下文条数（0=不带上下文）", 0, 10)
+        self._check(tab, "batch_translate",
+                    "一次请求翻多条新消息（一屏同时来 3 条只算 1 次调用；"
+                    "模型没按格式回来自动逐条重试）")
+        self._spin(tab, "batch_max", "一批最多带几条", 2, 6)
         self._spin(tab, "timeout_seconds", "单次请求超时（秒）", 5, 60)
 
     def _build_monitor_tab(self, notebook) -> None:

@@ -53,6 +53,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 这个窗口的翻译方向：auto=按内容自动判断；zh2en=强制翻成英文；en2zh=强制翻成中文
     "cn2en_direction": "auto",
     "context_turns": 5,          # 送给模型的上文条数
+    # 一次请求翻多条新消息（一屏同时来 3 条只算 1 次调用；批量结果解析不回来会自动逐条重试）
+    "batch_translate": True,
+    "batch_max": 3,              # 一批最多带几条（别太大：一条出错影响面就大）
     "timeout_seconds": 20,
     "max_queue": 30,
     # 界面

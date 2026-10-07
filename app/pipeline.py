@@ -26,7 +26,8 @@ from .engines import BaseEngine, OfflineEngine, create_engine
 from .glossary import Glossary
 from .ocr import OcrEngine, group_rows, rows_to_lines as ocr_rows_to_lines
 from .parser import KIND_CHAT, KIND_SYSTEM, ChatParser
-from .prompt import build_messages, build_system_prompt
+from .prompt import (build_batch_messages, build_messages, build_system_prompt,
+                     parse_batch_reply)
 
 
 @dataclass
@@ -173,6 +174,7 @@ class Pipeline:
             "cache_hits": 0,
             "dict_hits": 0,
             "api_calls": 0,
+            "batched": 0,          # 通过"一次翻多条"翻掉的条数（省下来的调用）
             "api_errors": 0,
             "dropped": 0,
             "filtered": 0,
@@ -802,17 +804,31 @@ class Pipeline:
                 job = self._jobs.get(timeout=0.3)
             except queue.Empty:
                 continue
+            batch = [job] + self._drain_jobs()
             try:
-                item = self._process(job)
+                items = self._process_batch(batch)
             except Exception as exc:                     # 兜底：绝不让线程死掉
-                item = DisplayItem(job.seq, job.kind, job.channel, job.speaker,
-                                   job.source, job.source, error="内部错误：%s" % exc,
-                                   prefix=job.prefix)
-            self._pending_display[item.seq] = item
+                items = [DisplayItem(j.seq, j.kind, j.channel, j.speaker,
+                                     j.source, j.source,
+                                     error="内部错误：%s" % exc, prefix=j.prefix)
+                         for j in batch]
+            for item in items:
+                self._pending_display[item.seq] = item
             self._flush_display()
         # 收尾：把还没发出去的按顺序发完
         self._collect_ready()
         self._flush_display(force=True)
+
+    def _drain_jobs(self) -> List[Job]:
+        """把队列里已经排好的活儿再取几条，凑成一批一起翻（最多 batch_max-1 条）。"""
+        limit = max(1, int(self.config.get("batch_max", 3) or 3)) - 1
+        out: List[Job] = []
+        while len(out) < limit:
+            try:
+                out.append(self._jobs.get_nowait())
+            except queue.Empty:
+                break
+        return out
 
     def _collect_ready(self) -> None:
         """把系统消息（不需要翻译）收进待显示表。"""
@@ -859,19 +875,64 @@ class Pipeline:
                 return
 
     def _process(self, job: Job) -> DisplayItem:
+        """翻一条（自检和"批量关掉"时走这条路）。"""
+        ready, pending = self._prepare(job)
+        if ready is not None:
+            return ready
+        if "raw" in pending:                   # 本地就能出的（词典直译 / 缓存）
+            return self._finish(pending, pending["raw"], note=pending["note"],
+                                cache=False)
+        return self._translate_one(pending)
+
+    def _process_batch(self, jobs: List[Job]) -> List[DisplayItem]:
+        """一屏里同时来的几条新消息：能一次问完就一次问完（省接口调用次数）。
+
+        只有"确实要调接口"的那几条才进这一批：本地就能出结果的（记忆 / 词典直译 /
+        缓存 / 非英文）照旧走本地。批量解析不回来（行号对不上、行数不对）时，
+        那几条**逐条重试** —— 宁可多一次调用，也绝不把译文串行错位。
+        """
+        items: List[DisplayItem] = []
+        prepared: List[dict] = []
+        for job in jobs:
+            ready, pending = self._prepare(job)
+            if ready is not None:
+                items.append(ready)
+            elif "raw" in pending:             # 本地就能出的，不进批量
+                items.append(self._finish(pending, pending["raw"],
+                                          note=pending["note"], cache=False))
+            else:
+                prepared.append(pending)
+        enabled = (bool(self.config.get("batch_translate", True))
+                   and not isinstance(self.engine, OfflineEngine))
+        if not enabled or len(prepared) < 2:
+            items.extend(self._translate_one(pending) for pending in prepared)
+            return sorted(items, key=lambda item: item.seq)
+        for pending, result in zip(prepared, self._translate_many(prepared)):
+            text, ok, error = result
+            if ok:
+                items.append(self._finish(pending, text))
+            else:
+                items.append(self._translate_one(pending))
+        return sorted(items, key=lambda item: item.seq)
+
+    def _prepare(self, job: Job):
+        """先走本地能出结果的路径；都不行才返回"要调接口"的待办。
+
+        返回 (可以直接显示的 DisplayItem, 待办 dict)，两者必有其一为 None。
+        """
         source = job.source
 
         # 0) 原文本来就不是英文（玩家说中文）→ 直接显示
         if not textutil.has_latin(source):
-            return DisplayItem(job.seq, job.kind, job.channel, job.speaker,
-                               source, source, note="原文非英文", prefix=job.prefix)
+            return DisplayItem(job.seq, job.kind, job.channel, job.speaker, source,
+                               source, note="原文非英文", prefix=job.prefix), None
 
         # 1) 句子记忆：你纠正过的句子，直接给结果，不花 API
         remembered = self.memory.phrase(source)
         if remembered:
             self.stats["memory_hits"] += 1
-            return DisplayItem(job.seq, job.kind, job.channel, job.speaker,
-                               source, remembered, note="记忆命中", prefix=job.prefix)
+            return DisplayItem(job.seq, job.kind, job.channel, job.speaker, source,
+                               remembered, note="记忆命中", prefix=job.prefix), None
 
         # 2) 先保护 URL，再做术语保护
         #    顺序不能反：反了的话链接里的 store/fire 这类词会被术语表替换掉，
@@ -879,59 +940,106 @@ class Pipeline:
         protected, urls = textutil.protect_urls(source)
         masked, mapping, unknown = self.glossary.protect(protected)
 
-        note = ""
-        error = ""
-        translated = ""
-
         # 3) 整句都被术语表覆盖 → 不用调 API
         if not textutil.has_latin_outside_marks(masked):
-            translated = textutil.restore_urls(masked, urls)
             self.stats["dict_hits"] += 1
-            note = "词典直译"
-        else:
-            cache_key = self._cache_key(masked)
-            cached = self._cache.get(cache_key)
-            if isinstance(cached, dict) and cached.get("zh"):
-                translated = str(cached["zh"])
-                self.stats["cache_hits"] += 1
-                note = "缓存"
+            return None, {"job": job, "source": source, "masked": masked,
+                          "mapping": mapping, "urls": urls, "unknown": unknown,
+                          "cache_key": "", "raw": masked, "note": "词典直译"}
+
+        cache_key = self._cache_key(masked)
+        cached = self._cache.get(cache_key)
+        if isinstance(cached, dict) and cached.get("zh"):
+            self.stats["cache_hits"] += 1
+            return None, {"job": job, "source": source, "masked": masked,
+                          "mapping": mapping, "urls": urls, "unknown": unknown,
+                          "cache_key": cache_key, "raw": str(cached["zh"]),
+                          "note": "缓存"}
+
+        return None, {"job": job, "source": source, "masked": masked,
+                      "mapping": mapping, "urls": urls, "unknown": unknown,
+                      "cache_key": cache_key}
+
+    def _messages_for(self, pending: dict) -> List[Dict[str, str]]:
+        """单条翻译用的 messages（模式/上下文/系统提示都在这里取）。"""
+        mode = str(self.config.get("translate_mode", "quality"))
+        context_turns = max(0, int(self.config.get("context_turns", 5)))
+        context = tuple(self._history)
+        context = context[-context_turns * 2:] if context_turns else ()
+        return build_messages(build_system_prompt(mode, self.memory), context,
+                              tuple(self._system_events), pending["masked"])
+
+    def _translate_one(self, pending: dict) -> DisplayItem:
+        """调一次接口翻这一条。"""
+        timeout = float(self.config.get("timeout_seconds", 20))
+        result = self.engine.translate(pending["masked"], self._messages_for(pending),
+                                       timeout=timeout)
+        offline = isinstance(self.engine, OfflineEngine)
+        if not offline:
+            self.stats["api_calls"] += 1
+        ok = bool(getattr(result, "ok", False))
+        error = "" if ok else (getattr(result, "error", "") or "翻译失败")
+        if not ok and not offline:
+            self.stats["api_errors"] += 1
+        return self._finish(pending, str(getattr(result, "text", "") or ""),
+                            ok=ok, error=error, note="离线" if offline else "")
+
+    def _translate_many(self, prepared: List[dict]) -> List[tuple]:
+        """**一次请求翻多条**；返回与 prepared 等长的 (译文, 是否成功, 错误)。
+
+        任何一条解析不出来就给那条 ok=False，由调用方逐条重试。
+        """
+        mode = str(self.config.get("translate_mode", "quality"))
+        context_turns = max(0, int(self.config.get("context_turns", 5)))
+        context = tuple(self._history)
+        context = context[-context_turns * 2:] if context_turns else ()
+        texts = [pending["masked"] for pending in prepared]
+        messages = build_batch_messages(build_system_prompt(mode, self.memory), context,
+                                        tuple(self._system_events), texts)
+        timeout = float(self.config.get("timeout_seconds", 20))
+        result = self.engine.translate(
+            "\n".join("[%d] %s" % (index, text)
+                      for index, text in enumerate(texts, 1)), messages,
+            timeout=timeout)
+        self.stats["api_calls"] += 1
+        if not getattr(result, "ok", False):
+            self.stats["api_errors"] += 1
+            reason = getattr(result, "error", "") or "翻译失败"
+            return [(text, False, reason) for text in texts]
+        parts = parse_batch_reply(str(getattr(result, "text", "") or ""), len(texts))
+        out = []
+        for text, piece in zip(texts, parts):
+            if piece:
+                out.append((piece, True, ""))
             else:
-                mode = str(self.config.get("translate_mode", "quality"))
-                context_turns = max(0, int(self.config.get("context_turns", 5)))
-                context = tuple(self._history)
-                context = context[-context_turns * 2:] if context_turns else ()
-                messages = build_messages(build_system_prompt(mode, self.memory),
-                                          context, tuple(self._system_events), masked)
-                timeout = float(self.config.get("timeout_seconds", 20))
+                out.append((text, False, "批量结果里缺这一行"))
+        self.stats["batched"] += sum(1 for _t, ok, _e in out if ok)
+        return out
 
-                result = self.engine.translate(masked, messages, timeout=timeout)
-                if isinstance(self.engine, OfflineEngine):
-                    note = "离线"
-                else:
-                    self.stats["api_calls"] += 1
-                if not result.ok:
-                    self.stats["api_errors"] += 1
-                    error = result.error or "翻译失败"
-                translated = result.text or source
-                if not error:
-                    self._cache[cache_key] = {"src": source, "zh": translated}
-                    self._cache_dirty = True
-                    if len(self._cache) > self.CACHE_MAX_ITEMS:
-                        self._cache = dict(
-                            list(self._cache.items())[-self.CACHE_TRIM_KEEP:])
-
-        translated = textutil.restore_urls(translated, urls)
-        translated = self.glossary.restore(translated, mapping)
+    def _finish(self, pending: dict, translated: str, ok: bool = True,
+                error: str = "", note: str = "", cache: bool = True) -> DisplayItem:
+        """把模型给的结果还原成要显示的那一条（缓存、历史、学习都在这里）。"""
+        job = pending["job"]
+        source = pending["source"]
+        raw = translated or ""
+        translated = textutil.restore_urls(raw, pending["urls"])
+        translated = self.glossary.restore(translated, pending["mapping"])
         translated = self._post_process(translated)
         if not translated:
             translated = source
         # 模型偶尔把"看不清/无法识别"这种说明当成译文回给我们（原文太乱时）。
         # 这时显示原文更有用 —— 至少知道玩家屏幕上打的是什么。
-        if not error and textutil.is_refusal(translated) and textutil.has_latin(source):
+        if ok and textutil.is_refusal(translated) and textutil.has_latin(source):
             translated = source
             note = "模型没看懂（显示原文）"
 
-        if not error:
+        if ok:
+            if cache and pending.get("cache_key"):
+                self._cache[pending["cache_key"]] = {"src": source, "zh": raw}
+                self._cache_dirty = True
+                if len(self._cache) > self.CACHE_MAX_ITEMS:
+                    self._cache = dict(
+                        list(self._cache.items())[-self.CACHE_TRIM_KEEP:])
             self._history.append((source, translated))
             # 带说话人的记录只留给"推荐回复"用（翻译提示词那条 history 结构别动）
             try:
@@ -944,13 +1052,13 @@ class Pipeline:
                 self.stats["untranslated"] += 1
                 note = note or "未翻译"
 
-        if unknown:
+        if pending["unknown"]:
             problem = bool(error) or (
                 not textutil.has_cjk(translated) and textutil.has_latin(translated))
-            self.memory.observe(unknown, source, problem=problem)
+            self.memory.observe(pending["unknown"], source, problem=problem)
 
-        return DisplayItem(job.seq, job.kind, job.channel, job.speaker,
-                           source, translated, note=note, error=error, prefix=job.prefix)
+        return DisplayItem(job.seq, job.kind, job.channel, job.speaker, source,
+                           translated, note=note, error=error, prefix=job.prefix)
 
     @staticmethod
     def _post_process(translated: str) -> str:

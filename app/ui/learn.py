@@ -290,9 +290,10 @@ class LearningCenterDialog:
         summary = self.memory.summary()
         stats = self.memory.data.get("stats", {})
         self.stats_label.config(text="  ".join("%s %d" % kv for kv in summary.items())
-                                + "   |   累计翻译 %d 条，记忆命中 %d 次，接口调用 %d 次"
+                                + "   |   累计翻译 %d 条，记忆命中 %d 次，"
+                                  "接口调用 %d 次（其中 %d 条靠一次翻多条省下来）"
                                 % (stats.get("translated", 0), stats.get("memory_hits", 0),
-                                   stats.get("api_calls", 0)))
+                                   stats.get("api_calls", 0), stats.get("batched", 0)))
 
     # ------------------------------------------------------------ 待学习词
     def _selected_candidate(self):

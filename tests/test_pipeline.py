@@ -64,6 +64,41 @@ class RefusalEngine(BaseEngine):
         return TranslationResult("（看不清楚）", True, self.name)
 
 
+class BatchEngine(BaseEngine):
+    """会按「[n] 译文」一次回多条的引擎（用来验证"一次请求翻多条"）。
+
+    `broken=True` 时对批量请求故意回一句不带行号的话 —— 模拟模型不守格式，
+    这时管线应该**逐条重试**，而不是把译文串行错位。
+    """
+
+    name = "batch"
+
+    def __init__(self, broken: bool = False) -> None:
+        self.calls = 0
+        self.batch_sizes = []
+        self.broken = broken
+
+    def available(self) -> bool:
+        return True
+
+    def describe(self) -> str:
+        return "batch"
+
+    def translate(self, text, messages=None, timeout: float = 20.0):
+        self.calls += 1
+        lines = [line for line in str(text or "").splitlines() if line.strip()]
+        self.batch_sizes.append(len(lines))
+        if len(lines) == 1:                      # 逐条翻译：直接回译文
+            body = lines[0].split("] ", 1)[-1]
+            return TranslationResult("中:" + body, True, self.name)
+        if self.broken:                          # 批量：故意不守格式
+            return TranslationResult("抱歉，我一次只能翻一条。", True, self.name)
+        return TranslationResult(
+            "\n".join("[%d] 中:%s" % (index, line.split("] ", 1)[-1])
+                      for index, line in enumerate(lines, 1)),
+            True, self.name)
+
+
 def make_pipeline(engine) -> Pipeline:
     config = dict(DEFAULT_CONFIG)
     config["engine"] = "offline"
@@ -193,6 +228,72 @@ def test_cache_survives_glossary_change():
     item = pipeline._process(pipeline._jobs.get_nowait())
     assert engine.calls == 1, "加了无关的词不该让缓存失效"
     assert item.note == "缓存"
+
+
+def _three_lines():
+    return ["(常规)Alice: one two three",
+            "(常规)Bob: four five six",
+            "(常规)Carol: seven eight nine"]
+
+
+def test_batch_translate_uses_one_call_for_several_lines():
+    """一屏同时来三条新消息 → 只调一次接口（省调用次数）。"""
+    engine = BatchEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(_three_lines())
+    assert pipeline._jobs.qsize() == 3
+    pipeline._stop.set()                 # 让翻译线程把队列干完就退出
+    pipeline._translate_loop()
+    shown = _drain_display(pipeline)
+    assert engine.calls == 1, engine.batch_sizes
+    assert engine.batch_sizes == [3]
+    assert [item.source for item in shown] == [
+        "one two three", "four five six", "seven eight nine"]
+    assert all("中：" in item.translated or "中:" in item.translated for item in shown)
+    assert pipeline.stats["batched"] == 3
+
+
+def test_batch_translate_falls_back_to_one_by_one_when_reply_is_broken():
+    """模型不守格式（不带行号）→ 逐条重试，绝不把译文串行错位。"""
+    engine = BatchEngine(broken=True)
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(_three_lines())
+    pipeline._stop.set()
+    pipeline._translate_loop()
+    shown = _drain_display(pipeline)
+    assert [item.source for item in shown] == [
+        "one two three", "four five six", "seven eight nine"]
+    # 1 次批量（失败）+ 3 次逐条重试
+    assert engine.calls == 4, engine.batch_sizes
+    assert pipeline.stats["batched"] == 0
+
+
+def test_batch_translate_can_be_turned_off():
+    engine = BatchEngine()
+    pipeline = make_pipeline(engine)
+    pipeline.config["batch_translate"] = False
+    pipeline._handle_lines(_three_lines())
+    pipeline._stop.set()
+    pipeline._translate_loop()
+    _drain_display(pipeline)
+    assert engine.calls == 3, engine.batch_sizes
+
+
+def test_batch_only_includes_lines_that_need_the_api():
+    """一屏里"词典直译"的和要调接口的混在一起时，只有后者进批量。"""
+    engine = BatchEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(["(常规)Alice: need heals",      # 术语全覆盖 → 本地出
+                            "(常规)Bob: one two three",
+                            "(常规)Carol: four five six"])
+    pipeline._stop.set()
+    pipeline._translate_loop()
+    shown = _drain_display(pipeline)
+    assert engine.calls == 1 and engine.batch_sizes == [2]
+    notes = {item.source: item.note for item in shown}
+    assert notes["need heals"] == "词典直译"
+    assert [item.source for item in shown] == [
+        "need heals", "one two three", "four five six"]
 
 
 def test_system_events_reach_model_context():
