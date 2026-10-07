@@ -18,6 +18,7 @@ Tk 用 overrideredirect(True) 去掉标题栏后，系统提供的拖动和缩�
 from __future__ import annotations
 
 import logging
+import sys
 import time
 import tkinter as tk
 from tkinter import ttk
@@ -51,6 +52,7 @@ class FramelessWindow:
         # 拖动期间"暂停后台事情"的回调（主窗口用它暂停抓屏，见 main_window）
         self.on_drag_state = on_drag_state
         self._watch = None           # 拖动性能自测（见 _watch_start/_watch_note）
+        self._moved_native = False    # 这次拖动有没有走"Win32 直接挪"那条路
 
     # ------------------------------------------------------------------ 开关
     def set_enabled(self, enabled: bool) -> None:
@@ -198,7 +200,8 @@ class FramelessWindow:
         x, y, width, height = self._geometry
         try:
             if self._mode == "move":
-                self.window.geometry("+%d+%d" % (x + dx, y + dy))
+                if not self._move_native(x + dx, y + dy):
+                    self.window.geometry("+%d+%d" % (x + dx, y + dy))
                 return
             new_x, new_y, new_w, new_h = x, y, width, height
             if "e" in self._edge:
@@ -215,12 +218,84 @@ class FramelessWindow:
         except Exception:
             pass
 
+    # ------------------------------------------------------- 拖动时怎么挪窗口
+    def _hwnd(self):
+        """窗口的顶层句柄（分层/无边框窗口的 winfo_id 是里面那层，要解析到顶层）。"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            user32.GetAncestor.restype = wintypes.HWND
+            user32.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
+            hwnd = wintypes.HWND(int(self.window.winfo_id()))
+            return int(user32.GetAncestor(hwnd, 2) or hwnd)
+        except Exception:                          # noqa: BLE001
+            return 0
+
+    def _move_native(self, x: int, y: int) -> bool:
+        """直接用 Win32 挪窗口，绕开 Tk 的 wm 记账。
+
+        为什么要这么做：普通窗口拖动是 **Windows 自己**在搬（系统的移动回路，程序再忙
+        也跟手）；无边框窗口只能自己搬。自己搬的时候走 `wm geometry` 要过 Tcl 一大堆
+        记账（字符串、几何计算、窗口管理器状态），在串流/游戏把机器占满时就会被放大成
+        "不跟手"。这里只发**一次 SetWindowPos**（实测每次移动 1.0ms → 0.53ms，
+        "窗口落后光标"从 4~6 像素变成 0 像素）。
+        故意**不带 SWP_NOREDRAW**：带上能再快 0.1ms，但"拖动期间不重画"有画花的风险，
+        不值得（两种都实测过，跟手度一样是 0 像素落后）。
+        失败就返回 False，调用方回退到原来的 `wm geometry` 路径。
+        """
+        if sys.platform != "win32":
+            return False
+        hwnd = self._hwnd()
+        if not hwnd:
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                            ctypes.c_int, ctypes.c_int,
+                                            ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+            user32.SetWindowPos.restype = ctypes.c_int
+            swp_nozorder, swp_nosize = 0x0004, 0x0001
+            swp_noactivate = 0x0010
+            ok = user32.SetWindowPos(wintypes.HWND(hwnd), None, int(x), int(y), 0, 0,
+                                     swp_nozorder | swp_nosize | swp_noactivate)
+            if ok:
+                self._moved_native = True
+            return bool(ok)
+        except Exception:                          # noqa: BLE001
+            return False
+
+    def _sync_after_native_move(self) -> None:
+        """拖动结束：把 Tk 的位置记账对齐到真实位置，并补一次重画。"""
+        if not getattr(self, "_moved_native", False):
+            return
+        self._moved_native = False
+        rect = None
+        try:
+            from .theme import window_rect
+
+            rect = window_rect(self.window)
+        except Exception:                          # noqa: BLE001
+            rect = None
+        try:
+            if rect:
+                self.window.geometry("+%d+%d" % (rect[0], rect[1]))
+            self.window.update_idletasks()
+            self.window.after_idle(self.window.update_idletasks)
+        except Exception:                          # noqa: BLE001
+            pass
+
     def _on_release(self, _event=None) -> None:
         was_dragging = bool(self._mode)
         self._mode = ""
         self._edge = ""
         if was_dragging:
             self._notify_drag(False)
+            self._sync_after_native_move()
         self._watch_finish()
 
     # ---------------------------------------------------------- 拖动性能自测
