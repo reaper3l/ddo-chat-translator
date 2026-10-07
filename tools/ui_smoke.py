@@ -1170,6 +1170,44 @@ def main() -> int:
 
     step("词典：新增/覆盖会弹出自己的输入框（不再像卡死）", dictionary_add_term_dialog)
 
+    def correction_word_level():
+        """纠错窗口：英文原文可改；「只改一个词」存成术语，对所有句子生效。"""
+        from app.ui.learn import CorrectionDialog
+
+        term, zh = "smokeword", "烟测词"
+        dialog = CorrectionDialog(app, "need heals for shroud", "需要治疗 for 幽影堡")
+        try:
+            dialog.window.update_idletasks()
+            if str(dialog.source_box.cget("state")) == "disabled":
+                raise AssertionError("英文原文框还是只读的（用户反馈：改不了）")
+            # 在原文里选中那个词、在译文里选中对应的中文，然后点「加进术语表」
+            dialog.source_box.delete("1.0", "end")
+            dialog.source_box.insert("1.0", "need %s for shroud" % term)
+            dialog.source_box.tag_add("sel", "1.5", "1.5+%dc" % len(term))
+            dialog.edit.delete("1.0", "end")
+            dialog.edit.insert("1.0", "需要治疗 %s" % zh)
+            dialog.edit.tag_add("sel", "1.5", "1.5+%dc" % len(zh))
+            dialog.add_term()
+            saved = {item.get("text", "") for item in app.memory.term_list()}
+            if term not in saved:
+                raise AssertionError("「加进术语表」没把词存进学习库：%s" % sorted(saved))
+            # 单个常用英文词会被术语表跳过 → 必须给提示，不能默默存进去
+            dialog.term_en.set("the")
+            dialog.term_zh.set("这")
+            dialog.add_term()
+            if any(item.get("text", "") == "the" for item in app.memory.term_list()):
+                raise AssertionError("普通英文词 the 不该被存成术语")
+        finally:
+            if app.memory.delete_term(term):
+                app.memory.flush(force=True)
+            app.rebuild_glossary()
+            try:
+                dialog.window.destroy()
+            except Exception:
+                pass
+
+    step("纠错窗口：原文可改 + 只改一个词（存成术语）", correction_word_level)
+
     def bug_report_bundle():
         """「反馈问题」生成的压缩包：要有报告，而且**绝不能带出 API Key**。"""
         import zipfile

@@ -1120,8 +1120,12 @@ class MainWindow:
                 messagebox.showinfo("提示", "还没有可纠正的翻译")
                 return
             record = self.records[-1]
+        # 选中的那段中文顺手带进"只想改一个词"的中文框：用户通常就是在窗口里
+        # 圈出翻错的那个词再按 F10 的
+        picked = selection if selection and selection != record["translated"] else ""
         CorrectionDialog(self, record["source"], record["translated"],
-                         on_saved=lambda after, result: self._apply_correction(record, after))
+                         on_saved=lambda after, result: self._apply_correction(record, after),
+                         prefill_zh=picked)
 
     def _apply_correction(self, record, after: str) -> None:
         old = record.get("translated") or ""

@@ -29,6 +29,21 @@ def test_repeated_correction_becomes_stable():
     assert stable and stable[0]["zh"] == "干得漂亮"
 
 
+def test_corrected_source_is_kept_and_matching_stays_on_the_original():
+    """用户把英文原文改对了（OCR 读错时）：改动记进历史，但记忆仍按原句匹配。
+
+    为什么：下次 OCR 读成同样的错样子时，只有"原句"这个 key 才能命中。
+    """
+    store = _store()
+    store.learn_correction("eliteright?", "精英对?", "精英难度对吧？",
+                           fixed_source="elite right?")
+    record = store.data["corrections"][-1]
+    assert record["fixed_source"] == "elite right?"
+    assert record["source"] == "eliteright?"
+    # 记忆的 key 还是原来读到的那句 → 下次同样的 OCR 结果能直接命中
+    assert store.phrase("eliteright?") == "精英难度对吧？"
+
+
 def test_candidates_and_ignore():
     store = _store()
     for _ in range(3):

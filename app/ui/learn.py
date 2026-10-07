@@ -19,14 +19,24 @@ from . import theme
 
 
 class CorrectionDialog:
-    """修正一条翻译。"""
+    """修正一条翻译。
 
-    def __init__(self, app, source: str, translated: str, on_saved=None) -> None:
+    两种改法都在这个窗口里：
+    * **整句**：② 里改成正确的中文（原来的用法）；
+    * **一个词**：在 ① 里选中英文词、在 ② 里选中对应的中文，点「加进术语表」——
+      这条会立刻对以后**所有**出现这个词的句子生效（比整句记忆更通用）。
+    ① 的英文原文也可以直接改（OCR 读错时用）；记忆虽然按"这次读到的原句"匹配，
+    但改过的英文会一起记进纠错历史，方便回头核对。
+    """
+
+    def __init__(self, app, source: str, translated: str, on_saved=None,
+                 prefill_zh: str = "") -> None:
         self.app = app
         self.source = source
         self.before = translated
         self.on_saved = on_saved
         self.memory = app.memory
+        self.prefill_zh = (prefill_zh or "").strip()
 
         self.window = tk.Toplevel(app.root)
         self.window.title("纠正这条翻译")
@@ -38,13 +48,12 @@ class CorrectionDialog:
         self._build()
 
     def _build(self) -> None:
-        theme.label(self.window, "① 玩家原话（英文，参考用）", muted=True,
+        theme.label(self.window, "① 玩家原话（英文）—— OCR 读错时可以直接改", muted=True,
                     anchor="w").pack(
             fill="x", padx=12, pady=(10, 2))
-        source_box = theme.text_widget(self.window, height=3, wrap="word")
-        source_box.pack(fill="x", padx=12)
-        source_box.insert("1.0", self.source)
-        source_box.configure(state="disabled")
+        self.source_box = theme.text_widget(self.window, height=3, wrap="word")
+        self.source_box.pack(fill="x", padx=12)
+        self.source_box.insert("1.0", self.source)
 
         theme.label(self.window, "② 改成正确的中文", anchor="w").pack(
             fill="x", padx=12, pady=(10, 2))
@@ -57,6 +66,25 @@ class CorrectionDialog:
         theme.set_dialog_input(self.window, self.edit)
         self.edit.focus_set()
         self.edit.bind("<Control-Return>", self._save)
+
+        # ---- 只想改这句话里的一个词？那就把它存成术语（对所有句子生效） ----
+        term_box = ttk.LabelFrame(self.window, text="只想改一个词？（比整句记忆更通用）")
+        term_box.pack(fill="x", padx=12, pady=(8, 0))
+        term_row = ttk.Frame(term_box)
+        term_row.pack(fill="x", padx=8, pady=6)
+        theme.label(term_row, "英文词:", muted=True).pack(side="left")
+        self.term_en = tk.StringVar()
+        ttk.Entry(term_row, textvariable=self.term_en, width=18).pack(side="left", padx=4)
+        theme.label(term_row, "中文:", muted=True).pack(side="left")
+        self.term_zh = tk.StringVar(value=self.prefill_zh)
+        ttk.Entry(term_row, textvariable=self.term_zh, width=18).pack(side="left", padx=4)
+        ttk.Button(term_row, text="加进术语表",
+                   command=self.add_term).pack(side="left", padx=6)
+        theme.label(term_box,
+                    "做法：在上面的原文里选中那个英文词、在译文里选中对应的中文，"
+                    "然后点「加进术语表」（不想选就直接在框里填）。",
+                    muted=True, wraplength=560, justify="left").pack(
+            anchor="w", padx=8, pady=(0, 6))
 
         self.remember = tk.BooleanVar(value=True)
         ttk.Checkbutton(self.window,
@@ -86,19 +114,64 @@ class CorrectionDialog:
         if not after:
             messagebox.showwarning("提示", "译文不能是空的")
             return "break"
+        # 原文被改过就一起记下来（记忆仍按原句匹配，改过的英文作为历史参考）
+        current_source = self.source_box.get("1.0", "end").strip() or self.source
+        fixed = current_source if current_source != self.source else ""
         min_count = int(self.app.config.get("learn_min_count", 2))
         result = self.memory.learn_correction(self.source, self.before, after,
-                                              min_count=min_count)
+                                              min_count=min_count, fixed_source=fixed)
         self.app.memory.flush(force=True)
         self.app.pipeline.invalidate_cache()
         if self.on_saved:
             self.on_saved(after, result)
         message = "已记住" if self.remember.get() else "已记录"
+        if fixed:
+            message += "（原文的改动也记下了）"
         if result.get("stable"):
             message += "（这句改过 %d 次，也会写进提示词）" % result["count"]
         self.app.set_status(message, "ok")
         self.window.destroy()
         return "break"
+
+    @staticmethod
+    def _selected(box) -> str:
+        """取文本框里当前选中的内容（没选中就返回空）。"""
+        try:
+            return box.get("sel.first", "sel.last").strip()
+        except tk.TclError:
+            return ""
+
+    def add_term(self) -> None:
+        """把"选中的/填写的"那个词存进术语表 —— 对所有句子立刻生效。"""
+        from .. import replay
+
+        term = self.term_en.get().strip() or self._selected(self.source_box)
+        zh = self.term_zh.get().strip() or self._selected(self.edit)
+        if not term or not zh:
+            messagebox.showinfo(
+                "还差一点",
+                "先选好「要改的词」：\n"
+                "· 在上面的英文原文里选中那个词（或者直接填左边那个框）；\n"
+                "· 在译文里选中对应的中文（或者直接填右边那个框）。",
+                parent=self.window)
+            return
+        if not replay.client_usable(term, zh):
+            messagebox.showwarning(
+                "这个词术语表不会采用",
+                "「%s = %s」——\n"
+                "术语表会跳过这类条目：单个常用英文词（the/you/in…）、"
+                "太短的缩写，或者中文那边没写汉字。\n"
+                "（跳过是故意的：不然整句话会被逐词直译。）\n\n"
+                "如果只是这一句不对，请用上面 ② 的整句纠错。" % (term, zh),
+                parent=self.window)
+            return
+        self.memory.set_term(term, zh, source="user")
+        self.memory.flush(force=True)
+        self.app.rebuild_glossary()
+        self.term_en.set("")
+        self.term_zh.set("")
+        self.app.set_status("已加进术语表：%s = %s（以后所有出现它的句子都用这个译法）"
+                            % (term, zh), "ok")
 
 
 class LearningCenterDialog:

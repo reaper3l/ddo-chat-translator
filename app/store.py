@@ -113,8 +113,13 @@ class MemoryStore:
         self.mark_dirty()
 
     def learn_correction(self, source: str, before: str, after: str,
-                         min_count: int = 2) -> dict:
-        """记录一次人工纠正，返回这次学习的结果说明。"""
+                         min_count: int = 2, fixed_source: str = "") -> dict:
+        """记录一次人工纠正，返回这次学习的结果说明。
+
+        `fixed_source`：用户在纠错窗口里把**英文原文**改对了（OCR 读错时用）。
+        注意记忆的 key 仍然是**原来读到的那句**（`source`）——
+        下次 OCR 读成同样的样子才命中；改过的英文只作为历史记录留着参考。
+        """
         fp = textutil.fingerprint(source)
         previous = self._phrases.get(fp, {})
         count = int(previous.get("count", 0)) + 1
@@ -136,6 +141,7 @@ class MemoryStore:
             "source": source,
             "before": before,
             "after": after,
+            "fixed_source": str(fixed_source or "").strip(),
         })
         if len(corrections) > MAX_CORRECTIONS:
             del corrections[:-MAX_CORRECTIONS]
