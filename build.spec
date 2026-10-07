@@ -14,7 +14,10 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for package in ("rapidocr_onnxruntime", "onnxruntime", "PIL", "numpy"):
+# dxcam / comtypes 是「DXGI 抓屏」那条路用的（可选：装不上或打不开会自动退回 GDI，
+# 但发布包里带上它，用户开箱就是最快的那条路）。
+for package in ("rapidocr_onnxruntime", "onnxruntime", "PIL", "numpy",
+                "dxcam", "comtypes"):
     collected = collect_all(package)
     datas += collected[0]
     binaries += collected[1]

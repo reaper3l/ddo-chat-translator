@@ -536,6 +536,56 @@ def main() -> int:
 
     step("主题生效 + 工具栏点开收起", theme_and_toolbar_click)
 
+    def demo_playback():
+        """「演示一下」：往显示区放一段示例聊天，用来给新用户看 / 录宣传素材。
+
+        必须做到三件事（做错了会很坑）：**不联网**（一次接口都不调）、
+        **不写学习库**、演示完把临时打开的"显示备注"还原回去。
+        """
+        import time as _time
+
+        original_notes = bool(app.config.get("show_notes", False))
+        terms_before = len(app.memory.term_list())
+        phrases_before = len(app.memory.data.get("phrases") or {})
+        cache_before = len(app.pipeline._cache)
+        app.clear_display()
+        app.play_demo()
+        if app.config.get("show_notes") is not True:
+            raise AssertionError("演示时没打开「显示备注」（词典直译/缓存这些正是要展示的）")
+        # 演示是定时逐条放的：等它放完（最多 30 秒，正常十几秒）
+        deadline = _time.time() + 30
+        while _time.time() < deadline and getattr(app, "_demo_timer", None):
+            pump(1)
+        if getattr(app, "_demo_timer", None):
+            raise AssertionError("演示一直没结束")
+        shown = app.text.get("1.0", "end")
+        # 注意：显示前会过一遍 textutil.normalize（中文标点会变半角），
+        # 所以这里挑不带标点的词来判定
+        if "谢谢大家" not in shown or "马上到" not in shown or "眼魔巢穴" not in shown:
+            raise AssertionError("演示内容没画到显示区：%r" % shown[-200:])
+        if len(app.records) < 10:
+            raise AssertionError("演示的消息条数太少：%d" % len(app.records))
+        if app.config.get("show_notes") is not original_notes:
+            raise AssertionError("演示结束后「显示备注」没还原回去")
+        if len(app.memory.term_list()) != terms_before \
+                or len(app.memory.data.get("phrases") or {}) != phrases_before:
+            raise AssertionError("演示把内容写进学习库了（不该学演示数据）")
+        if len(app.pipeline._cache) != cache_before:
+            raise AssertionError("演示动到翻译缓存了（演示不该走管线）")
+        # 演示中间按 F8 / 点监听 → 演示要停下来，别和真实聊天混在一起
+        app.play_demo()
+        pump(2)
+        if not getattr(app, "_demo_timer", None):
+            raise AssertionError("第二次演示没跑起来")
+        app.stop_demo()
+        if getattr(app, "_demo_timer", None):
+            raise AssertionError("stop_demo() 没把演示停掉")
+        if app.config.get("show_notes") is not original_notes:
+            raise AssertionError("停止演示后「显示备注」没还原回去")
+        app.clear_display()
+
+    step("演示一下：只画到显示区（不联网、不写学习库、做完还原设置）", demo_playback)
+
     def channel_strip():
         """收起工具条后那块留白：一排频道小灯，点一下就能开关频道。"""
         from app import channels as channels_module

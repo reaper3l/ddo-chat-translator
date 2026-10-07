@@ -6,3 +6,7 @@ numpy>=1.21            # RapidOCR 需要
 requests>=2.25         # 调用翻译接口
 rapidocr_onnxruntime>=1.3   # 离线 OCR（自带 PP-OCRv5 模型）
 onnxruntime>=1.16      # OCR 推理引擎
+
+# 抓屏走 DXGI 桌面复制（比 GDI 快一个数量级：实测 0.45ms vs 6.4ms）。
+# **可选**：不装也能用（会自动回退到 GDI → 系统截图），装了才走这条路。
+dxcam>=0.3.0           # DXGI 桌面复制；依赖 comtypes（会自动装上）

@@ -95,3 +95,25 @@ def test_new_line_still_counts_as_changed_after_normalising():
     before = capture.frame_signature(_chat_shot())
     after = capture.frame_signature(_chat_shot(brightness_shift=40, extra_line=True))
     assert capture.frames_differ(before, after) is True
+
+
+def test_box_on_screen_detects_the_region_that_fell_off_the_display():
+    """换过显示器/分辨率之后，老的框选区域可能跑到屏幕外面。
+
+    这时候抓屏不会报错、给回的是黑图 —— 程序看着在跑却什么都认不出来
+    （用户只会觉得"突然不好使了"）。所以要能提前判出来、让他重新框选。
+    """
+    desktop = (0, 0, 1920, 1080)
+    assert capture.box_on_screen([3, 600, 591, 908], desktop) is True
+    assert capture.box_on_screen([0, 0, 1920, 1080], desktop) is True   # 正好铺满
+    assert capture.box_on_screen([3, 1050, 591, 1358], desktop) is False  # 下边超出
+    assert capture.box_on_screen([-40, 600, 300, 908], desktop) is False  # 左边超出
+    assert capture.box_on_screen([1800, 600, 2000, 908], desktop) is False
+    assert capture.box_on_screen([300, 600, 300, 908], desktop) is False  # 空框
+    # 查不到桌面范围时不拦（别误伤：宁可不提示，也不要拦着正常使用）
+    original = capture.virtual_screen_rect
+    capture.virtual_screen_rect = lambda: None
+    try:
+        assert capture.box_on_screen([3, 600, 591, 908]) is True
+    finally:
+        capture.virtual_screen_rect = original

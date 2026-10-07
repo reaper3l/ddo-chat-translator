@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import threading
 from typing import Optional, Sequence
 
 
@@ -50,6 +51,44 @@ def capture_space() -> Optional[tuple]:
     except Exception:
         pass
     return None
+
+
+def virtual_screen_rect() -> Optional[tuple]:
+    """整个虚拟桌面的范围 (左, 上, 右, 下)。多显示器时它是所有屏幕的并集。"""
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        left = int(user32.GetSystemMetrics(76))        # SM_XVIRTUALSCREEN
+        top = int(user32.GetSystemMetrics(77))         # SM_YVIRTUALSCREEN
+        width = int(user32.GetSystemMetrics(78))       # SM_CXVIRTUALSCREEN
+        height = int(user32.GetSystemMetrics(79))      # SM_CYVIRTUALSCREEN
+        if width > 0 and height > 0:
+            return left, top, left + width, top + height
+    except Exception:
+        pass
+    return None
+
+
+def box_on_screen(box, rect: Optional[Sequence[int]] = None) -> bool:
+    """这个像素框是不是**完整**落在（虚拟）桌面里。
+
+    为什么要查这个：换过显示器或改过分辨率之后，老的框选区域会有一部分跑到屏幕
+    外面。这时候 GDI 抓屏**不会报错**，而是给回一块黑图 —— 程序看着在跑，其实
+    什么也认不出来（用户只会觉得"突然不好使了"）。宁可直接告诉他重新框选。
+    """
+    try:
+        left, top, right, bottom = (int(value) for value in box)
+    except Exception:
+        return False
+    area = rect or virtual_screen_rect()
+    if not area:
+        return True                    # 查不到桌面范围就不拦（别误伤）
+    area_left, area_top, area_right, area_bottom = (int(value) for value in area)
+    if right <= left or bottom <= top:
+        return False
+    return (left >= area_left and top >= area_top
+            and right <= area_right and bottom <= area_bottom)
 
 
 _CALIBRATION = {"tk": None, "scale": (1.0, 1.0), "capture": None}
@@ -308,6 +347,77 @@ def grab_fast(region, tk_screen: Optional[Sequence[int]] = None):
     if image.size != expected:
         return None
     return image
+
+
+# --------------------------------------------------------------------------
+# DXGI 桌面复制（可选，装了 dxcam 才走这条）
+# 为什么值得单独做一条：GDI 抓屏每次都要"等桌面合成器一个刷新周期"，本机实测
+#   60Hz 屏 16.6ms、144Hz 屏 6.4ms，**跟区域大小无关**（抓 8×8 也一样慢）；
+#   DXGI 直接从合成器拿已经做好的那一帧，实测同一块区域 **0.45ms（中位）**，
+#   而且"桌面没变"时它连拷贝都不做（0.06ms）—— 监听时绝大多数帧都是这种。
+#
+# 两个实测出来的注意点：
+# 1. **永远不要调 camera.release()**：dxcam 0.3.0 + comtypes 会重复释放 COM 接口，
+#    实测报 "OSError: access violation ... in __del__"。不 release、只让引用自然
+#    消失/进程退出，就没有这条错误（实测退出码 0）。
+# 2. dxcam 自己按「设备+显示器」缓存实例（同一个进程里再 create 会返回原来那个，
+#    并往 stderr 打一行提示），内部是多线程加锁的。所以这里也按线程记一下，
+#    换线程（开始/停止监听会换线程）时只 create 一次，不每帧都去碰它。
+#
+# 没装 dxcam、打不开（独占全屏 / 别的软件占着这块屏）、或抓到的画面和系统截图
+# 对不上，都会自动退回原来的方式 —— 见 pipeline 里的校验。
+# --------------------------------------------------------------------------
+_DXGI = {"tid": None, "cam": None, "error": ""}
+_DXGI_LOCK = threading.Lock()
+
+
+def _dxgi_camera():
+    """拿本线程可用的 DXGI 相机（第一次会建；建不了返回 None 并记住原因）。"""
+    with _DXGI_LOCK:
+        tid = threading.get_ident()
+        if _DXGI["tid"] == tid:
+            return _DXGI["cam"]
+        cam = None
+        try:
+            import dxcam
+
+            cam = dxcam.create(output_color="RGB")
+            _DXGI["error"] = ""
+        except Exception as exc:                   # noqa: BLE001
+            _DXGI["error"] = "DXGI 不可用：%s" % exc
+        # 换线程时旧相机直接丢引用（不 release，见上面第 1 条）
+        _DXGI["cam"], _DXGI["tid"] = cam, tid
+        return cam
+
+
+def dxgi_note() -> str:
+    """DXGI 不可用的原因（给状态栏/自检看；可用时是空串）。"""
+    return str(_DXGI.get("error") or "")
+
+
+def grab_dxgi(box):
+    """用 DXGI 抓一块区域（box 是截图空间的像素框 [左,上,右,下]）。
+
+    返回 PIL.Image；不能用的场合返回 None（调用方回退到 GDI/Pillow）。
+    画面自上次抓取以来没变时，dxcam 会把**上一帧**还给我们（new_frame_only=False），
+    于是"没变化"这件事天然就成立，不用我们自己缓存。
+    """
+    camera = _dxgi_camera()
+    if camera is None:
+        return None
+    try:
+        from PIL import Image
+
+        frame = camera.grab(region=tuple(int(value) for value in box),
+                            copy=True, new_frame_only=False)
+    except Exception:                              # noqa: BLE001
+        return None
+    if frame is None:
+        return None
+    try:
+        return Image.fromarray(frame)              # copy=True，这块内存归我们
+    except Exception:                              # noqa: BLE001
+        return None
 
 
 def images_similar(first, second, size: int = 64, tolerance: float = 12.0) -> bool:

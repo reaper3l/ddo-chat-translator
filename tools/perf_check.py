@@ -94,6 +94,33 @@ def main() -> int:
     print("　　　　　　　慢的是「等桌面合成器」，不是拷像素；所以程序只在必要时抓屏，")
     print("　　　　　　　而且「只识别变化的那几行」是从已抓到的那一帧上裁，不再多抓一次。")
 
+    # 1c) DXGI 抓屏（装了 dxcam 才有）：程序默认走的其实是这条 —— 它不用等合成器
+    dxgi_ok = False
+    try:
+        box = capture.convert_region(region, tk_screen)
+        first = capture.grab_dxgi(box)
+        if first is None:
+            print("\nDXGI 抓屏：没拿到画面 —— %s"
+                  % (capture.dxgi_note() or "这块屏暂时没有新帧（画面完全没动）"))
+        else:
+            dxgi_samples = []
+            for _ in range(20):
+                started = time.perf_counter()
+                capture.grab_dxgi(box)
+                dxgi_samples.append((time.perf_counter() - started) * 1000.0)
+            dxgi_samples.sort()
+            middle = dxgi_samples[len(dxgi_samples) // 2]
+            fast_ms = sum(fast_samples) / len(fast_samples)
+            print("\nDXGI 抓屏：平均 %.2f ms、中位 %.2f ms（%dx%d）"
+                  % (sum(dxgi_samples) / len(dxgi_samples), middle,
+                     first.width, first.height))
+            print("　　对照「只抓区域（GDI）」的 %.1f ms：快了约 %.1f 倍"
+                  % (fast_ms, fast_ms / max(0.01, middle)))
+            print("　　程序会自动挑：装得上、又能跟系统截图对上，就用 DXGI。")
+            dxgi_ok = True
+    except Exception as exc:                       # noqa: BLE001
+        print("\nDXGI 抓屏：没试成（%s）—— 程序会自动退回 GDI，不影响使用" % exc)
+
     # 2) 变化检测（每帧都要做的廉价步骤）
     signature = capture.frame_signature(image)
     started = time.perf_counter()

@@ -193,6 +193,7 @@ class SettingsDialog:
         flow = ButtonFlow(parent, gap=6, row_pady=4)
         flow.pack(fill="x", padx=10, pady=(2, 6))
         for text, command in (
+                ("演示一下（放一段示例聊天）", self.app.play_demo),
                 ("立即检查更新", lambda: self.app.check_update(manual=True)),
                 ("打开发行页",
                  lambda: update_module.open_page(HOMEPAGE + "/releases")),
@@ -347,7 +348,8 @@ class SettingsDialog:
                     muted=True, anchor="w", wraplength=520, justify="left").pack(
             fill="x", pady=(0, 4))
         self._choice_labeled(tab, "capture_backend", "截图方式",
-                             [("auto", "自动（优先只抓区域，更快；不一致自动回退）"),
+                             [("auto", "自动（DXGI → 只抓区域 → 系统截图，最省 CPU）"),
+                              ("gdi", "只抓区域（GDI，不用 DXGI）"),
                               ("pillow", "始终用系统截图（最稳，稍慢）")])
 
         theme.label(tab, "自动过滤这些人的话（一行一个；填自己的角色名，"

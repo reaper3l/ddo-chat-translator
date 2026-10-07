@@ -284,6 +284,9 @@ class MainWindow:
                               command=self.toggle_mute_speaker)
         self._mute_menu_index = int(self.menu.index("end"))
         self.menu.add_separator()
+        self.menu.add_command(label="演示一下（放一段示例聊天，不联网）",
+                              command=self.play_demo)
+        self.menu.add_separator()
         self.menu.add_command(label="中英互译 (Ctrl+Enter 发送)", command=self.open_cn2en)
         self.menu.add_command(label="显示/隐藏英文原文", command=self.toggle_original)
         self.menu.add_separator()
@@ -1097,6 +1100,7 @@ class MainWindow:
         if self.pipeline.running:
             self.pipeline.stop()
             return
+        self.stop_demo()          # 演示中的话先停掉，免得和真实聊天混在一起
         if not self.config.get("region"):
             self.set_status("先点「区域」框选游戏聊天框", "warn")
             self.select_region()
@@ -1587,12 +1591,92 @@ class MainWindow:
         """从「设置 → 关于」回看使用须知（只看，不改同意状态）。"""
         return AgreementDialog(self, readonly=True)
 
+    # ---------------------------------------------------------------- 演示
+    # 一段脚本化的示例聊天：给新用户"看看它能干什么"，也方便作者录屏做宣传。
+    # 每一行是 (等多少秒之后出这一条, 内容)。内容全部来自真实对局里出现过的说法。
+    # **只往显示区画**：不碰管线、不写学习库、不发任何请求 —— 演示内容永远不会被
+    # "学"进去，也不会有一次接口调用（这点在自检里钉着）。
+    DEMO_LINES = (
+        (0.2, ("chat", "小队", "Dorgeth", "elite difficulty right?", "精英难度对吧？", "缓存")),
+        (0.8, ("chat", "小队", "Ize", "can you share the quest?", "能共享任务吗？", "缓存")),
+        (0.7, ("system", "小队", "", "Kendra Estleton 加入了你的队伍", "", "")),
+        (0.8, ("chat", "小队", "Dorgeth", "sure one sec", "好，等一下", "")),
+        (0.9, ("chat", "公会", "Medics", "need heals for shroud on elite, tr pls",
+               "幽影堡精英难度需要治疗，真轮回 请", "词典直译")),
+        (0.8, ("chat", "小队", "Warzar", "pet for the door?", "宠物去开门？", "缓存")),
+        (0.9, ("chat", "悄悄话", "Rockok告诉你", "where are you now?", "你现在在哪？", "缓存")),
+        (0.8, ("system", "小队", "", "你的队友 Dorgeth 已死亡", "", "")),
+        (0.7, ("chat", "小队", "Guihuo", "lol", "哈哈", "缓存")),
+        (0.8, ("chat", "小队", "Laranjinha-1", "pop side", "位面监狱", "词典直译")),
+        (0.9, ("chat", "小队", "Beruthiell", "heading to Eye area now", "现在去眼魔巢穴", "")),
+        (0.8, ("chat", "小队", "Sinoke", "omw", "马上到", "词典直译")),
+        (0.8, ("chat", "小队", "Beruthiell", "y fire shield saved me :D",
+               "还好火盾救了我一下 :D", "缓存")),
+        (0.9, ("chat", "小队", "Guihuo", "100 scrolls of resurrection",
+               "100 张复活卷轴", "")),
+        (0.9, ("chat", "小队", "Laranjinha-1", "got the orb?", "拿到宝珠了吗？", "缓存")),
+        (0.9, ("chat", "小队", "Zhaoyang", "ty all", "谢谢大家", "")),
+    )
+
+    def demo_available(self) -> bool:
+        """现在能不能放演示（正在监听时不行 —— 演示内容和真实聊天混在一起会让人懵）。"""
+        return not self.pipeline.running
+
+    def play_demo(self) -> None:
+        """放一段示例聊天：只画到显示区，不联网、不写学习库。"""
+        if not self.demo_available():
+            self.set_status("先点一下左边的 ■ 停止监听，再放演示（演示不是真实聊天）", "warn")
+            return
+        self.stop_demo()
+        self.clear_display()
+        self._demo_index = 0
+        self._demo_timer = None
+        # 演示时把"备注"打开一下（词典直译 / 缓存 这些正是想让人看到的东西），
+        # 演示结束或被打断时还原回去，绝不留在配置里。
+        self._demo_show_notes = bool(self.config.get("show_notes", False))
+        self.config["show_notes"] = True
+        self.set_status("演示中：这些是示例聊天，不是游戏里的真实内容"
+                        "（演示不联网、也不写进学习库）", "info")
+        self._demo_step()
+
+    def _demo_step(self) -> None:
+        if self._demo_index >= len(self.DEMO_LINES):
+            self._demo_finish()
+            return
+        delay, row = self.DEMO_LINES[self._demo_index]
+        self._demo_index += 1
+        kind, channel, speaker, source, translated, note = row
+        self._render(DisplayItem(seq=900000 + self._demo_index, kind=kind,
+                                 channel=channel, speaker=speaker, source=source,
+                                 translated=translated or source,
+                                 note=note, prefix="(%s): " % channel))
+        self._demo_timer = self.root.after(int(max(0.05, delay) * 1000),
+                                           self._demo_step)
+
+    def _demo_finish(self) -> None:
+        self._demo_timer = None
+        self.config["show_notes"] = self._demo_show_notes
+        self.set_status("演示结束 —— 点左边的 ▶ 开始监听你自己的聊天框", "ok")
+
+    def stop_demo(self) -> None:
+        """停下演示（开始监听、关程序、再点一次演示都会调它）。"""
+        if getattr(self, "_demo_timer", None):
+            try:
+                self.root.after_cancel(self._demo_timer)
+            except Exception:                      # noqa: BLE001
+                pass
+        self._demo_timer = None
+        if hasattr(self, "_demo_show_notes"):
+            self.config["show_notes"] = self._demo_show_notes
+            del self._demo_show_notes
+
     def quit_app(self) -> None:
         # 防重入：关程序时有两处"等后台网络"（自动学习 / 参与改进），用户等急了
         # 再点一次关闭按钮，不该把整条退出流程跑第二遍。
         if getattr(self, "_quitting", False):
             return
         self._quitting = True
+        self.stop_demo()          # 演示中的话先停下（顺便把"显示备注"还原回去）
         try:
             self.config["window_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
             self.config["window_size"] = [self.root.winfo_width(),

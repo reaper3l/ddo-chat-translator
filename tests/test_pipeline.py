@@ -382,6 +382,98 @@ def test_running_flag_follows_start_and_stop():
     assert pipeline.running is False
 
 
+def _with_fake_capture(dxgi_image, gdi_image, pillow_image, backend="auto"):
+    """把三种抓屏都换成假的，返回 (pipeline, 调用记录, 还原函数)。
+
+    DXGI 那条路是这轮新加的：它比 GDI 快一个数量级，但**必须**先跟系统截图比对
+    对得上才用（对不上就退回 GDI，再不行退回系统截图）。
+    """
+    from PIL import Image
+
+    from app import capture as capture_module
+
+    pipeline = make_pipeline(EchoEngine())
+    pipeline.config["region"] = [0, 0, 100, 50]
+    pipeline.config["capture_backend"] = backend
+    calls = []
+    original = (capture_module.grab_dxgi, capture_module.grab_fast,
+                capture_module.grab, capture_module.convert_region)
+
+    def pick(image):
+        if image is None:
+            return lambda: None
+        if isinstance(image, str):
+            return lambda: Image.new("RGB", (100, 50), image)
+        return lambda: image
+
+    capture_module.grab_dxgi = lambda box: (calls.append("dxgi"),
+                                            pick(dxgi_image)())[1]
+    capture_module.grab_fast = lambda region, tk_screen=None: (
+        calls.append("gdi"), pick(gdi_image)())[1]
+    capture_module.grab = lambda region=None, tk_screen=None: (
+        calls.append("pillow"), pick(pillow_image)())[1]
+    capture_module.convert_region = lambda region, tk_screen=None: list(region)
+
+    def restore():
+        (capture_module.grab_dxgi, capture_module.grab_fast, capture_module.grab,
+         capture_module.convert_region) = original
+
+    return pipeline, calls, restore
+
+
+def test_dxgi_is_used_when_it_matches_the_system_screenshot():
+    pipeline, calls, restore = _with_fake_capture("black", "black", "black")
+    try:
+        image = pipeline._capture_frame([0, 0, 100, 50])
+        assert image is not None
+        assert pipeline._fast_name == "DXGI 抓屏"
+        assert pipeline._fast_capture_ok is True
+        assert calls[0] == "dxgi" and "pillow" in calls
+    finally:
+        restore()
+
+
+def test_falls_back_to_gdi_when_dxgi_looks_wrong():
+    pipeline, calls, restore = _with_fake_capture("white", "black", "black")
+    try:
+        pipeline._capture_frame([0, 0, 100, 50])
+        assert pipeline._fast_name == "快速截图（只抓区域）"
+        assert pipeline._fast_capture_ok is True
+    finally:
+        restore()
+
+
+def test_falls_back_to_system_capture_when_nothing_matches():
+    pipeline, _calls, restore = _with_fake_capture("white", "white", "black")
+    try:
+        image = pipeline._capture_frame([0, 0, 100, 50])
+        assert image is not None                  # 给的是系统截图
+        assert pipeline._fast_capture_ok is False
+    finally:
+        restore()
+
+
+def test_gdi_backend_never_touches_dxgi():
+    pipeline, calls, restore = _with_fake_capture("black", "black", "black",
+                                                  backend="gdi")
+    try:
+        pipeline._capture_frame([0, 0, 100, 50])
+        assert "dxgi" not in calls
+        assert pipeline._fast_name == "快速截图（只抓区域）"
+    finally:
+        restore()
+
+
+def test_pillow_backend_skips_both_fast_ways():
+    pipeline, calls, restore = _with_fake_capture("black", "black", "black",
+                                                  backend="pillow")
+    try:
+        pipeline._capture_frame([0, 0, 100, 50])
+        assert calls == ["pillow"], calls
+    finally:
+        restore()
+
+
 def test_changed_frame_is_read_from_a_band_without_a_second_screen_grab():
     """监听时的抓屏次数：每帧只抓一次。
 

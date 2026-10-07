@@ -152,6 +152,7 @@ class Pipeline:
         self.last_frame_image = None
         self._frames_since_full = 0
         self._fast_capture_ok = None      # None=还没校验, True/False=已确定
+        self._fast_name = ""              # 校验通过的快速截图方式名字（见 _capture_frame）
         # 最近显示过的内容（原文 + 译文），用于"模糊去重"和"别把自己显示的内容又识别一遍"。
         # OCR 每帧会把同一句读得略有不同（lgotone / |gotone / Igotone），精确指纹拦不住；
         # 而主窗口又贴在游戏上，被 OCR 读回来的自己的译文也要挡住，否则会自我循环。
@@ -297,38 +298,67 @@ class Pipeline:
         """是否把聊天框的半透明背景压平（识别和指纹都用这个开关）。"""
         return bool(self.config.get("flatten_background", True))
 
-    def _capture_frame(self, region):
-        """抓一帧画面。
+    def _fast_candidates(self, region):
+        """可用的"快速抓屏"方式，快的排前面：(名字, 抓一帧的函数)。
 
-        默认走"只抓指定区域"的快速方式（GDI BitBlt），比 Pillow 先抓整屏再裁剪省得多。
-        第一次会拿它和系统截图比对：不一致就永久回退 —— 宁可不快，也不能抓到错图。
+        * DXGI 桌面复制：实测 0.45ms/帧（GDI 是 6.4ms@144Hz、16.6ms@60Hz —— GDI
+          每次都要等桌面合成器一个刷新周期）；装了 dxcam 才有，没有就跳过。
+        * GDI BitBlt 只抓区域：一直在用的那条，Pillow 先抓整屏再裁剪要 35~50ms。
         """
-        if str(self.config.get("capture_backend", "auto")).lower() == "pillow" \
-                or self._fast_capture_ok is False:
-            return capture.grab(region, self.screen_size)
+        if str(self.config.get("capture_backend", "auto")).lower() != "gdi":
+            yield "DXGI 抓屏", lambda: capture.grab_dxgi(
+                capture.convert_region(region, self.screen_size))
+        yield "快速截图（只抓区域）", lambda: capture.grab_fast(
+            region, self.screen_size)
 
-        fast = capture.grab_fast(region, self.screen_size)
-        if fast is None:
-            self._fast_capture_ok = False
-            self._emit_status("快速截图不可用，已回退到系统截图", "warn")
-            return capture.grab(region, self.screen_size)
+    def _pick_fast_capture(self, region) -> bool:
+        """第一次抓屏时挑一条"快速方式"：和系统截图比对得上才用，否则永久回退。
 
-        if self._fast_capture_ok is None:
-            # 校验快速截图是否和系统截图一致。比对多次：游戏画面在动的时候
-            # 单次比对可能刚好不巧（两边差一点），所以只要有一次对得上就采用。
+        比对多次：游戏画面在动的时候单次比对可能刚好不巧（两边差一点），
+        所以只要有一次对得上就采用。全部对不上就退回系统截图 —— 宁可不快，
+        也不能抓到错图（这是老板留下的原则，DXGI 这条新路同样遵守）。
+        """
+        for name, grab in self._fast_candidates(region):
             for _attempt in range(3):
+                image = grab()
+                if image is None:
+                    break
                 reference = capture.grab(region, self.screen_size)
                 if reference is None:
                     continue
-                if capture.images_similar(fast, reference):
-                    self._fast_capture_ok = True
-                    self._emit_status("已启用快速截图（只抓区域，更省 CPU）", "info")
-                    return fast
-                fast = capture.grab_fast(region, self.screen_size) or fast
-            self._fast_capture_ok = False
-            self._emit_status("快速截图与系统截图不一致，已回退到系统截图", "warn")
-            return capture.grab(region, self.screen_size) or fast
-        return fast
+                if capture.images_similar(image, reference):
+                    self._fast_name = name
+                    self._emit_status("已启用%s（更省 CPU）" % name, "info")
+                    return True
+        return False
+
+    def _capture_frame(self, region):
+        """抓一帧画面：DXGI → 只抓区域（GDI）→ 系统截图，能快就快、不能快就退回。
+
+        第一次会把候选方式和系统截图比对一遍（见 `_pick_fast_capture`）。
+        """
+        if str(self.config.get("capture_backend", "auto")).lower() == "pillow":
+            return capture.grab(region, self.screen_size)
+        if self._fast_capture_ok is False:          # 已经确认"快速方式不可用"
+            return capture.grab(region, self.screen_size)
+        if self._fast_capture_ok is None:
+            if not self._pick_fast_capture(region):
+                self._fast_capture_ok = False
+                self._emit_status("快速截图与系统截图不一致，已回退到系统截图", "warn")
+                return capture.grab(region, self.screen_size)
+            self._fast_capture_ok = True
+        image = self._fast_grab(region)
+        if image is None:
+            # 这一帧快速方式没拿到（比如 DXGI 还没出第一帧）→ 这一帧用系统截图，
+            # 但下次仍然走快速方式（不永久回退）
+            return capture.grab(region, self.screen_size)
+        return image
+
+    def _fast_grab(self, region):
+        """按 `_fast_name` 抓一帧（名字丢了就回退到 GDI）。"""
+        if str(self._fast_name or "").startswith("DXGI"):
+            return capture.grab_dxgi(capture.convert_region(region, self.screen_size))
+        return capture.grab_fast(region, self.screen_size)
 
     def _current_interval(self, idle: bool = False) -> float:
         """两次截图之间的间隔；一直没新内容时自动放慢（省 CPU）。"""
@@ -367,6 +397,9 @@ class Pipeline:
         self.parser = ChatParser(channels.alias_table(self.config))
         self._last_lines = []          # 区域/参数变了，缓存的行作废
         self._frames_since_full = 0
+        # 截图方式/区域可能变了 → 快速截图重新挑一次（第一次会跟系统截图比对一遍）
+        self._fast_capture_ok = None
+        self._fast_name = ""
         self.reload_engine()
 
     # ------------------------------------------------------------ 对外接口
@@ -377,6 +410,10 @@ class Pipeline:
             return None, []
         if self.screen_size:
             capture.measure_scale(self.screen_size, force=True)
+        if not capture.box_on_screen(capture.convert_region(region, self.screen_size)):
+            self._emit_status("框选区域跑到屏幕外面了（改过分辨率或显示器？）"
+                              "→ 请重新框选聊天框", "warn")
+            return None, []
         image = self._capture_frame(region)
         if image is None:
             return None, []
@@ -395,6 +432,7 @@ class Pipeline:
             "queue_size": self._jobs.maxsize,
             "engine": self.engine.describe(),
             "engine_note": self.engine_note,
+            "capture": self._fast_name or "系统截图",
             "cache_size": len(self._cache),
             "ocr_ready": self.ocr.available(),
             "dedup_size": len(self.deduper),
@@ -470,6 +508,13 @@ class Pipeline:
             if not region:
                 self._notice("还没有框选聊天区域", "warn", min_gap=10.0)
                 self._stop.wait(0.5)
+                continue
+            # 换过显示器/改过分辨率之后，老的框选区域会跑到屏幕外面：这时候抓到的
+            # 是黑图（GDI 不报错），程序看着在跑却什么都认不出来。宁可直接说清楚。
+            if not capture.box_on_screen(capture.convert_region(region, self.screen_size)):
+                self._notice("框选区域跑到屏幕外面了（改过分辨率或显示器？）"
+                             "→ 请重新框选聊天框", "warn", min_gap=20.0)
+                self._stop.wait(1.0)
                 continue
 
             image = self._capture_frame(region)
