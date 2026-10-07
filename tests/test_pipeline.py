@@ -173,6 +173,28 @@ def test_cache_avoids_second_api_call():
     assert item.note == "缓存"
 
 
+def test_cache_survives_glossary_change():
+    """加了一个**跟这句话无关**的词之后，翻译缓存不该整份作废。
+
+    以前缓存键里带着"术语表签名 + 记忆条数 + 术语条数"，于是每加一个词、每次公共
+    词典更新，之前翻过的句子全部作废 —— 同样的句子又去调一次接口，白花钱。
+    现在键只看"打完占位符的句子 + 引擎 + 翻译模式"：没受影响的句子照样命中。
+    """
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline._handle_lines(["(常规)Alice: a fresh sentence here"])
+    pipeline._process(pipeline._jobs.get_nowait())
+    assert engine.calls == 1
+
+    pipeline.glossary = Glossary({"someotherthing": "别的东西"})   # 词典变了
+    pipeline.deduper.clear()
+    pipeline.forget_recent()
+    pipeline._handle_lines(["(公会)Bob: a fresh sentence here"])
+    item = pipeline._process(pipeline._jobs.get_nowait())
+    assert engine.calls == 1, "加了无关的词不该让缓存失效"
+    assert item.note == "缓存"
+
+
 def test_system_events_reach_model_context():
     engine = EchoEngine()
     pipeline = make_pipeline(engine)

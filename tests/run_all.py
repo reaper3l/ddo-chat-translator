@@ -40,6 +40,7 @@ MODULES = [
     "test_dict_sources",
     "test_replay",
     "test_contribute",
+    "test_phrases",
     "test_ocr_filter",
     "test_frame",
     "test_capture_similar",

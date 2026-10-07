@@ -67,6 +67,13 @@ class Pipeline:
     #   其它      = 面板文字、OCR 碎片，一律不显示
     # ------------------------------------------------------------------
 
+    # 翻译缓存的容量。聊天里"重复出现"的句子很多（ty / omw / 同一句被 OCR 读成
+    # 好几个版本），缓存越大、白交的接口钱越少。一条记录只有几十字节，
+    # 放宽到几千条也就几百 KB —— 比多调一次接口便宜得多。
+    CACHE_MAX_ITEMS = 4000          # 内存里最多留这么多条
+    CACHE_TRIM_KEEP = 2500          # 超了就只留最新的这么多
+    CACHE_PERSIST_ITEMS = 3000      # 落盘保留多少（下次启动还能直接命中）
+
     # 面板特征：命中任意一条就认为不是聊天内容（数字+天/时、拾取次数、重置时间…）。
     # 这些是"面板长得什么样"，所以对错字有免疫力 —— 不管 OCR 把"宝箱"读成什么，
     # "被拾取次数 / 重置时间 / X天Y时" 这些结构都还在。
@@ -149,7 +156,10 @@ class Pipeline:
         # 给"根据上下文推荐回复"用的：带说话人的最近聊天
         self._recent_chat: Deque[Tuple[str, str, str]] = deque(maxlen=20)
         self._system_events: Deque[str] = deque(maxlen=6)
-        self._cache: Dict[str, str] = {}
+        # 翻译缓存：key → {"src": 原文, "zh": 译文}
+        # 存原文是为了两件事：① 排查；② 「挖掘高频短语」要拿"英文 → 中文"的真实数据
+        # （以前只存哈希，历史翻译就白白丢掉了）
+        self._cache: Dict[str, dict] = {}
         self._cache_dirty = False
         self._last_notice = 0.0
         self._unknown_channels: Dict[str, float] = {}   # 没登记的频道 → 最近一次出现时间
@@ -386,23 +396,44 @@ class Pipeline:
     def _load_cache(self) -> None:
         raw = paths.read_json(paths.CACHE_PATH, {})
         if isinstance(raw, dict) and isinstance(raw.get("items"), dict):
-            self._cache = {k: v for k, v in raw["items"].items() if isinstance(v, str)}
+            items = {}
+            for key, value in raw["items"].items():
+                if isinstance(value, str):          # 老格式：只存了译文
+                    items[key] = {"src": "", "zh": value}
+                elif isinstance(value, dict) and isinstance(value.get("zh"), str):
+                    items[key] = {"src": str(value.get("src") or ""),
+                                  "zh": value["zh"]}
+            self._cache = items
 
     def flush_cache(self) -> None:
         if not self._cache_dirty:
             return
-        items = list(self._cache.items())[-800:]
+        items = list(self._cache.items())[-self.CACHE_PERSIST_ITEMS:]
         if paths.write_json(paths.CACHE_PATH, {"version": 1, "items": dict(items)}):
             self._cache_dirty = False
 
+    def cached_pairs(self) -> List[Tuple[str, str]]:
+        """缓存里"翻译过的 (原文, 译文)" —— 给「挖掘高频短语」当原料（只读）。"""
+        from . import phrases as phrases_module
+
+        try:
+            return phrases_module.pairs_from_cache(self._cache)
+        except Exception:                          # noqa: BLE001
+            return []
+
     def _cache_key(self, masked: str) -> str:
+        """缓存键**只**看：这句打完占位符后的样子 + 引擎 + 翻译模式。
+
+        以前这里还带了"术语表签名 + 记忆条数 + 术语条数"—— 那是多余的：术语一变，
+        句子里真的受影响的那些句子，占位符本身就变了（masked 不同 → 键不同 → 不会
+        命中）；没受影响的句子 masked 一模一样，旧译文照样是对的。
+        带上它们的后果是：**每次词典更新、每加一个词都会把整份翻译缓存作废**，
+        之前翻过的句子又去调用一遍接口 —— 白花钱。实测改掉后加词不再清缓存。
+        """
         parts = [
             masked,
             self.engine.describe(),
             str(self.config.get("translate_mode", "quality")),
-            self.glossary.signature,
-            str(len(self.memory.data.get("phrases", {}))),
-            str(len(self.memory.data.get("terms", {}))),
         ]
         return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
 
@@ -859,8 +890,9 @@ class Pipeline:
             note = "词典直译"
         else:
             cache_key = self._cache_key(masked)
-            if cache_key in self._cache:
-                translated = self._cache[cache_key]
+            cached = self._cache.get(cache_key)
+            if isinstance(cached, dict) and cached.get("zh"):
+                translated = str(cached["zh"])
                 self.stats["cache_hits"] += 1
                 note = "缓存"
             else:
@@ -882,10 +914,11 @@ class Pipeline:
                     error = result.error or "翻译失败"
                 translated = result.text or source
                 if not error:
-                    self._cache[cache_key] = translated
+                    self._cache[cache_key] = {"src": source, "zh": translated}
                     self._cache_dirty = True
-                    if len(self._cache) > 1200:
-                        self._cache = dict(list(self._cache.items())[-600:])
+                    if len(self._cache) > self.CACHE_MAX_ITEMS:
+                        self._cache = dict(
+                            list(self._cache.items())[-self.CACHE_TRIM_KEEP:])
 
         translated = textutil.restore_urls(translated, urls)
         translated = self.glossary.restore(translated, mapping)

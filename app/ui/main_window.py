@@ -901,6 +901,8 @@ class MainWindow:
                                        bool(event.get("skipped")))
             elif kind == "public_dict":
                 self._on_public_dict(event)
+            elif kind == "phrases":
+                self._on_phrase_mining(event)
 
         self._update_stats()
         self.memory.flush()
@@ -1266,6 +1268,91 @@ class MainWindow:
         self.root.after(6000, self._public_dict_tick)
         # "参与改进"的邀请：放最后（12 秒），别和上面几个弹窗撞在一起
         self.root.after(12000, self.maybe_invite_contribution)
+        # 高频短语自动挖掘（默认关，见 词典窗口 →「挖掘高频短语…」里的开关）
+        self.root.after(90000, self._phrase_mining_tick)
+
+    # ------------------------------------------- 高频短语挖掘（自动的那条路）
+    PHRASE_MINE_TICK = 60 * 60           # 每小时看一次"要不要挖"
+    PHRASE_MINE_GAP = 3 * 3600           # 两次自动挖掘之间至少隔这么久
+
+    def _phrase_mining_tick(self) -> None:
+        self.auto_mine_phrases()
+        try:
+            self.root.after(self.PHRASE_MINE_TICK * 1000, self._phrase_mining_tick)
+        except tk.TclError:
+            pass
+
+    def auto_mine_phrases(self) -> bool:
+        """挖一次高频词组（本地统计 + 一次配中文请求），结果经 ui_queue 回到界面线程。
+
+        返回"是否真的开始跑了"，自检直接看返回值。默认关（`phrase_auto_enabled`）：
+        术语会影响所有句子，先让用户扫一眼更稳（窗口里可以打开自动）。
+        """
+        from .. import phrases as phrases_module
+
+        if not self.config.get("phrase_auto_enabled", False):
+            return False
+        if getattr(self, "_phrase_mining_busy", False):
+            return False
+        now = time.time()
+        last = float(self.config.get("phrase_auto_last_at", 0) or 0)
+        if now - last < self.PHRASE_MINE_GAP:
+            return False
+        if not getattr(self.pipeline.engine, "available", lambda: False)():
+            return False
+        threshold = int(self.config.get("phrase_auto_min_count", 5) or 5)
+        self._phrase_mining_busy = True
+
+        def work() -> None:
+            try:
+                pairs = (self.pipeline.cached_pairs()
+                         + phrases_module.pairs_from_memory(self.memory))
+                found = phrases_module.mine(pairs, known=list(self.glossary.terms()),
+                                            min_count=threshold)
+                if not found:
+                    self.ui_queue.put({"type": "phrases", "added": [],
+                                       "reason": "没有新的高频词组"})
+                    return
+                wanted = [item["phrase"] for item in found]
+                messages = phrases_module.build_messages(wanted)
+                timeout = float(self.config.get("timeout_seconds", 20))
+                result = self.pipeline.engine.translate("\n".join(wanted), messages,
+                                                        timeout=timeout)
+                if not getattr(result, "ok", False):
+                    self.ui_queue.put({"type": "phrases", "added": [],
+                                       "reason": getattr(result, "error", "")
+                                                 or "配中文失败"})
+                    return
+                gloss = phrases_module.parse_reply(result.text or "", wanted)
+                self.ui_queue.put({"type": "phrases",
+                                   "added": list(gloss.items()), "reason": ""})
+            except Exception as exc:               # noqa: BLE001
+                self.ui_queue.put({"type": "phrases", "added": [],
+                                   "reason": "挖掘出错：%s" % exc})
+
+        threading.Thread(target=work, name="phrase-mine", daemon=True).start()
+        return True
+
+    def _on_phrase_mining(self, event) -> None:
+        self._phrase_mining_busy = False
+        self.config["phrase_auto_last_at"] = time.time()
+        config_module.save_config(self.config)
+        added = event.get("added") or []
+        for phrase, zh in added:
+            try:
+                self.memory.set_term(phrase, zh, source="phrase")
+            except Exception:                      # noqa: BLE001
+                continue
+        if added:
+            self.memory.flush(force=True)
+            self.rebuild_glossary()
+            self.set_status("自动收录了 %d 个高频短语（以后这些说法少调接口）：%s"
+                            % (len(added),
+                               "、".join(str(p) for p, _zh in added[:5])), "ok")
+        else:
+            reason = str(event.get("reason") or "")
+            if reason and "没有新的高频词组" not in reason:
+                logging.getLogger("ddo").info("自动挖短语没成：%s", reason)
 
     # ------------------------------------------------------ 参与改进（邀请）
     def maybe_invite_contribution(self, force: bool = False) -> bool:

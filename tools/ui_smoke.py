@@ -1208,6 +1208,85 @@ def main() -> int:
 
     step("纠错窗口：原文可改 + 只改一个词（存成术语）", correction_word_level)
 
+    def phrase_mining_dialog():
+        """挖掘高频短语：本地统计 → 一次配中文（用假引擎，不联网）→ 采纳进术语表。"""
+        from app.engines import BaseEngine, TranslationResult
+        from app.ui.phrase_mining import PhraseMiningDialog
+
+        class _FakeEngine(BaseEngine):
+            name = "selftest"
+
+            def available(self):
+                return True
+
+            def describe(self):
+                return "self-test"
+
+            def translate(self, text, messages=None, timeout: float = 20.0):
+                # "配中文"那一步：按输入序号回一行中文；其它情况回显
+                if messages and "术语整理助手" in str(messages[0].get("content", "")):
+                    count = len([line for line in str(messages[-1]["content"]).splitlines()
+                                 if line.strip()])
+                    return TranslationResult(
+                        "\n".join("%d. 烟测中文%d" % (i, i) for i in range(1, count + 1)),
+                        True, self.name)
+                return TranslationResult(text, True, self.name)
+
+        saved_engine = app.pipeline.engine
+        saved_cache = app.pipeline._cache
+        app.pipeline.engine = _FakeEngine()
+        app.pipeline._cache = {
+            # 用自造词组：内置表里没有，否则会被"已知词跳过"这条规则挡掉
+            "k1": {"src": "smokephrase alpha now", "zh": "烟测一"},
+            "k2": {"src": "i am smokephrase alpha", "zh": "烟测一"},
+            "k3": {"src": "go smokephrase alpha plz", "zh": "去烟测一"},
+        }
+        app.pipeline._cache_dirty = False
+        dialog = PhraseMiningDialog(app)
+        term = "smokephrase alpha"
+        try:
+            dialog.window.update_idletasks()
+            rows = dialog.tree.get_children()
+            if not rows:
+                raise AssertionError("本地统计没找出候选词组（缓存里明明有 %s）" % term)
+            phrases = [dialog.tree.set(row, "phrase") for row in rows]
+            if term not in phrases:
+                raise AssertionError("候选里没有 %s：%r" % (term, phrases))
+            dialog.translate_now()
+            # 等后台线程 + 窗口自己的 after(150) 轮询把中文填进去（最多 3 秒）
+            import time as _time
+
+            deadline = _time.time() + 3.0
+            while _time.time() < deadline:
+                pump(1)
+                if any(dialog.tree.set(row, "zh").strip()
+                       for row in dialog.tree.get_children()):
+                    break
+                _time.sleep(0.05)
+            filled = [row for row in dialog.tree.get_children()
+                      if dialog.tree.set(row, "zh").strip()]
+            if not filled:
+                raise AssertionError("「让模型配中文」没有把结果填进列表")
+            for row in dialog.tree.get_children():
+                dialog.tree.set(row, "on", "☑")
+            dialog.accept()
+            saved = {item.get("text", "") for item in app.memory.term_list()}
+            if term not in saved:
+                raise AssertionError("「采纳勾选的」没写进术语表")
+        finally:
+            if app.memory.delete_term(term):
+                app.memory.flush(force=True)
+            app.rebuild_glossary()
+            app.pipeline.engine = saved_engine
+            app.pipeline._cache = saved_cache
+            app.pipeline._cache_dirty = False
+            try:
+                dialog.window.destroy()
+            except Exception:
+                pass
+
+    step("挖掘高频短语：统计 → 配中文 → 采纳", phrase_mining_dialog)
+
     def bug_report_bundle():
         """「反馈问题」生成的压缩包：要有报告，而且**绝不能带出 API Key**。"""
         import zipfile

@@ -140,6 +140,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "contribute_url": "https://ddo-contrib.ddo-tools.workers.dev/",
     "learn_min_count": 2,        # 同一句被修正多少次后写入长期规则
     "candidate_min_count": 3,    # 陌生词出现多少次后进入"待学习"列表
+    # 高频短语挖掘（把反复出现的词组自动收进术语表，减少接口调用）
+    "phrase_auto_enabled": False,      # 默认关：术语影响所有句子，先让人扫一眼（窗口里有开关）
+    "phrase_auto_min_count": 5,        # 自动采纳的门槛：至少出现在这么多句不同的英文里
+    "phrase_auto_last_at": 0,          # 上次自动挖掘的时间戳（避免频繁调用）
     "dedup_ttl_seconds": 90,
     # 自动检查更新：启动后每隔一段时间查一次 Gitee 发行版（只查询，不会偷偷下载）
     "check_update": True,

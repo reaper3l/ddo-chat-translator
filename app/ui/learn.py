@@ -402,6 +402,8 @@ class DictionaryDialog:
                    command=lambda: self.export_terms(only_mine=True)).pack(
             side="left", padx=6)
         ttk.Button(io_row, text="导入…", command=self.import_terms).pack(side="left")
+        ttk.Button(io_row, text="挖掘高频短语…",
+                   command=self.open_phrase_mining).pack(side="left", padx=6)
         theme.label(io_row, "导出 JSON / CSV；导入只写入新增或改动过的词",
                     muted=True).pack(side="left", padx=10)
 
@@ -507,6 +509,13 @@ class DictionaryDialog:
         from .dict_sources import DictSourcesDialog
 
         DictSourcesDialog(self.app, on_change=self.refresh)
+
+    def open_phrase_mining(self) -> None:
+        """「挖掘高频短语」：把反复出现的词组收进术语表，减少接口调用。"""
+        from .phrase_mining import PhraseMiningDialog
+
+        PhraseMiningDialog(self.app)
+        self.window.after(1000, self.refresh)
 
     def add_term(self) -> None:
         # 选中某一行时，把它带进输入框 —— 改一改点确定就是「覆盖」
