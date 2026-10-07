@@ -366,6 +366,61 @@ def same_player_name(first: str, second: str) -> bool:
     return False
 
 
+_SPEAKER_SPLIT_RE = re.compile(r"[,，、;；\s]+")
+_NAME_SUFFIX_RE = re.compile(r"[-_]\d+$")
+
+
+def _name_without_suffix(name: str) -> str:
+    """去掉游戏给重名玩家加的后缀（Huzi-2 → Huzi），用于"按人过滤"。"""
+    return _NAME_SUFFIX_RE.sub("", (name or "").strip())
+
+
+def speaker_list(raw) -> List[str]:
+    """整理「自动过滤的说话人」名单：列表 / 逗号或换行分隔的字符串都收。
+
+    去重（不分大小写）、去掉空白项、每项最长 40 个字符。
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        return []
+    out: List[str] = []
+    for item in items:
+        for piece in _SPEAKER_SPLIT_RE.split(str(item)):
+            name = piece.strip()[:40]
+            if not name:
+                continue
+            if any(name.lower() == seen.lower() for seen in out):
+                continue
+            out.append(name)
+    return out
+
+
+def is_muted_speaker(speakers, speaker: str) -> bool:
+    """这个说话人在不在「自动过滤」名单里。
+
+    比"同名"宽松一点，都是实测踩过的坑：
+    * 不区分大小写；
+    * OCR 把名字读花一两个字母照样挡住（复用 `same_player_name`，它专门处理
+      "jKyiae" vs "Kyiae" 这种粘字符/错字母的情况）；
+    * 游戏给重名玩家加的 `-1` / `-2` 后缀不再区分：填 `Huzi` 连 `Huzi-2` 一起过滤
+      （这里和"去重"的取向相反 —— 去重要分清两个人，过滤只想挡住"这个人"）。
+    """
+    if not speaker:
+        return False
+    base = _name_key(_name_without_suffix(speaker))
+    for entry in speaker_list(speakers):
+        if same_player_name(entry, speaker):
+            return True
+        if base and base == _name_key(_name_without_suffix(entry)):
+            return True
+    return False
+
+
 # --------------------------------------------------------------------------
 # 译文润色：让中文读起来像中文（模型被占位符切开后常留下多余空格）
 # --------------------------------------------------------------------------

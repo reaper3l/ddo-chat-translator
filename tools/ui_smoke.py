@@ -300,6 +300,39 @@ def main() -> int:
 
     step("外观预览跟随频道颜色变化", appearance_preview_follows_channel_color)
 
+    def muted_speakers_setting():
+        """设置 → 监控 里的「过滤的说话人」：多行输入要存成名单，且存完立刻生效。
+
+        （用户要求：能自动过滤某一个人说的话，比如自己。）
+        """
+        from app import textutil as textutil_module
+
+        original = list(app.config.get("muted_speakers") or [])
+        dialog = SettingsDialog(app)
+        try:
+            page = dialog.open_category("监控")
+            page.update_idletasks()
+            record = dialog.vars.get("muted_speakers")
+            if record is None:
+                raise AssertionError("监控页没有「过滤的说话人」输入框")
+            widget = record[1]
+            widget.delete("1.0", "end")
+            widget.insert("1.0", "Guihao\nBob，Alice\n\n")
+            dialog.save(None)
+            saved = list(app.config.get("muted_speakers") or [])
+            if saved != ["Guihao", "Bob", "Alice"]:
+                raise AssertionError("多行名单没存对：%r" % (saved,))
+            if not textutil_module.is_muted_speaker(saved, "Guihao"):
+                raise AssertionError("存下来的名单不生效")
+        finally:
+            app.config["muted_speakers"] = original
+            try:
+                dialog.window.destroy()
+            except Exception:
+                pass
+
+    step("设置 → 监控：过滤的说话人（多行名单）能存能生效", muted_speakers_setting)
+
     def frameless_and_icon_toolbar():
         """无边框窗口开关 + 图标按钮开关都要真的生效。"""
         original_frameless = bool(app.config.get("frameless", False))
@@ -1286,6 +1319,75 @@ def main() -> int:
                 pass
 
     step("挖掘高频短语：统计 → 配中文 → 采纳", phrase_mining_dialog)
+
+    def auto_learn_on_exit():
+        """关程序前的自动学习：监听过的这次会话，退出时补挖一次（用假引擎，不联网）。
+
+        用户要求：一次不一定玩够"定时"那一次的三小时，所以退出时也学一遍。
+        顺带钉住"没监听就不挖"这条 —— 免得各种自检工具一关窗口就真去调一次接口。
+        """
+        from app.engines import BaseEngine, TranslationResult
+
+        class _FakeEngine(BaseEngine):
+            name = "selftest"
+
+            def available(self):
+                return True
+
+            def describe(self):
+                return "self-test"
+
+            def translate(self, text, messages=None, timeout: float = 20.0):
+                count = len([line for line in str(messages[-1]["content"]).splitlines()
+                             if line.strip()]) if messages else 1
+                return TranslationResult(
+                    "\n".join("%d. 退出烟测%d" % (i, i) for i in range(1, count + 1)),
+                    True, self.name)
+
+        saved = {key: app.config.get(key)
+                 for key in ("phrase_auto_enabled", "phrase_auto_last_at")}
+        saved_engine = app.pipeline.engine
+        saved_cache = app.pipeline._cache
+        saved_frames = app.pipeline.stats.get("frames", 0)
+        term = "smokeexit beta"
+        try:
+            # 没监听（frames=0）→ 不该挖
+            app.pipeline.stats["frames"] = 0
+            if app.mine_phrases_on_exit(timeout=2):
+                raise AssertionError("没监听过也去挖了一次（会白花一次接口钱）")
+            # 监听过的会话 → 退出时补挖
+            app.pipeline.engine = _FakeEngine()
+            app.pipeline._cache = {
+                "e1": {"src": "smokeexit beta now", "zh": "退出烟测"},
+                "e2": {"src": "i am smokeexit beta", "zh": "退出烟测"},
+                "e3": {"src": "go smokeexit beta plz", "zh": "退出烟测"},
+                # 自动采纳的门槛是 phrase_auto_min_count（默认 5 句不同英文）
+                "e4": {"src": "smokeexit beta again", "zh": "退出烟测"},
+                "e5": {"src": "smokeexit beta later", "zh": "退出烟测"},
+            }
+            app.pipeline._cache_dirty = False
+            app.pipeline.stats["frames"] = 1
+            app.config["phrase_auto_enabled"] = True
+            app.config["phrase_auto_last_at"] = 0
+            if not app.mine_phrases_on_exit(timeout=3):
+                raise AssertionError("退出时的自动学习没挖到东西")
+            terms = {item.get("text", "") for item in app.memory.term_list()}
+            if term not in terms:
+                raise AssertionError("退出时挖到的 %s 没进术语表：%s" % (term, sorted(terms)))
+            if not float(app.config.get("phrase_auto_last_at") or 0):
+                raise AssertionError("挖完了没记时间，下次开程序会重复挖")
+        finally:
+            if app.memory.delete_term(term):
+                app.memory.flush(force=True)
+            app.rebuild_glossary()
+            app.pipeline.engine = saved_engine
+            app.pipeline._cache = saved_cache
+            app.pipeline._cache_dirty = False
+            app.pipeline.stats["frames"] = saved_frames
+            for key, value in saved.items():
+                app.config[key] = value
+
+    step("关程序前的自动学习（监听过的会话才挖，用假引擎）", auto_learn_on_exit)
 
     def bug_report_bundle():
         """「反馈问题」生成的压缩包：要有报告，而且**绝不能带出 API Key**。"""

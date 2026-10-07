@@ -128,9 +128,11 @@ def main() -> int:
           dialog.input.get("1.0", "end").strip() == "马上到")
 
     dialog.output.event_generate("<Button-1>", x=10, y=10)
-    pump(app, 0.3)
+    # 窗口管理器给焦点会晚几拍（机器一忙更明显）→ 用重试，别偶发冤枉它
+    clicked = pump_until(app, lambda: dialog.window.focus_get() is dialog.output,
+                         attempts=5, gap=0.15)
     check("点输出框时焦点给输出框（方便框选复制）",
-          dialog.window.focus_get() is dialog.output)
+          clicked, "当前焦点 %r" % (dialog.window.focus_get(),))
 
     # ---- 用户实测：翻译完成后想接着输入下一段，却发现打不进字 ----
     # 输入框本身一直是 normal（没有任何地方禁用它），所以问题在焦点：
@@ -418,6 +420,53 @@ def main() -> int:
     pump(app, 0.3)
 
     # ---------------- 弹窗要开在主窗口旁边（不是屏幕左上角） ----------------
+    # ---------------- 右键「过滤这个说话人」（用户要求：能过滤某一个人，比如自己） ------
+    from app.pipeline import DisplayItem
+    from app import textutil as textutil_module
+
+    saved_mute = list(app.config.get("muted_speakers") or [])
+    try:
+        app.config["muted_speakers"] = []
+        app.clear_display()
+        app._render(DisplayItem(1, "chat", "小队", "Guihao", "omw", "马上到"))
+        pump(app, 0.2)
+        # 用真正的文字坐标去找"右键点的是谁"（右键菜单就是拿这个坐标算的）
+        box = app.text.bbox("1.0")
+        found = ""
+        if box:
+            found = app._speaker_at(box[0] + 2, box[1] + max(1, box[3] // 2))
+        check("右键过滤说话人：能认出点的是谁说的话", found == "Guihao",
+              "文字位置=%s，认出来=%r" % (box, found))
+
+        app._menu_speaker = found or "Guihao"
+        app._refresh_mute_menu(app._menu_speaker)
+        label_before = str(app.menu.entrycget(app._mute_menu_index, "label"))
+        state_before = str(app.menu.entrycget(app._mute_menu_index, "state"))
+        app.toggle_mute_speaker()
+        muted = list(app.config.get("muted_speakers") or [])
+        # 加进名单后：这个人说的话连翻译都不排（顺便验证名单是"即时生效"的）
+        before = app.pipeline.stats.get("muted", 0)
+        app.pipeline._handle_lines(["(小队):[小队] Guihao: omw"])
+        dropped = app.pipeline.stats.get("muted", 0) - before
+        app._refresh_mute_menu(app._menu_speaker)
+        label_after = str(app.menu.entrycget(app._mute_menu_index, "label"))
+        check("右键过滤说话人：加进名单后他的话立刻被挡住、菜单变成「取消过滤」",
+              muted == ["Guihao"] and dropped == 1
+              and label_before.startswith("过滤「Guihao」")
+              and label_after.startswith("取消过滤「Guihao」") and state_before == "normal",
+              "名单=%s，挡掉 %d 条；菜单 %r → %r" % (muted, dropped,
+                                                    label_before, label_after))
+
+        app.toggle_mute_speaker()                  # 再点一次 = 取消过滤
+        check("右键过滤说话人：再点一次能取消（不用重启）",
+              list(app.config.get("muted_speakers") or []) == []
+              and not textutil_module.is_muted_speaker([], "Guihao"),
+              "名单=%s" % (app.config.get("muted_speakers"),))
+    finally:
+        app.config["muted_speakers"] = saved_mute
+        app.clear_display()
+        app.pipeline.apply_config()
+
     app.root.geometry("414x300+900+520")
     pump(app, 0.4)
     mx, my = app.root.winfo_rootx(), app.root.winfo_rooty()

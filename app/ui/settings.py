@@ -8,6 +8,7 @@ from tkinter import colorchooser, messagebox, ttk
 
 from .appearance_tab import AppearanceTab
 from .. import channels as channels_module
+from .. import textutil
 from . import theme
 from .widgets import ButtonFlow, ScrollableFrame
 
@@ -270,6 +271,21 @@ class SettingsDialog:
         self.vars[key] = ("choice", var, options)
         return var
 
+    def _lines(self, parent, key: str, text: str, height: int = 3):
+        """多行输入框：一行一个值（存成配置里的字符串列表，比如"过滤的说话人"）。"""
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=3)
+        ttk.Label(row, text=text, width=30).pack(side="left", anchor="n")
+        widget = theme.text_widget(row, height=height, width=26, wrap="none")
+        widget.pack(side="left", fill="x", expand=True)
+        current = self.config.get(key)
+        if isinstance(current, (list, tuple)):
+            widget.insert("1.0", "\n".join(str(item) for item in current))
+        elif current:
+            widget.insert("1.0", str(current))
+        self.vars[key] = ("lines", widget, None)
+        return widget
+
     def _build_translate_tab(self, notebook) -> None:
         tab = self._tab(notebook, "翻译")
         self._choice(tab, "engine", "翻译引擎",
@@ -333,6 +349,17 @@ class SettingsDialog:
         self._choice_labeled(tab, "capture_backend", "截图方式",
                              [("auto", "自动（优先只抓区域，更快；不一致自动回退）"),
                               ("pillow", "始终用系统截图（最稳，稍慢）")])
+
+        theme.label(tab, "自动过滤这些人的话（一行一个；填自己的角色名，"
+                         "自己在游戏里说的话就不再翻译显示了）",
+                    muted=True, anchor="w", wraplength=520, justify="left").pack(
+            fill="x", pady=(10, 0))
+        self._lines(tab, "muted_speakers", "过滤的说话人", height=3)
+        theme.label(tab, "名字不区分大小写；OCR 把名字读花一两个字母也照样挡住；"
+                         "游戏给重名加的 -1 / -2 不用管（填 Huzi 连 Huzi-2 一起过滤）。"
+                         "想少打字：在主窗口对着他说的一句话点右键 →「过滤这个说话人」。",
+                    muted=True, anchor="w", wraplength=520, justify="left").pack(
+            fill="x", pady=(0, 4))
 
         # 频道开关不在这里再放一份了：和「频道」页的勾选框是同一个东西，
         # 两份一起写会互相覆盖（"改了保存没生效"就是这么来的）。
@@ -506,7 +533,10 @@ class SettingsDialog:
         bad = []
         for key, (kind, var, extra) in list(self.vars.items()):
             try:
-                if kind == "bool":
+                if kind == "lines":
+                    # 多行文本框：一行一个（也认逗号/顿号分隔）；空行不算
+                    self.config[key] = textutil.speaker_list(var.get("1.0", "end"))
+                elif kind == "bool":
                     self.config[key] = bool(var.get())
                 elif kind == "int":
                     self.config[key] = int(str(var.get()).strip())

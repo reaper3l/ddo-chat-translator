@@ -280,6 +280,9 @@ class MainWindow:
                             bd=0, activeborderwidth=0)
         self.menu.add_command(label="纠正这条翻译 (F10)", command=self.fix_selected)
         self.menu.add_command(label="复制选中内容", command=self.copy_selection)
+        self.menu.add_command(label="过滤这个说话人（不再显示他的话）",
+                              command=self.toggle_mute_speaker)
+        self._mute_menu_index = int(self.menu.index("end"))
         self.menu.add_separator()
         self.menu.add_command(label="中英互译 (Ctrl+Enter 发送)", command=self.open_cn2en)
         self.menu.add_command(label="显示/隐藏英文原文", command=self.toggle_original)
@@ -878,10 +881,66 @@ class MainWindow:
         self.root.bind("<Escape>", lambda _e: None)
 
     def _show_menu(self, event) -> None:
+        # 右键位置那条消息的说话人：决定"过滤这个说话人"这一项怎么显示
+        self._menu_speaker = self._speaker_at(event.x, event.y)
+        self._refresh_mute_menu(self._menu_speaker)
         try:
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.menu.grab_release()
+
+    def _refresh_mute_menu(self, speaker: str) -> None:
+        """按"右键点到的说话人"调整菜单里那一项的文字和可用状态。"""
+        try:
+            if speaker:
+                muted = textutil.is_muted_speaker(
+                    self.config.get("muted_speakers"), speaker)
+                self.menu.entryconfigure(
+                    self._mute_menu_index, state="normal",
+                    label=("取消过滤「%s」" % speaker) if muted
+                    else ("过滤「%s」（以后不再显示他的话）" % speaker))
+            else:
+                self.menu.entryconfigure(
+                    self._mute_menu_index, state="disabled",
+                    label="过滤这个说话人（对着某条玩家发言点右键）")
+        except tk.TclError:
+            pass
+
+    def _speaker_at(self, x: int, y: int) -> str:
+        """显示区里 (x, y) 那一条消息的说话人（不是玩家发言就返回空串）。"""
+        try:
+            index = self.text.index("@%d,%d" % (int(x), int(y)))
+            tags = self.text.tag_names(index)
+        except tk.TclError:
+            return ""
+        for tag in tags:
+            if not tag.startswith("m") or not tag[1:].isdigit():
+                continue
+            seq = int(tag[1:])
+            for record in reversed(self.records):
+                if record.get("seq") == seq:
+                    return str(record.get("speaker") or "")
+        return ""
+
+    def toggle_mute_speaker(self) -> None:
+        """右键菜单：把这个人加进 / 移出「自动过滤」名单（点一下就生效，不用重启）。"""
+        speaker = str(getattr(self, "_menu_speaker", "") or "")
+        if not speaker:
+            return
+        names = textutil.speaker_list(self.config.get("muted_speakers"))
+        if textutil.is_muted_speaker(names, speaker):
+            names = [name for name in names
+                     if not textutil.is_muted_speaker([name], speaker)]
+            self.set_status("不再过滤「%s」：他以后说的话会照常翻译显示（"
+                            "以前的记录不会补回来）" % speaker, "ok")
+        else:
+            names.append(speaker)
+            self.set_status("已自动过滤「%s」：他说的话不再翻译显示"
+                            "（在 设置 → 监控 里可以改 / 去掉）" % speaker, "ok")
+        self.config["muted_speakers"] = names
+        config_module.save_config(self.config)
+        # 不用 apply_config()：过滤名单是每行现读配置的，改完立刻就生效，
+        # 也不必因此重置识别状态（那个会把"只认变化的那几行"清掉重来）。
 
     # ------------------------------------------------------------------ 轮询
     def _poll(self) -> None:
@@ -967,6 +1026,8 @@ class MainWindow:
     # ------------------------------------------------------------------ 渲染
     def _render(self, item: DisplayItem) -> None:
         self.text.configure(state="normal")
+        # 这条消息在显示区里的起点：右键菜单靠它找到"点的是谁说的话"
+        start = self.text.index("end-1c")
         self._note_channel_activity(item.channel)
         if self.config.get("show_timestamp", False):
             self.text.insert("end", time.strftime("%H:%M:%S "), "meta")
@@ -984,7 +1045,8 @@ class MainWindow:
             self.text.insert("end", prefix, channel_tag)
             self.text.insert("end", translated + "\n", system_tag)
             record = {"seq": item.seq, "source": item.source,
-                      "translated": translated, "kind": "system"}
+                      "translated": translated, "kind": "system",
+                      "speaker": ""}
         else:
             self.text.insert("end", prefix, channel_tag)
             if item.speaker:
@@ -998,10 +1060,15 @@ class MainWindow:
             if self.config.get("show_original", False):
                 self.text.insert("end", "    %s\n" % item.source, original_tag)
             record = {"seq": item.seq, "source": item.source,
-                      "translated": translated, "kind": "chat"}
+                      "translated": translated, "kind": "chat",
+                      "speaker": item.speaker or ""}
 
         if item.kind != "system" and item.error:
             self.set_status(item.error, "error")
+        try:
+            self.text.tag_add("m%d" % item.seq, start, "end-1c")
+        except tk.TclError:
+            pass
         self.records.append(record)
         self._trim()
         self.text.see("end")
@@ -1143,6 +1210,12 @@ class MainWindow:
                 self.text.configure(state="normal")
                 self.text.delete(index, "%s+%dc" % (index, len(old)))
                 self.text.insert(index, after)
+                try:
+                    # 改过的这段也要留在"这条消息"的范围里，右键才找得到说话人
+                    self.text.tag_add("m%d" % int(record.get("seq") or 0), index,
+                                      "%s+%dc" % (index, len(after)))
+                except tk.TclError:
+                    pass
                 self.text.configure(state="disabled")
         record["translated"] = after
 
@@ -1275,7 +1348,11 @@ class MainWindow:
 
     # ------------------------------------------- 高频短语挖掘（自动的那条路）
     PHRASE_MINE_TICK = 60 * 60           # 每小时看一次"要不要挖"
-    PHRASE_MINE_GAP = 3 * 3600           # 两次自动挖掘之间至少隔这么久
+    PHRASE_MINE_GAP = 45 * 60            # 两次自动挖掘之间至少隔这么久
+    # 关程序那次另算：玩家一次不一定玩够"定时"那一次的时间，所以退出时补一次；
+    # 但刚挖过就别重复花那一次请求（本地统计免费，配中文要花钱）。
+    PHRASE_MINE_EXIT_GAP = 10 * 60
+    PHRASE_MINE_EXIT_WAIT = 6.0          # 退出时最多等这么久，超时就直接走
 
     def _phrase_mining_tick(self) -> None:
         self.auto_mine_phrases()
@@ -1283,6 +1360,42 @@ class MainWindow:
             self.root.after(self.PHRASE_MINE_TICK * 1000, self._phrase_mining_tick)
         except tk.TclError:
             pass
+
+    def _phrase_mining_ready(self, gap: float) -> bool:
+        """要不要挖：开关开着、当前没在挖、距上次够久、引擎可用。"""
+        if not self.config.get("phrase_auto_enabled", True):
+            return False
+        if getattr(self, "_phrase_mining_busy", False):
+            return False
+        now = time.time()
+        last = float(self.config.get("phrase_auto_last_at", 0) or 0)
+        if now - last < max(0.0, float(gap)):
+            return False
+        return bool(getattr(self.pipeline.engine, "available", lambda: False)())
+
+    def _mine_phrases_once(self):
+        """本地统计 +（有候选才）一次配中文请求。返回 (added, reason)。
+
+        纯后台逻辑：不碰界面、不写配置，界面那条路和"关程序那条路"都用它。
+        """
+        from .. import phrases as phrases_module
+
+        threshold = int(self.config.get("phrase_auto_min_count", 5) or 5)
+        pairs = (self.pipeline.cached_pairs()
+                 + phrases_module.pairs_from_memory(self.memory))
+        found = phrases_module.mine(pairs, known=list(self.glossary.terms()),
+                                    min_count=threshold)
+        if not found:
+            return [], "没有新的高频词组"
+        wanted = [item["phrase"] for item in found]
+        messages = phrases_module.build_messages(wanted)
+        timeout = float(self.config.get("timeout_seconds", 20))
+        result = self.pipeline.engine.translate("\n".join(wanted), messages,
+                                                timeout=timeout)
+        if not getattr(result, "ok", False):
+            return [], (getattr(result, "error", "") or "配中文失败")
+        gloss = phrases_module.parse_reply(result.text or "", wanted)
+        return list(gloss.items()), ""
 
     def auto_mine_phrases(self) -> bool:
         """挖一次高频词组（本地统计 + 一次配中文请求），结果经 ui_queue 回到界面线程。
@@ -1292,44 +1405,15 @@ class MainWindow:
         不同英文里"的词组，收错了可以在词典窗口里删；想完全自己掌控就在
         词典窗口 →「挖掘高频短语…」里关掉那个勾。
         """
-        from .. import phrases as phrases_module
-
-        if not self.config.get("phrase_auto_enabled", False):
+        if not self._phrase_mining_ready(self.PHRASE_MINE_GAP):
             return False
-        if getattr(self, "_phrase_mining_busy", False):
-            return False
-        now = time.time()
-        last = float(self.config.get("phrase_auto_last_at", 0) or 0)
-        if now - last < self.PHRASE_MINE_GAP:
-            return False
-        if not getattr(self.pipeline.engine, "available", lambda: False)():
-            return False
-        threshold = int(self.config.get("phrase_auto_min_count", 5) or 5)
         self._phrase_mining_busy = True
 
         def work() -> None:
             try:
-                pairs = (self.pipeline.cached_pairs()
-                         + phrases_module.pairs_from_memory(self.memory))
-                found = phrases_module.mine(pairs, known=list(self.glossary.terms()),
-                                            min_count=threshold)
-                if not found:
-                    self.ui_queue.put({"type": "phrases", "added": [],
-                                       "reason": "没有新的高频词组"})
-                    return
-                wanted = [item["phrase"] for item in found]
-                messages = phrases_module.build_messages(wanted)
-                timeout = float(self.config.get("timeout_seconds", 20))
-                result = self.pipeline.engine.translate("\n".join(wanted), messages,
-                                                        timeout=timeout)
-                if not getattr(result, "ok", False):
-                    self.ui_queue.put({"type": "phrases", "added": [],
-                                       "reason": getattr(result, "error", "")
-                                                 or "配中文失败"})
-                    return
-                gloss = phrases_module.parse_reply(result.text or "", wanted)
-                self.ui_queue.put({"type": "phrases",
-                                   "added": list(gloss.items()), "reason": ""})
+                added, reason = self._mine_phrases_once()
+                self.ui_queue.put({"type": "phrases", "added": added,
+                                   "reason": reason})
             except Exception as exc:               # noqa: BLE001
                 self.ui_queue.put({"type": "phrases", "added": [],
                                    "reason": "挖掘出错：%s" % exc})
@@ -1337,22 +1421,77 @@ class MainWindow:
         threading.Thread(target=work, name="phrase-mine", daemon=True).start()
         return True
 
+    def mine_phrases_on_exit(self, timeout: float = PHRASE_MINE_EXIT_WAIT) -> bool:
+        """关程序前再挖一次（用户要求：一次不一定玩够"定时"那一次的时间）。
+
+        本地统计是免费的；只有真有新候选才会花一次请求，最多等 timeout 秒：
+        超时/失败都无所谓 —— 翻译记录还在缓存里，下次接着挖。
+        放这里还顺手解决了顺序问题：刚学到的词会跟着"参与改进"一起发出去。
+        """
+        import threading as threading_module
+
+        # 这次压根没监听 → 不会有新东西可挖，更不能白花一次接口钱
+        # （各种自检工具会直接调 quit_app，它们连窗口里的截图都没跑过）
+        if not self.pipeline.stats.get("frames"):
+            return False
+        if not self._phrase_mining_ready(self.PHRASE_MINE_EXIT_GAP):
+            return False
+        try:
+            self.set_status("正在顺手学一下这次聊天里的高频说法…（最多等几秒）", "info")
+            self.root.update_idletasks()
+        except Exception:                          # noqa: BLE001
+            pass
+        result: dict = {}
+        self._phrase_mining_busy = True
+
+        def work() -> None:
+            try:
+                result["value"] = self._mine_phrases_once()
+            except Exception as exc:               # noqa: BLE001
+                result["value"] = ([], "挖掘出错：%s" % exc)
+
+        thread = threading_module.Thread(target=work, name="phrase-mine-exit",
+                                        daemon=True)
+        thread.start()
+        thread.join(timeout=max(0.5, float(timeout)))
+        self._phrase_mining_busy = False
+        if thread.is_alive():
+            logging.getLogger("ddo").info("关程序前的短语挖掘没等完，下次接着挖")
+            return False
+        added, reason = result.get("value", ([], ""))
+        self.config["phrase_auto_last_at"] = time.time()
+        config_module.save_config(self.config)     # 记下"刚挖过"，别开一次程序就挖一次
+        if added:
+            self._apply_mined_phrases(added, silent=False)
+        elif reason and "没有新的高频词组" not in reason:
+            logging.getLogger("ddo").info("关程序前挖短语没成：%s", reason)
+        return bool(added)
+
+    def _apply_mined_phrases(self, added, silent: bool = False) -> None:
+        """把挖到的词组写进术语表（界面线程）。"""
+        written = 0
+        for phrase, zh in added or []:
+            try:
+                self.memory.set_term(phrase, zh, source="phrase")
+                written += 1
+            except Exception:                      # noqa: BLE001
+                continue
+        if not written:
+            return
+        self.memory.flush(force=True)
+        self.rebuild_glossary()
+        if not silent:
+            self.set_status("自动收录了 %d 个高频短语（以后这些说法少调接口）：%s"
+                            % (written,
+                               "、".join(str(p) for p, _zh in added[:5])), "ok")
+
     def _on_phrase_mining(self, event) -> None:
         self._phrase_mining_busy = False
         self.config["phrase_auto_last_at"] = time.time()
         config_module.save_config(self.config)
         added = event.get("added") or []
-        for phrase, zh in added:
-            try:
-                self.memory.set_term(phrase, zh, source="phrase")
-            except Exception:                      # noqa: BLE001
-                continue
         if added:
-            self.memory.flush(force=True)
-            self.rebuild_glossary()
-            self.set_status("自动收录了 %d 个高频短语（以后这些说法少调接口）：%s"
-                            % (len(added),
-                               "、".join(str(p) for p, _zh in added[:5])), "ok")
+            self._apply_mined_phrases(added)
         else:
             reason = str(event.get("reason") or "")
             if reason and "没有新的高频词组" not in reason:
@@ -1454,6 +1593,12 @@ class MainWindow:
                                           self.root.winfo_height()]
             config_module.save_config(self.config)
         except Exception:
+            pass
+        # 关程序前顺手学一下这次聊天里的高频说法（本地统计免费，配中文最多等几秒）。
+        # 放在"参与改进"之前：刚学到的词能跟着这次上传一起走。
+        try:
+            self.mine_phrases_on_exit()
+        except Exception:                          # noqa: BLE001
             pass
         # 参与改进：用户同意过的话，关程序前把这次新确认的内容发出去
         self.auto_send_contribution()

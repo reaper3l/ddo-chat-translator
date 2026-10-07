@@ -116,6 +116,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "战利品": False,
     },
     "max_lines": 600,            # 显示区最多保留多少行，防止越用越卡
+    # 自动过滤这些人说的话（连翻译都不做）。填名字就行，比如自己的角色名 ——
+    # 自己在游戏里说的话没必要再翻译显示一遍。
+    # 匹配比"同名"宽松：不区分大小写、OCR 把名字读花一两个字母也照样挡住，
+    # 游戏给重名玩家加的 -1 / -2 后缀也不再区分（填 Huzi 连 Huzi-2 一起过滤）。
+    "muted_speakers": [],
     # 词典 / 学习
     "use_glossary": True,
     "use_extra_glossary": True,

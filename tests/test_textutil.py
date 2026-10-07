@@ -152,6 +152,31 @@ def test_same_player_name_handles_ocr_glue_and_typos():
     assert not textutil.same_player_name("Bob", "")
 
 
+def test_speaker_list_accepts_list_and_separated_text():
+    """「过滤的说话人」两种写法都收：列表、或者逗号/换行分隔的一串。"""
+    assert textutil.speaker_list(["Zhaoyang", "Bob"]) == ["Zhaoyang", "Bob"]
+    assert textutil.speaker_list("Zhaoyang, Bob\nAlice") == ["Zhaoyang", "Bob", "Alice"]
+    assert textutil.speaker_list("Zhaoyang，Bob、Alice；Carol") == [
+        "Zhaoyang", "Bob", "Alice", "Carol"]
+    assert textutil.speaker_list([" bob ", "BOB", "", "   "]) == ["bob"]   # 去重、去空
+    assert textutil.speaker_list(None) == []
+    assert textutil.speaker_list("x" * 60) == ["x" * 40]                   # 名字有限长
+
+
+def test_is_muted_speaker_is_looser_than_same_name():
+    """按人过滤：不区分大小写、认 OCR 读花、也不再区分重名后缀 -1/-2。"""
+    names = ["Zhaoyang"]
+    assert textutil.is_muted_speaker(names, "Zhaoyang")
+    assert textutil.is_muted_speaker(names, "zhaoyang")
+    assert textutil.is_muted_speaker(names, "Zhaoyang-2")     # 自己开了个小号/重名后缀
+    assert textutil.is_muted_speaker(["Sinoke"], "Snioke")    # OCR 把名字读花了
+    assert not textutil.is_muted_speaker(names, "Bob")
+    assert not textutil.is_muted_speaker(names, "")
+    assert not textutil.is_muted_speaker([], "Bob")
+    # 名单可以直接写成一整串（设置页的多行文本框存的是列表，手工改配置写成字符串也行）
+    assert textutil.is_muted_speaker("Bob, Alice", "Alice")
+
+
 def test_ocr_similar_is_order_sensitive():
     """集合相似度给高分、顺序相似度必须给低分的情况。"""
     a = "please wait for me i need to repair my gear"

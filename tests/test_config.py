@@ -22,6 +22,12 @@ def test_learning_runs_by_itself_by_default():
     assert DEFAULT_CONFIG["phrase_auto_enabled"] is True
 
 
+def test_muted_speaker_list_exists_and_starts_empty():
+    """「自动过滤的说话人」必须有默认值：设置页的多行框直接读它，
+    少了会显示成空并且一保存就把它写没（settings 的 _lines 也是读它填的）。"""
+    assert DEFAULT_CONFIG["muted_speakers"] == []
+
+
 def test_boolean_switches_used_by_settings_exist():
     switches = (
         "show_system", "system_whitelist", "show_notes", "show_original",

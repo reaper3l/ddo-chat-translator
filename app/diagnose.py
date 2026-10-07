@@ -134,7 +134,7 @@ def build_report(problem: str = "", config: Optional[dict] = None,
             sections.append(("监听性能计数", json.dumps(
                 {key: stats.get(key, 0) for key in
                  ("frames", "skipped_frame", "band_ocr", "full_ocr",
-                  "ocr_lines", "api_calls", "batched", "filtered")},
+                  "ocr_lines", "api_calls", "batched", "filtered", "muted")},
                 ensure_ascii=False)))
         except Exception as exc:
             sections.append(("监听性能计数", "读取失败：%s" % exc))

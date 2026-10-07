@@ -186,6 +186,7 @@ class Pipeline:
             "skipped_frame": 0,
             "band_ocr": 0,
             "full_ocr": 0,
+            "muted": 0,           # 被「自动过滤的说话人」挡掉的行数
         }
         self._load_cache()
 
@@ -616,6 +617,13 @@ class Pipeline:
             #   * 表里没有（含"有括号前缀但认不出频道"的）→ 不显示，但要计数 +
             #     隔一会儿提示一次"去频道页加一行"，免得游戏更新后聊天悄悄消失
             if not self._channel_ok(event, enabled):
+                continue
+            # 自动过滤名单里的人（比如自己）：连翻译都不做，直接跳过。
+            # 名单在 设置 → 监控 里改，也可以在主窗口对着他说的一句话点右键加进来。
+            if textutil.is_muted_speaker(self.config.get("muted_speakers"),
+                                         event.speaker):
+                self.stats["muted"] = self.stats.get("muted", 0) + 1
+                self._count_filtered()
                 continue
             # OCR 有时把面板文字粘在玩家正文后面（"堡垒? 错误):你的队友已经…"），
             # 这种正文翻出来一定是垃圾，直接不显示。

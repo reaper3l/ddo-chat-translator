@@ -735,3 +735,52 @@ def test_channel_switch_off_is_silent():
     pipeline._handle_lines(["(小队):[小队] Sinoke: hi there"])
     assert _drain_jobs(pipeline) == []
     assert pipeline.stats["filtered"] == before
+
+
+# ---------------------------------------------------------------------------
+# 自动过滤某个人（用户要求：可以过滤某一个人说话，比如自己）
+# ---------------------------------------------------------------------------
+
+def test_muted_speaker_lines_are_dropped_before_translation():
+    engine = EchoEngine()
+    pipeline = make_pipeline(engine)
+    pipeline.config["muted_speakers"] = ["Guihuo"]
+    pipeline._handle_lines(["(小队):[小队] Guihuo: omw",
+                            "(小队):[小队] Sinoke: omw"])
+    jobs = _drain_jobs(pipeline)
+    assert [(job.speaker, job.source) for job in jobs] == [("Sinoke", "omw")]
+    assert pipeline.stats["muted"] == 1
+
+
+def test_muting_matches_ocr_variants_and_name_suffix():
+    """OCR 把名字读花一两个字母、或者游戏加了 -1/-2，也要挡得住。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline.config["muted_speakers"] = ["Zhaoyang"]
+    pipeline._handle_lines([
+        "(小队):[小队] Zhaoyang: need heals",
+        "(小队):[小队] Zhaoyang-2: need heals",
+        "(小队):[小队] Zhaoyanq: need heals",          # 名字被读花一个字母
+        "(小队):[小队] Bob: need heals",
+    ])
+    assert [job.speaker for job in _drain_jobs(pipeline)] == ["Bob"]
+    assert pipeline.stats["muted"] == 3
+
+
+def test_unmuting_restores_the_speaker():
+    """名单是每行现读配置的：去掉就立刻恢复（不用重启，也不用重开监听）。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline.config["muted_speakers"] = ["Guihuo"]
+    pipeline._handle_lines(["(小队):[小队] Guihuo: omw"])
+    assert _drain_jobs(pipeline) == []
+    pipeline.config["muted_speakers"] = []
+    pipeline._handle_lines(["(小队):[小队] Guihuo: omw"])
+    assert [job.source for job in _drain_jobs(pipeline)] == ["omw"]
+
+
+def test_muted_speaker_does_not_enter_model_context():
+    """被过滤的话不该进"上文" —— 否则模型会照着被过滤的内容作答。"""
+    pipeline = make_pipeline(EchoEngine())
+    pipeline.config["muted_speakers"] = ["Guihuo"]
+    pipeline._handle_lines(["(小队):[小队] Guihuo: pop side please"])
+    assert list(pipeline._recent) == []
+    assert list(pipeline._recent_chat) == []
