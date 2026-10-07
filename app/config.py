@@ -167,6 +167,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 记录同意时间既是本地状态，也是"用户确实被告知过"的凭据。
     "agreement_version": 0,        # 已经同意的条款版本（0 = 还没同意过）
     "agreement_accepted_at": "",   # 同意的时间（本地时间，字符串）
+    # 新手教学：第一次用的时候自动走一遍（走完或点"跳过"都记上，以后不再自动弹；
+    # 想重看：右键菜单 / 设置 → 关于 都有入口）
+    "tour_done": False,
     # 高级
     "window_pos": None,
     "window_size": [520, 620],

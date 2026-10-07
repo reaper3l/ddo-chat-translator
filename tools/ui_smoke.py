@@ -592,12 +592,15 @@ def main() -> int:
         用户要求：演示不能只给结果，还要教**怎么操作/设置**（填接口、纠错、过滤人名、
         中英互译、调颜色）。这里把每一步都走一遍，确认：
         * 每一步都能画出高亮框 + 说明卡片（不报错、不卡住）；
+        * **目标以外压暗**（4 块半透明层）而且**没有一块盖住目标**（盖住就没法点/看不全）；
         * **不改配置、不写学习库、不调接口**（互译窗口要用 auto_suggest=False）；
-        * 教学里打开的窗口，换步/结束时都收掉。
+        * 教学里打开的窗口，换步/结束时都收掉；
+        * 第一次用会自动弹（`tour_done`），走完/跳过之后不再自动弹。
         """
         from app.ui.tour import GuidedTour
 
         original_notes = bool(app.config.get("show_notes", False))
+        original_done = bool(app.config.get("tour_done", False))
         terms_before = len(app.memory.term_list())
         cache_before = len(app.pipeline._cache)
         config_before = dict(app.config)
@@ -610,8 +613,25 @@ def main() -> int:
             raise AssertionError("新手教学没有打开说明窗口")
         if tour.highlight is None or not tour.highlight.winfo_exists():
             raise AssertionError("新手教学没有画出高亮框")
+        if len(tour.overlays) != 4:
+            raise AssertionError("新手教学没有把目标以外压暗（应有 4 块，实际 %d）"
+                                 % len(tour.overlays))
         if not app.records:
             raise AssertionError("教学没有先放两条示例消息（④⑤ 两步要指着它们）")
+
+        def covered_by_overlay(target):
+            if target is None:
+                return False
+            tx, ty, tw, th = target
+            for band in tour.overlays:
+                bx, by = band.winfo_rootx(), band.winfo_rooty()
+                br, bb = bx + band.winfo_width(), by + band.winfo_height()
+                if bx <= tx + 2 and by <= ty + 2 and br >= tx + tw - 2 and bb >= ty + th - 2:
+                    return True
+            return False
+
+        if covered_by_overlay(tour.target_rect):
+            raise AssertionError("压暗层把要讲的那个控件盖住了（用户就点不了、也看不清）")
 
         steps = tour._steps()
         for _ in range(len(steps) - 1):
@@ -621,11 +641,17 @@ def main() -> int:
                 raise AssertionError("中途说明窗口没了")
             if tour.highlight is None or not tour.highlight.winfo_exists():
                 raise AssertionError("中途没有高亮框")
+            if len(tour.overlays) != 4:
+                raise AssertionError("换步之后压暗层数量不对：%d" % len(tour.overlays))
+            if covered_by_overlay(tour.target_rect):
+                raise AssertionError("某一步的压暗层盖住了目标控件")
         # 最后一步点「完成」→ 教学自己收尾（窗口收掉、打开的设置页也收掉）
         tour._go_next()
         pump(1)
         if tour.panel is not None or tour.highlight is not None:
             raise AssertionError("点完成后教学没有收起来")
+        if tour.overlays:
+            raise AssertionError("教学关了但压暗层没收掉")
         if tour._opened:
             raise AssertionError("教学关了但没把打开的设置页收掉")
         if app._tour is not None:
@@ -648,6 +674,19 @@ def main() -> int:
         pump(1)
         if app._tour is not None:
             raise AssertionError("再点一次没收起教学")
+
+        # 首次使用：自动弹一次；走完（或跳过）之后就不再自动弹
+        app.config["tour_done"] = False
+        if not app.maybe_first_run_tour():
+            raise AssertionError("第一次使用没有自动弹新手教学")
+        pump(1)
+        app.stop_tour()
+        pump(1)
+        if not app.config.get("tour_done"):
+            raise AssertionError("教学关掉之后没记下 tour_done（下次还会自动弹）")
+        if app.maybe_first_run_tour():
+            raise AssertionError("已经看过教学了，不该再自动弹")
+        app.config["tour_done"] = original_done
         app.clear_display()
 
     step("新手教学：分步高亮 + 说明（不改设置/不动学习库/不调接口）", guided_tour)

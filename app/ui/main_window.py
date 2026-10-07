@@ -1354,6 +1354,9 @@ class MainWindow:
         # 高频短语自动挖掘（默认开：多数人不翻设置，学习得自己跑起来才有用；
         # 见 词典窗口 →「挖掘高频短语…」里的开关）
         self.root.after(90000, self._phrase_mining_tick)
+        # 第一次用：过 2.5 秒自动放一遍新手教学（逐个功能说明怎么用、怎么设）。
+        # 放在其它弹窗前面，免得几个窗口同时冒出来互相压住。
+        self.root.after(2500, self.maybe_first_run_tour)
 
     # ------------------------------------------- 高频短语挖掘（自动的那条路）
     PHRASE_MINE_TICK = 60 * 60           # 每小时看一次"要不要挖"
@@ -1521,6 +1524,8 @@ class MainWindow:
         """
         if self.config.get("contribute_enabled"):
             return False
+        if self.tour_open():
+            return False               # 教学正开着：邀请下次启动再问（不会算作"问过了"）
         if not force and self.config.get("contribute_invite_done"):
             return False
         if not force and str(self.config.get("contribute_invite_version") or "") == __version__:
@@ -1685,15 +1690,34 @@ class MainWindow:
                                      prefix="(%s): " % channel))
 
     # ---------------------------------------------------------------- 新手教学
-    def open_tour(self) -> None:
+    def open_tour(self, first_run: bool = False) -> None:
         """新手教学：一步一步指着界面讲"这个功能在哪儿、怎么设置"（再点一次收起）。"""
         if getattr(self, "_tour", None) is not None:
             self.stop_tour()
             return
         from .tour import GuidedTour
 
-        self._tour = GuidedTour(self)
+        self._tour = GuidedTour(self, first_run=first_run)
         self._tour.start()
+        if self._tour is not None and getattr(self._tour, "panel", None) is None:
+            self._tour = None          # 没开起来（比如正在监听）就别留着
+
+    def tour_open(self) -> bool:
+        """教学正开着吗（启动时的其它弹窗要给它让路）。"""
+        return getattr(self, "_tour", None) is not None
+
+    def maybe_first_run_tour(self) -> bool:
+        """第一次用：自动放一遍新手教学。
+
+        完成或点「跳过」都会写进 `tour_done`，以后不再自动弹（右键菜单 / 设置→关于
+        里随时能重看）。返回"有没有真的弹出来"，自检直接看它。
+        """
+        if self.config.get("tour_done", False):
+            return False
+        if self.pipeline.running:
+            return False
+        self.open_tour(first_run=True)
+        return self.tour_open()
 
     def stop_tour(self) -> None:
         tour = getattr(self, "_tour", None)
@@ -1820,6 +1844,8 @@ class MainWindow:
         """启动后按间隔自动查一次（设置里可以关）。"""
         if not self.config.get("check_update", True):
             return
+        if self.tour_open():
+            return                     # 新手教学正开着，别弹更新窗口压在上面（下次启动再查）
         try:
             last = float(self.config.get("update_checked_at") or 0)
         except Exception:
