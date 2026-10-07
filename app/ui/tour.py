@@ -56,6 +56,9 @@ class GuidedTour:
         self._prev = None
         self._next = None
         self.target_rect = None
+        self._target_widget = None
+        self._configure_bind = None
+        self._reposition_job = None
         self._toolbar_was_collapsed = None
 
     # ---------------------------------------------------------------- 步骤
@@ -113,13 +116,120 @@ class GuidedTour:
         if not app.records:
             app.insert_demo_lines(2)
         app.set_status("新手教学：跟着圈出来的地方走一遍就会了（不会改你的任何设置）", "info")
+        # 窗口被拖动/缩放时，压暗层和金框要跟着目标走（只挪位置、不重建窗口，
+        # 不然拖起来会卡）。用 after 去抖，别在拖动过程中疯狂重画。
+        try:
+            self._configure_bind = app.root.bind("<Configure>", self._on_root_configure,
+                                                 add="+")
+        except Exception:                          # noqa: BLE001
+            self._configure_bind = None
         self._show()
+
+    # ------------------------------------------------- 跟着窗口走（拖动/缩放时）
+    def _on_root_configure(self, _event=None) -> None:
+        """主窗口被拖动/缩放 → 稍后重新摆一次（去抖：拖动过程中不狂重画）。"""
+        if self.panel is None:
+            return
+        if self._reposition_job is not None:
+            try:
+                self.app.root.after_cancel(self._reposition_job)
+            except Exception:                      # noqa: BLE001
+                pass
+        try:
+            self._reposition_job = self.app.root.after(80, self._reposition)
+        except Exception:                          # noqa: BLE001
+            self._reposition_job = None
+
+    def _reposition(self) -> None:
+        """只改几何、不重建窗口 —— 拖动时才跟得住（重建会闪、也会卡）。"""
+        self._reposition_job = None
+        rect = None
+        target = self._target_widget
+        if target is not None:
+            try:
+                target.update_idletasks()
+                width, height = target.winfo_width(), target.winfo_height()
+                if width > 1 and height > 1:
+                    rect = (target.winfo_rootx(), target.winfo_rooty(), width, height)
+            except Exception:                      # noqa: BLE001
+                rect = None
+        if rect is None:
+            rect = self.target_rect
+        if rect is None:
+            return
+        self.target_rect = rect
+        for window, box in zip(self.overlays, self._band_rects(rect)):
+            try:
+                window.lift()      # 保持在主窗口之上；lift 会动位置，紧接着设回去
+                window.geometry("%dx%d+%d+%d"
+                                % (box[2] - box[0], box[3] - box[1], box[0], box[1]))
+            except Exception:                      # noqa: BLE001
+                pass
+        if self.highlight is not None:
+            x, y, width, height = rect
+            pad = 6
+            try:
+                self.highlight.lift()
+                self.highlight.geometry("%dx%d+%d+%d"
+                                        % (width + pad * 2, height + pad * 2,
+                                           x - pad, y - pad))
+            except Exception:                      # noqa: BLE001
+                pass
+        self._place_panel(rect)
+
+    # ------------------------------------------------- 压暗层上的拖动转发
+    def _dim_hits_title(self, event) -> bool:
+        """这次按下是不是落在"主窗口顶部那一条"（标题/工具条 = 系统的拖动区）。"""
+        try:
+            strip = getattr(self.app, "top_frame", None) or self.app.actions
+            left = self.app.root.winfo_rootx()
+            right = left + self.app.root.winfo_width()
+            top = strip.winfo_rooty() - 4
+            bottom = strip.winfo_rooty() + strip.winfo_height() + 6
+        except Exception:                          # noqa: BLE001
+            return False
+        x = getattr(event, "x_root", -1)
+        y = getattr(event, "y_root", -1)
+        return left <= x <= right and top <= y <= bottom
+
+    def _on_dim_press(self, event) -> None:
+        """压在压暗层上、但位置是标题栏 → 当成"拖窗口"，转交给主窗口。"""
+        if not self._dim_hits_title(event):
+            return
+        try:
+            self.app.frameless.start_move(event)
+        except Exception:                          # noqa: BLE001
+            pass
+
+    def _on_dim_drag(self, event) -> None:
+        try:
+            self.app.frameless.drag(event)
+        except Exception:                          # noqa: BLE001
+            pass
+
+    def _on_dim_release(self, event) -> None:
+        try:
+            self.app.frameless.release(event)
+        except Exception:                          # noqa: BLE001
+            pass
 
     def close(self, finished: bool = False) -> None:
         # 自己要收掉时，把主窗口那份引用也清掉 —— 否则"走完自动关闭"之后，
         # 用户再点一次「新手教学」会变成"收掉一个已经关掉的窗口"，什么也不会发生。
         if getattr(self.app, "_tour", None) is self:
             self.app._tour = None
+        if self._reposition_job is not None:
+            try:
+                self.app.root.after_cancel(self._reposition_job)
+            except Exception:                      # noqa: BLE001
+                pass
+            self._reposition_job = None
+        if self._configure_bind is not None:
+            try:
+                self.app.root.unbind("<Configure>", self._configure_bind)
+            except Exception:                      # noqa: BLE001
+                pass
+            self._configure_bind = None
         self._restore_toolbar()
         self._destroy_highlight()
         self._destroy_overlays()
@@ -166,6 +276,7 @@ class GuidedTour:
 
     def _point_at(self, target) -> None:
         """压暗目标以外的地方 + 套一圈金框 + 把说明卡片摆到旁边。"""
+        self._target_widget = target
         rect = None
         if target is not None:
             try:
@@ -197,40 +308,75 @@ class GuidedTour:
                 self.panel.after(40, lambda r=rect: self._place_panel(r))
             except Exception:                      # noqa: BLE001
                 pass
+        # 压暗层/金框在"改样式 → 设位置"之后再兜一次：某些系统上仍会被打回 (0,0)
+        if self.overlays or self.highlight is not None:
+            try:
+                self.app.root.after(60, self._reposition)
+            except Exception:                      # noqa: BLE001
+                pass
+
+    def _band_rects(self, rect):
+        """目标以外压暗用的四块"上 / 下 / 左 / 右"矩形（拖动时也用它重新摆位）。
+
+        固定返回 4 块（退化成一两像素也给一块），这样 `self.overlays` 和这里的顺序
+        永远一一对应，拖动窗口时直接按顺序摆就行。
+        """
+        try:
+            screen_w = self.app.root.winfo_screenwidth()
+            screen_h = self.app.root.winfo_screenheight()
+        except Exception:                          # noqa: BLE001
+            return []
+        pad = 8
+        x0 = max(0, rect[0] - pad)
+        y0 = max(0, rect[1] - pad)
+        x1 = min(screen_w, rect[0] + rect[2] + pad)
+        y1 = min(screen_h, rect[1] + rect[3] + pad)
+        bands = [(0, 0, screen_w, y0),                 # 上
+                 (0, y1, screen_w, screen_h),          # 下
+                 (0, y0, x0, y1),                      # 左
+                 (x1, y0, screen_w, y1)]               # 右
+        fixed = []
+        for left, top, right, bottom in bands:
+            if right - left < 1:
+                right = min(screen_w, left + 1)
+            if bottom - top < 1:
+                bottom = min(screen_h, top + 1)
+            fixed.append((left, top, right, bottom))
+        return fixed
 
     def _draw_overlays(self, rect) -> None:
         """目标之外压暗：四块半透明黑窗把目标"抠"出来（目标那块保持原样、照样能点）。"""
         self._destroy_overlays()
         if rect is None:
             return
-        try:
-            screen_w = self.app.root.winfo_screenwidth()
-            screen_h = self.app.root.winfo_screenheight()
-        except Exception:                          # noqa: BLE001
-            return
-        pad = 8
-        x0 = max(0, rect[0] - pad)
-        y0 = max(0, rect[1] - pad)
-        x1 = min(screen_w, rect[0] + rect[2] + pad)
-        y1 = min(screen_h, rect[1] + rect[3] + pad)
-        bands = ((0, 0, screen_w, y0),                     # 上
-                 (0, y1, screen_w, screen_h),              # 下
-                 (0, y0, x0, y1),                          # 左
-                 (x1, y0, screen_w, y1))                   # 右
-        for left, top, right, bottom in bands:
-            width, height = right - left, bottom - top
-            if width < 2 or height < 2:
-                continue
+        for left, top, right, bottom in self._band_rects(rect):
             try:
+                # 顺序很挑（实测踩了两遍）：**先隐藏 → 改扩展样式 → 设透明度 → 设位置
+                # → 最后才显示**。已经显示的窗口再改扩展样式，会把 Tk 的分层渲染弄坏
+                # （画面就不压暗了），位置也会被打回 (0,0)。
                 band = tk.Toplevel(self.app.root)
+                band.withdraw()
                 band.overrideredirect(True)
                 band.attributes("-topmost", True)
                 band.configure(bg="#000000")
+                # 压暗层**不**做成"不吃鼠标"：实测那样会把它的压暗渲染弄坏
+                # （改扩展样式会清掉 Tk 的分层属性，画面就不暗了）。
+                # 改成：它照常压暗，但把"落在标题栏上的拖动"转交给主窗口 ——
+                # 用户实测的"鼠标拖动框体不跟手"就是压暗层把标题栏盖住了。
                 try:
                     band.attributes("-alpha", DIM_ALPHA)
                 except Exception:                  # noqa: BLE001
                     pass
-                band.geometry("%dx%d+%d+%d" % (width, height, left, top))
+                band.bind("<ButtonPress-1>", self._on_dim_press)
+                band.bind("<B1-Motion>", self._on_dim_drag)
+                band.bind("<ButtonRelease-1>", self._on_dim_release)
+                band.geometry("%dx%d+%d+%d"
+                              % (right - left, bottom - top, left, top))
+                band.deiconify()
+                # 提到最前面：主窗口自己也是 topmost 的，不 lift 的话压暗层会压在它下面
+                # （窗口本身就不变暗）。lift 会把位置打回 (0,0)，后面那次"重新摆位"
+                # （_point_at 里 after 60ms 安排的）会把位置再设对一次。
+                band.lift()
                 self.overlays.append(band)
             except Exception:                      # noqa: BLE001
                 continue
@@ -243,9 +389,13 @@ class GuidedTour:
         pad = 6
         try:
             window = tk.Toplevel(self.app.root)
+            window.withdraw()
             window.overrideredirect(True)
             window.attributes("-topmost", True)
             window.configure(bg=SPOT_KEY)
+            # 金框要"只显示、不吃鼠标"（它盖在目标上，不能挡住用户点那个按钮）；
+            # 内部抠透明也要在窗口还没显示的时候设好
+            theme.make_click_through(window)
             try:
                 # 内部抠成透明，只留一圈金框（和"只透明背景"用的是同一个招）
                 window.attributes("-transparentcolor", SPOT_KEY)
@@ -257,6 +407,8 @@ class GuidedTour:
                                     outline=SPOT_LINE, width=3)
             window.geometry("%dx%d+%d+%d"
                             % (width + pad * 2, height + pad * 2, x - pad, y - pad))
+            window.deiconify()
+            window.lift()
             self.highlight = window
         except Exception:                          # noqa: BLE001
             self.highlight = None

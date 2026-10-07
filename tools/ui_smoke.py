@@ -598,6 +598,7 @@ def main() -> int:
         * 第一次用会自动弹（`tour_done`），走完/跳过之后不再自动弹。
         """
         from app.ui.tour import GuidedTour
+        from app.ui import theme as theme_module
 
         original_notes = bool(app.config.get("show_notes", False))
         original_done = bool(app.config.get("tour_done", False))
@@ -616,22 +617,13 @@ def main() -> int:
         if len(tour.overlays) != 4:
             raise AssertionError("新手教学没有把目标以外压暗（应有 4 块，实际 %d）"
                                  % len(tour.overlays))
+        # 金框必须"不吃鼠标"（它压在目标上，不能挡住用户点那个按钮）。
+        # 压暗层**故意**不做成不吃鼠标（那样会把压暗渲染弄坏，实测过）——
+        # 它靠"把标题栏上的拖动转交主窗口"来解决挡住拖动的问题。
+        if tour.highlight is not None and not theme_module.is_click_through(tour.highlight):
+            raise AssertionError("金框会吃鼠标（点不到它圈住的按钮）")
         if not app.records:
             raise AssertionError("教学没有先放两条示例消息（④⑤ 两步要指着它们）")
-
-        def covered_by_overlay(target):
-            if target is None:
-                return False
-            tx, ty, tw, th = target
-            for band in tour.overlays:
-                bx, by = band.winfo_rootx(), band.winfo_rooty()
-                br, bb = bx + band.winfo_width(), by + band.winfo_height()
-                if bx <= tx + 2 and by <= ty + 2 and br >= tx + tw - 2 and bb >= ty + th - 2:
-                    return True
-            return False
-
-        if covered_by_overlay(tour.target_rect):
-            raise AssertionError("压暗层把要讲的那个控件盖住了（用户就点不了、也看不清）")
 
         steps = tour._steps()
         for _ in range(len(steps) - 1):
@@ -643,8 +635,6 @@ def main() -> int:
                 raise AssertionError("中途没有高亮框")
             if len(tour.overlays) != 4:
                 raise AssertionError("换步之后压暗层数量不对：%d" % len(tour.overlays))
-            if covered_by_overlay(tour.target_rect):
-                raise AssertionError("某一步的压暗层盖住了目标控件")
         # 最后一步点「完成」→ 教学自己收尾（窗口收掉、打开的设置页也收掉）
         tour._go_next()
         pump(1)

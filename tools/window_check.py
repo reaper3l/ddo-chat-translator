@@ -498,6 +498,59 @@ def main() -> int:
     # 还没散掉的窗口挡住，偶发地判成"开太远"（实测遇到过一次）
     pump(app, 0.4)
 
+    # ---------------- 新手教学：压暗层不能挡住鼠标，拖动时高亮要跟着走 ----------------
+    def tour_keeps_mouse_and_follows_drag():
+        from app.ui import theme as theme_module
+        from app.ui.tour import GuidedTour
+
+        app.config["tour_done"] = True         # 别让下面的检查触发"首次自动弹"
+        tour = GuidedTour(app, first_run=False)
+        app._tour = tour
+        tour.start()
+        pump(app, 0.6)
+        if tour.panel is None or tour.highlight is None:
+            raise AssertionError("新手教学没开起来")
+        # ① 金框必须"只显示、不吃鼠标"（它是压在目标上的，不能挡住用户点那个按钮）。
+        #    压暗层故意不做成不吃鼠标（实测那样会把压暗渲染弄坏）——
+        #    它靠"把标题栏位置的拖动转交主窗口"，所以下面直接**在压暗层上拖**来验证。
+        if not theme_module.is_click_through(tour.highlight):
+            raise AssertionError("金框会吃鼠标（点不到它圈住的按钮）")
+        # ② 教学开着时拖动标题栏，窗口要动，而且高亮/卡片要跟着目标走
+        before = (app.root.winfo_x(), app.root.winfo_y())
+        # 注意：透明/分层窗口的 winfo_rootx() 不可靠（实测一直返回 0），
+        # 这里看教学自己记着的目标矩形 —— 金框就是按它摆的
+        spot_before = (tour.target_rect or (0,))[0]
+        # 用**压暗层**当拖动起点：这正是用户"拖动框体不跟手"的场景
+        # （压暗层盖住了标题栏，按下要先被它接到、再转交给主窗口）
+        header = tour.overlays[0] if tour.overlays else app.root
+        header.event_generate("<ButtonPress-1>", x=30, y=8,
+                              rootx=before[0] + 30, rooty=before[1] + 8)
+        app.root.update()
+        header.event_generate("<B1-Motion>", x=90, y=28,
+                              rootx=before[0] + 90, rooty=before[1] + 28)
+        pump(app, 0.5)
+        header.event_generate("<ButtonRelease-1>", x=90, y=28,
+                              rootx=before[0] + 90, rooty=before[1] + 28)
+        pump(app, 0.5)
+        after = (app.root.winfo_x(), app.root.winfo_y())
+        moved = abs(after[0] - before[0]) >= 20 or abs(after[1] - before[1]) >= 20
+        spot_after = (tour.target_rect or (0,))[0]
+        followed = tour.target_rect is not None and (
+            abs((spot_after - spot_before) - (after[0] - before[0])) <= 12)
+        tour.close()
+        app._tour = None
+        snap = getattr(app, "_window_positions", None)
+        _ = snap
+        return moved, followed, before, after, spot_before, spot_after
+
+    moved, followed, before, after, spot_before, spot_after = \
+        tour_keeps_mouse_and_follows_drag()
+    check("新手教学开着时：窗口能正常拖动（压暗层不吃鼠标）",
+          moved, "窗口 (%d,%d) → (%d,%d)" % (before + after))
+    check("新手教学开着时：金框跟着目标一起移动（拖窗口不会错位）",
+          followed, "金框 x %d → %d（窗口移动 %d）"
+          % (spot_before, spot_after, after[0] - before[0]))
+
     # ---------------- 弹窗要开在主窗口旁边（不是屏幕左上角） ----------------
     # ---------------- 右键「过滤这个说话人」（用户要求：能过滤某一个人，比如自己） ------
     from app.pipeline import DisplayItem

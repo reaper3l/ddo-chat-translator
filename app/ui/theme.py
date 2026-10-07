@@ -407,6 +407,113 @@ def prepare_window(window: tk.Misc, config: Optional[dict] = None) -> None:
     apply_dark_titlebar(window)
 
 
+def make_click_through(window: tk.Misc) -> bool:
+    """让一个窗口"只显示、不吃鼠标"（Windows：扩展样式加 WS_EX_TRANSPARENT）。
+
+    新手教学的压暗层必须这样：它盖住屏幕上除目标以外的所有地方，如果吃鼠标，
+    用户想拖窗口、点别的地方就全被挡住了（用户实测反馈："鼠标拖动框体不跟手"）。
+    加上这个之后，压暗层纯属画面效果，鼠标事件直接穿过去给底下的窗口。
+    顺手也加 WS_EX_NOACTIVATE：免得点它的时候把焦点从主窗口抢走。
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        # 先按物理像素拿句柄（和截图/窗口矩形一套坐标，避免高 DPI 下拿错窗口）
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        try:
+            hwnd = wintypes.HWND(int(window.winfo_id()))
+            gwl_exstyle = -20
+            ws_ex_layered = 0x00080000
+            ws_ex_transparent = 0x00000020
+            ws_ex_noactivate = 0x08000000
+            if hasattr(user32, "GetWindowLongPtrW"):
+                get_long, set_long = user32.GetWindowLongPtrW, user32.SetWindowLongPtrW
+            else:                                  # 32 位 Python
+                get_long, set_long = user32.GetWindowLongW, user32.SetWindowLongW
+            get_long.restype = ctypes.c_ssize_t
+            get_long.argtypes = [wintypes.HWND, ctypes.c_int]
+            set_long.restype = ctypes.c_ssize_t
+            set_long.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+            style = int(get_long(hwnd, gwl_exstyle) or 0)
+            new_style = style | ws_ex_layered | ws_ex_transparent | ws_ex_noactivate
+            set_long(hwnd, gwl_exstyle, new_style)
+            return True
+        finally:
+            try:
+                user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))
+            except Exception:                      # noqa: BLE001
+                pass
+    except Exception:                              # noqa: BLE001
+        return False
+
+
+def is_click_through(window: tk.Misc) -> bool:
+    """这个窗口现在是不是"只显示、不吃鼠标"（自检用：抓不到就返回 False）。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetWindowLongW.restype = ctypes.c_ssize_t
+        style = int(user32.GetWindowLongW(
+            wintypes.HWND(int(window.winfo_id())), -20) or 0)
+        return bool(style & 0x00000020)        # WS_EX_TRANSPARENT
+    except Exception:                              # noqa: BLE001
+        return False
+
+
+def window_rect(window: tk.Misc) -> Optional[tuple]:
+    """窗口在屏幕上的真实矩形 (左, 上, 右, 下)。
+
+    为什么不用 `winfo_rootx()`：对**分层窗口**（`-alpha` / `-transparentcolor`）
+    Tk 会一直报 0 —— 新手教学的压暗层和金框就是这类窗口，自检如果读 Tk 的坐标，
+    会得出"压暗层跑到屏幕左上角去了"的假结论（实测踩过）。这里直接问系统。
+    """
+    if sys.platform != "win32":
+        try:
+            return (window.winfo_rootx(), window.winfo_rooty(),
+                    window.winfo_rootx() + window.winfo_width(),
+                    window.winfo_rooty() + window.winfo_height())
+        except Exception:                          # noqa: BLE001
+            return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        try:
+            user32.GetWindowRect.argtypes = [wintypes.HWND,
+                                             ctypes.POINTER(wintypes.RECT)]
+            # Tk 的顶层窗外面还有一层系统包装窗（分层窗口尤其明显）：
+            # `winfo_id()` 拿到的是里面那层，直接量会得到"相对坐标"（实测拿到过 (0,48,175,99)
+            # 这种明显不对的值）。先解析到真正的顶层再量。
+            user32.GetAncestor.restype = wintypes.HWND
+            user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            hwnd = wintypes.HWND(int(window.winfo_id()))
+            ancestor = user32.GetAncestor(hwnd, 2)      # GA_ROOT
+            if ancestor:
+                hwnd = ancestor
+            rect = wintypes.RECT()
+            if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return (rect.left, rect.top, rect.right, rect.bottom)
+        finally:
+            try:
+                user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))
+            except Exception:                      # noqa: BLE001
+                pass
+    except Exception:                              # noqa: BLE001
+        pass
+    return None
+
+
 def apply_dark_titlebar(window: tk.Misc) -> None:
     """让 Windows 原生标题栏也变成深色（没启用无边框时用得到）。
 

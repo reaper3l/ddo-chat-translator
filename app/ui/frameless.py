@@ -136,6 +136,15 @@ class FramelessWindow:
         if self.enabled:
             self._begin("resize", edge, event)
 
+    def start_move(self, event) -> None:
+        """开始"移动窗口"。
+
+        给"别人替我转发拖动"用的：新手教学的压暗层盖住了标题栏，用户在上面按下时
+        要把这次拖动转交到这里（否则鼠标会被压暗层吃掉，表现为"拖动框体不跟手"）。
+        """
+        if self.enabled:
+            self._begin("move", "", event)
+
     def drag(self, event) -> None:
         """给缩放角绑 <B1-Motion> 用（公开包装，避免外部调用私有方法）。"""
         self._on_drag(event)
