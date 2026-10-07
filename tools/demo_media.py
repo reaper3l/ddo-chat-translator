@@ -74,6 +74,112 @@ def _window_box(app, screen):
     return capture.convert_region([left, top, left + width, top + height], screen)
 
 
+def _rect_of(widget):
+    """任意窗口的**物理像素**矩形（和 `_window_box` 同一套办法）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    try:
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+        rect = wintypes.RECT()
+        if user32.GetWindowRect(widget.winfo_id(), ctypes.byref(rect)):
+            return [rect.left, rect.top, rect.right, rect.bottom]
+    except Exception:                              # noqa: BLE001
+        pass
+    finally:
+        try:
+            user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-1))
+        except Exception:                          # noqa: BLE001
+            pass
+    try:
+        return [widget.winfo_rootx(), widget.winfo_rooty(),
+                widget.winfo_rootx() + widget.winfo_width(),
+                widget.winfo_rooty() + widget.winfo_height()]
+    except Exception:                              # noqa: BLE001
+        return None
+
+
+def _toplevels(widget):
+    """递归找出所有 Toplevel（教学里的设置页挂在"设置中心"下面，不是主窗口的直接子窗口）。"""
+    import tkinter as tk
+
+    found = []
+    for child in widget.winfo_children():
+        if isinstance(child, tk.Toplevel):
+            found.append(child)
+        found.extend(_toplevels(child))
+    return found
+
+
+def _app_box(app):
+    """把程序当前所有可见窗口圈在一起的框（教学要连设置页一起录进去）。"""
+    boxes = []
+    for window in [app.root] + _toplevels(app.root):
+        try:
+            if not window.winfo_ismapped():
+                continue
+            rect = _rect_of(window)
+            if rect:
+                boxes.append(rect)
+        except Exception:                          # noqa: BLE001
+            continue
+    if not boxes:
+        return _window_box(app, (0, 0))
+    return [min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes)]
+
+
+def _app_windows(app):
+    """程序当前可见的窗口及它们的物理矩形：[(是不是高亮框, [左,上,右,下]), ...]。"""
+    from app.ui.tour import SPOT_KEY                 # noqa: F401  （只为确认模块在）
+
+    found = []
+    for window in [app.root] + _toplevels(app.root):
+        try:
+            if not window.winfo_ismapped():
+                continue
+            rect = _rect_of(window)
+            if not rect:
+                continue
+            is_spot = False
+            try:
+                is_spot = str(window.attributes("-transparentcolor")) == SPOT_KEY
+            except Exception:                        # noqa: BLE001
+                is_spot = False
+            found.append((is_spot, rect))
+        except Exception:                            # noqa: BLE001
+            continue
+    return found
+
+
+def _compose_on_clean_background(screen_image, box, windows,
+                                 background=(12, 14, 20)):
+    """把"程序自己的窗口"贴到干净底色上，其余（桌面/游戏/别的软件）一律不录进去。
+
+    为什么要这么绕：教学会同时开着主窗口、设置页、说明卡片，直接截"外接矩形"会把
+    中间的桌面一起录进去（实测：桌面上还有别的窗口，发群不合适）。这里逐窗口裁剪再贴。
+    透明的高亮框不裁（裁出来是它背后的桌面），改成按它的矩形画一圈金框。
+    """
+    from PIL import Image, ImageDraw
+
+    canvas = Image.new("RGB", screen_image.size, background)
+    for is_spot, rect in windows:
+        left = max(0, rect[0] - box[0])
+        top = max(0, rect[1] - box[1])
+        right = min(screen_image.width, rect[2] - box[0])
+        bottom = min(screen_image.height, rect[3] - box[1])
+        if right - left < 2 or bottom - top < 2:
+            continue
+        if is_spot:                                  # 高亮框：只画边框
+            ImageDraw.Draw(canvas).rectangle([left + 3, top + 3, right - 3, bottom - 3],
+                                             outline=(255, 204, 77), width=3)
+            continue
+        canvas.paste(screen_image.crop((left, top, right, bottom)), (left, top))
+    return canvas
+
+
 def _trim_dead_border(image, limit: int = 0):
     """裁掉贴着边缘那一条"没画到东西"的黑边。
 
@@ -113,6 +219,10 @@ def main() -> int:
     parser.add_argument("--fps", type=float, default=3.0, help="动图帧率（默认 3）")
     parser.add_argument("--gif-scale", type=float, default=0.6,
                         help="动图缩小到多少（默认 0.6，发群有大小限制）")
+    parser.add_argument("--tour", action="store_true",
+                        help="录「新手教学」（分步高亮 + 怎么设置）而不是示例聊天")
+    parser.add_argument("--tour-step", type=float, default=4.0,
+                        help="教学每一步停留几秒（默认 4）")
     args = parser.parse_args()
 
     out_dir = Path(args.out) if args.out else ROOT.parent / "work" / "demo"
@@ -135,21 +245,57 @@ def main() -> int:
 
     frames = []
     shot = None
-    print("正在放演示并录制（约十几秒，请别动鼠标…）")
-    app.play_demo()
-    deadline = time.time() + 45
-    while time.time() < deadline:
-        app.root.update()
-        box = _window_box(app, screen)
-        image = capture.grab_fast(box, None)          # box 已经是物理像素，别再换算
-        if image is None:
-            image = capture.grab_dxgi(box)
-        if image is not None:
-            frames.append(_trim_dead_border(image))
-            shot = frames[-1]
-        if not getattr(app, "_demo_timer", None):
-            break                                   # 演示放完了
-        time.sleep(interval)
+    prefix = "教学" if args.tour else "演示"
+    if args.tour:
+        print("正在放「新手教学」并录制（每一步停 %.1f 秒，请别动鼠标…）"
+              % max(1.0, args.tour_step))
+        app.open_tour()
+        tour = getattr(app, "_tour", None)
+        if tour is None:
+            print("教学没开起来（是不是正在监听？先停下再录）")
+            app.root.destroy()
+            return 1
+        steps = len(tour._steps())
+        per_step = max(2, int(round(max(1.0, args.tour_step) / max(0.05, interval))))
+        # 按"一步一录"来，别用计时循环 —— 那样录到哪一步全看机器快慢（实测会漏掉后半段）
+        for step_index in range(steps):
+            for _ in range(per_step):
+                app.root.update()
+                # 说明卡片是"延后 40ms 再摆一次"才定下来的（见 tour._point_at），
+                # 这里先等它落位，再算要截的范围 —— 不然会把卡片右边切掉
+                time.sleep(0.08)
+                app.root.update()
+                box = _app_box(app)
+                screen_image = capture.grab_fast(box, None)
+                if screen_image is not None:
+                    # 只留程序自己的窗口，桌面/游戏/别的软件一律不录进去
+                    image = _compose_on_clean_background(screen_image, box,
+                                                         _app_windows(app))
+                    frames.append(image)
+                    shot = image
+                time.sleep(interval)
+            if step_index + 1 < steps:
+                try:
+                    tour._go_next()
+                except Exception:                  # noqa: BLE001
+                    break
+    else:
+        print("正在放演示并录制（约十几秒，请别动鼠标…）")
+        app.play_demo()
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            app.root.update()
+            box = _window_box(app, screen)
+            image = capture.grab_fast(box, None)
+            if image is None:
+                image = capture.grab_dxgi(box)
+            if image is not None:
+                frames.append(_trim_dead_border(image))
+                shot = frames[-1]
+            if not getattr(app, "_demo_timer", None):
+                break                           # 演示放完了
+            time.sleep(interval)
+    _ = prefix
     # 再补最后两帧，让动图结尾停一下（别一放完就跳走）
     for _ in range(2):
         app.root.update()
@@ -165,13 +311,28 @@ def main() -> int:
         app.root.destroy()
         return 1
 
-    png_path = out_dir / "演示_主窗口.png"
+    png_path = out_dir / ("%s_主窗口.png" % prefix)
+    # 教学那张静态图挑"内容最全"的一帧（教学是分步的，最后一帧往往已经收起来了）
+    if args.tour and frames:
+        shot = max(frames, key=lambda f: f.width * f.height)
     shot.save(png_path)
     print("截图：%s（%dx%d）" % (png_path, shot.width, shot.height))
 
-    gif_path = out_dir / "演示_主窗口.gif"
+    gif_path = out_dir / ("%s_主窗口.gif" % prefix)
     # 缩小 + 256 色，压到能直接发群（不然 700x775 的十几秒动图要好几 MB）
     scale = max(0.2, min(1.0, float(args.gif_scale)))
+    # 教学每一步的窗口不一样大 → 先统一到同一张画布（左上对齐），否则动图会花
+    if frames:
+        from PIL import Image
+
+        width = max(frame.width for frame in frames)
+        height = max(frame.height for frame in frames)
+        unified = []
+        for frame in frames:
+            canvas = Image.new("RGB", (width, height), (12, 14, 20))
+            canvas.paste(frame, (0, 0))
+            unified.append(canvas)
+        frames = unified
     gif_frames = []
     for frame in frames:
         size = (max(1, int(frame.width * scale)), max(1, int(frame.height * scale)))

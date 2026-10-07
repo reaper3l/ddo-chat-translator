@@ -194,6 +194,7 @@ class SettingsDialog:
         flow.pack(fill="x", padx=10, pady=(2, 6))
         for text, command in (
                 ("演示一下（放一段示例聊天）", self.app.play_demo),
+                ("新手教学（怎么设置、怎么用）", self.app.open_tour),
                 ("立即检查更新", lambda: self.app.check_update(manual=True)),
                 ("打开发行页",
                  lambda: update_module.open_page(HOMEPAGE + "/releases")),

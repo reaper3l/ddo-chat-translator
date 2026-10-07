@@ -586,6 +586,72 @@ def main() -> int:
 
     step("演示一下：只画到显示区（不联网、不写学习库、做完还原设置）", demo_playback)
 
+    def guided_tour():
+        """新手教学：一步步指着界面说明"这个功能在哪儿、怎么设置"。
+
+        用户要求：演示不能只给结果，还要教**怎么操作/设置**（填接口、纠错、过滤人名、
+        中英互译、调颜色）。这里把每一步都走一遍，确认：
+        * 每一步都能画出高亮框 + 说明卡片（不报错、不卡住）；
+        * **不改配置、不写学习库、不调接口**（互译窗口要用 auto_suggest=False）；
+        * 教学里打开的窗口，换步/结束时都收掉。
+        """
+        from app.ui.tour import GuidedTour
+
+        original_notes = bool(app.config.get("show_notes", False))
+        terms_before = len(app.memory.term_list())
+        cache_before = len(app.pipeline._cache)
+        config_before = dict(app.config)
+
+        app.clear_display()
+        tour = GuidedTour(app)
+        app._tour = tour
+        tour.start()
+        if tour.panel is None or not tour.panel.winfo_exists():
+            raise AssertionError("新手教学没有打开说明窗口")
+        if tour.highlight is None or not tour.highlight.winfo_exists():
+            raise AssertionError("新手教学没有画出高亮框")
+        if not app.records:
+            raise AssertionError("教学没有先放两条示例消息（④⑤ 两步要指着它们）")
+
+        steps = tour._steps()
+        for _ in range(len(steps) - 1):
+            tour._go_next()
+            pump(1)
+            if tour.panel is None or not tour.panel.winfo_exists():
+                raise AssertionError("中途说明窗口没了")
+            if tour.highlight is None or not tour.highlight.winfo_exists():
+                raise AssertionError("中途没有高亮框")
+        # 最后一步点「完成」→ 教学自己收尾（窗口收掉、打开的设置页也收掉）
+        tour._go_next()
+        pump(1)
+        if tour.panel is not None or tour.highlight is not None:
+            raise AssertionError("点完成后教学没有收起来")
+        if tour._opened:
+            raise AssertionError("教学关了但没把打开的设置页收掉")
+        if app._tour is not None:
+            raise AssertionError("教学自己关了，但主窗口那份引用没清（下次点会没反应）")
+        if app.config.get("show_notes") is not original_notes:
+            raise AssertionError("教学改动了「显示备注」设置")
+        if len(app.memory.term_list()) != terms_before \
+                or len(app.pipeline._cache) != cache_before:
+            raise AssertionError("教学写进学习库/缓存了（不该动）")
+        for key, value in config_before.items():          # 配置一个字都不许被改
+            if app.config.get(key) != value:
+                raise AssertionError("教学改了配置项：%s" % key)
+
+        # 再开一次，确认"再点一次收起"能用
+        app.open_tour()
+        pump(1)
+        if app._tour is None:
+            raise AssertionError("第二次教学没开起来")
+        app.open_tour()                                   # 再点一次 = 收起
+        pump(1)
+        if app._tour is not None:
+            raise AssertionError("再点一次没收起教学")
+        app.clear_display()
+
+    step("新手教学：分步高亮 + 说明（不改设置/不动学习库/不调接口）", guided_tour)
+
     def channel_strip():
         """收起工具条后那块留白：一排频道小灯，点一下就能开关频道。"""
         from app import channels as channels_module

@@ -286,6 +286,8 @@ class MainWindow:
         self.menu.add_separator()
         self.menu.add_command(label="演示一下（放一段示例聊天，不联网）",
                               command=self.play_demo)
+        self.menu.add_command(label="新手教学（怎么设置、怎么用）",
+                              command=self.open_tour)
         self.menu.add_separator()
         self.menu.add_command(label="中英互译 (Ctrl+Enter 发送)", command=self.open_cn2en)
         self.menu.add_command(label="显示/隐藏英文原文", command=self.toggle_original)
@@ -319,6 +321,7 @@ class MainWindow:
         """按当前设置重建工具栏按钮（图标 + 文字，或只显示图标）。"""
         for child in self.actions.winfo_children():
             child.destroy()
+        self._action_buttons = {}          # 按名字记一份："新手教学"要指着它们讲
         icons_only = bool(self.config.get("toolbar_icons_only", False))
         for icon, label, method, tip in ACTION_BUTTONS:
             command = getattr(self, method, None)
@@ -331,6 +334,7 @@ class MainWindow:
             if icons_only:
                 button.configure(width=2)
             button.pack(side="left", padx=0)
+            self._action_buttons[label] = button
             theme.Tooltip(button, "%s：%s" % (label, tip) if icons_only else tip)
         # 图标/文字模式切换会影响监听按钮的宽度和样式，这里同步一次
         if hasattr(self, "stats_var"):
@@ -1101,6 +1105,7 @@ class MainWindow:
             self.pipeline.stop()
             return
         self.stop_demo()          # 演示中的话先停掉，免得和真实聊天混在一起
+        self.stop_tour()          # 教学窗口也收掉（他要开始真用了）
         if not self.config.get("region"):
             self.set_status("先点「区域」框选游戏聊天框", "warn")
             self.select_region()
@@ -1670,6 +1675,35 @@ class MainWindow:
             self.config["show_notes"] = self._demo_show_notes
             del self._demo_show_notes
 
+    def insert_demo_lines(self, count: int = 2) -> None:
+        """往显示区放几条示例消息 —— **只画**，不联网、不写学习库（新手教学用）。"""
+        for index, (_delay, row) in enumerate(self.DEMO_LINES[:max(1, int(count))]):
+            kind, channel, speaker, source, translated, note = row
+            self._render(DisplayItem(seq=950000 + index, kind=kind, channel=channel,
+                                     speaker=speaker, source=source,
+                                     translated=translated or source, note=note,
+                                     prefix="(%s): " % channel))
+
+    # ---------------------------------------------------------------- 新手教学
+    def open_tour(self) -> None:
+        """新手教学：一步一步指着界面讲"这个功能在哪儿、怎么设置"（再点一次收起）。"""
+        if getattr(self, "_tour", None) is not None:
+            self.stop_tour()
+            return
+        from .tour import GuidedTour
+
+        self._tour = GuidedTour(self)
+        self._tour.start()
+
+    def stop_tour(self) -> None:
+        tour = getattr(self, "_tour", None)
+        if tour is not None:
+            try:
+                tour.close()
+            except Exception:                      # noqa: BLE001
+                pass
+            self._tour = None
+
     def quit_app(self) -> None:
         # 防重入：关程序时有两处"等后台网络"（自动学习 / 参与改进），用户等急了
         # 再点一次关闭按钮，不该把整条退出流程跑第二遍。
@@ -1677,6 +1711,7 @@ class MainWindow:
             return
         self._quitting = True
         self.stop_demo()          # 演示中的话先停下（顺便把"显示备注"还原回去）
+        self.stop_tour()          # 教学里开的窗口也一起收掉
         try:
             self.config["window_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
             self.config["window_size"] = [self.root.winfo_width(),
