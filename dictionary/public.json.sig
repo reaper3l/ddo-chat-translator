@@ -1,5 +1,5 @@
 ---- DDO-DICT-SIGNATURE ----
 version: 1
 file: public.json
-sha256: 400358d5c717b2c106684e0dca34978f722f3aa579ce8d1b4de9cf453a8e6919
-sig: /Y6nCruYWjNYI9dbtdp+QgXvwAujRTs0tNk+eC7/8ObnZMmuiQYitLs3FgRPXVT+yrcbYI4YKdpz9Yp2VfxiAw==
+sha256: a63668367e257e93d0cd94e7f90f062a3973a39c7d342df25d8c2b1f39e971df
+sig: awxY5tKg8W7U2lAkEdZErz0Cp2FUmg36w/EYzDBMLwkXdezoy+pkOb2v2js++orBr7JEfTkWtEEQS3xfnDMuBA==
