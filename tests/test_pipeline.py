@@ -108,6 +108,11 @@ def make_pipeline(engine) -> Pipeline:
     glossary = Glossary({"need heals": "需要治疗", "shroud": "幽影堡", "omw": "马上到"})
     pipeline = Pipeline(config, memory, glossary, queue.Queue())
     pipeline.engine = engine
+    # Pipeline 构造时会去读**用户真实**的 data\cache.json（paths.CACHE_PATH），
+    # 于是"缓存里有几条"会随用户的使用历史变化，断言就变得不稳定（实测：用户用出
+    # 2 条缓存后，下面"重建术语表不清空缓存"那条测试就挂了）。测试自己从干净状态开始。
+    pipeline._cache.clear()
+    pipeline._cache_dirty = False
     return pipeline
 
 
