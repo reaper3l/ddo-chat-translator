@@ -20,12 +20,12 @@ VSVersionInfo(
           [
             StringStruct(u'CompanyName', u'一键三连'),
             StringStruct(u'FileDescription', u'DDO 龙与地下城OL 聊天翻译助手'),
-            StringStruct(u'FileVersion', u'3.0.34.0'),
+            StringStruct(u'FileVersion', u'3.0.35.0'),
             StringStruct(u'InternalName', u'DDOTranslator'),
             StringStruct(u'LegalCopyright', u'Copyright (C) 2026 一键三连'),
-            StringStruct(u'OriginalFilename', u'DDO翻译助手_v3.0.34.exe'),
+            StringStruct(u'OriginalFilename', u'DDO翻译助手_v3.0.35.exe'),
             StringStruct(u'ProductName', u'DDO翻译助手'),
-            StringStruct(u'ProductVersion', u'3.0.34.0'),
+            StringStruct(u'ProductVersion', u'3.0.35.0'),
             StringStruct(u'Comments', u'作者：一键三连　主页：https://gitee.com/git55236/ddo-chat-translator'),
           ]
         )

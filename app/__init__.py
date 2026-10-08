@@ -3,7 +3,7 @@
 import time
 from pathlib import Path
 
-__version__ = "3.0.34"
+__version__ = "3.0.35"
 AUTHOR = "一键三连"
 HOMEPAGE = "https://gitee.com/git55236/ddo-chat-translator"
 
