@@ -8,7 +8,7 @@
 """
 from PyInstaller.utils.hooks import collect_all
 
-APP_NAME = "DDO翻译助手_v3.0.35"     # 改版本时改这里（EXE/COLLECT/瘦身都用它）
+APP_NAME = "DDO翻译助手_v3.1.0"     # 改版本时改这里（EXE/COLLECT/瘦身都用它）
 
 datas = []
 binaries = []
@@ -30,7 +30,28 @@ datas += [("app_icon.ico", ".")]        # 窗口图标（运行时读取）
 # 示例插件和接口文档随包发出去：
 #   examples/plugins -> 打包版第一次跑会把它铺到 exe 旁边的 plugins\（用户能改、能加）
 #   docs             -> 「设置 → 平台 / 插件 → 打开接口说明」要读它
-datas += [("plugins", "examples/plugins")]
+#
+# 注意：plugins\ 下面还有插件**自己生成的东西** —— cache\（抓来的网页）、output\（生成的中文文档）、
+# __pycache__\。这些又大又不是程序的一部分，**一律不能进安装包**，所以这里逐个文件挑，
+# 不能整个目录丢进去。
+def _example_plugin_datas():
+    import os
+
+    root = os.path.join(SPECPATH, "plugins")
+    skip_dirs = {"cache", "output", "__pycache__", ".git", ".idea"}
+    collected = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in skip_dirs)
+        rel = os.path.relpath(dirpath, root)
+        dest = "examples/plugins" if rel == "." else os.path.join("examples/plugins", rel)
+        for name in sorted(filenames):
+            if name.endswith((".pyc", ".pyo", ".log")):
+                continue
+            collected.append((os.path.join(dirpath, name), dest))
+    return collected
+
+
+datas += _example_plugin_datas()
 datas += [("docs", "docs")]
 
 a = Analysis(
