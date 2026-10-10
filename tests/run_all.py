@@ -47,6 +47,7 @@ MODULES = [
     "test_capture_similar",
     "test_service",
     "test_platform",
+    "test_forum_build",
 ]
 
 

@@ -1,0 +1,16 @@
+{
+  "_说明": "要抓哪些页面。url 可以是网页地址，也可以是本地 HTML 文件路径（相对插件目录）。改完直接点动作就行，不用重启程序。note 只是文档里显示的名字。",
+  "_提示": "这里是论坛的板块目录页，插件会自动挑里面的主题帖抓（一次最多 4 个）。想固定抓某个帖子，就把主题帖地址直接写进来。",
+  "sources": [
+    {"url": "https://forums.ddo.com/index.php?forums/character-builds-and-classes.24/",
+     "note": "角色构筑与职业（构卡主板块）"},
+    {"url": "https://forums.ddo.com/index.php?forums/gameplay-and-game-systems.55/",
+     "note": "玩法与游戏系统（机制）"},
+    {"url": "https://forums.ddo.com/index.php?forums/player-guides-strategies-walkthoughs-and-faq.64/",
+     "note": "玩家攻略 / 常见问题"},
+    {"url": "https://forums.ddo.com/index.php?forums/release-notes.7/",
+     "note": "更新公告（版本号线索）"},
+    {"url": "https://forums.ddo.com/index.php?forums/developer-diaries-and-official-discussions.9/",
+     "note": "开发者日记 / 官方讨论"}
+  ]
+}

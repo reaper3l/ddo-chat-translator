@@ -1,0 +1,20 @@
+{
+  "id": "ddo-forum-build",
+  "name": "DDO 论坛构卡汇编",
+  "version": "0.1.0",
+  "description": "抓 DDO 官方论坛的构卡 / 机制帖，按当前版本汇总成中英对照的中文文档",
+  "author": "DDO 翻译助手 · 插件",
+  "entry": "plugin.py",
+  "scopes": ["translate", "batch"],
+  "actions": [
+    {"id": "collect", "name": "汇总官方论坛构卡资料",
+     "desc": "按 sources.json 里的板块 / 主题帖清单抓取并翻译（默认动作）"},
+    {"id": "collect-clipboard", "name": "汇总剪贴板里的论坛地址",
+     "desc": "先把论坛地址复制到剪贴板（一行一个），再点这里"},
+    {"id": "collect-file", "name": "汇总 sources.txt 里的地址",
+     "desc": "把地址一行一个写进插件目录的 sources.txt，再点这里"},
+    {"id": "collect-cached", "name": "离线重排（只用上次缓存）",
+     "desc": "不联网：把上次抓到的页面重新整理成文档"}
+  ],
+  "readme": "README.md"
+}

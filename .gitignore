@@ -23,6 +23,8 @@ release_id.txt
 
 # 插件生成的产物（示例插件写出来的 Markdown 等）
 plugins/*/output/
+# 插件自己缓存的抓取结果 / 译文
+plugins/*/cache/
 
 # 编辑器
 .vscode/
