@@ -1,6 +1,14 @@
 """DDO 聊天翻译助手 —— 程序入口。
 
 运行：  python main.py
+
+也支持几个"不开界面"的命令行用法（给脚本 / 插件 / 排查问题用）：
+
+    python main.py --serve                 起本地翻译平台（只监听 127.0.0.1）
+    python main.py --serve --port 8765     指定端口
+    python main.py --translate "omw"       翻一条，直接打印译文
+    python main.py --translate "omw" --json        机器可读的完整结果
+    python main.py --translate "马上到" --direction zh2en
 """
 from __future__ import annotations
 
@@ -154,6 +162,82 @@ def _offer_crash_report() -> None:
         print(message)
 
 
+def _arg_value(argv, name: str, default=None):
+    """取 `--name value` 或 `--name=value`。给命令行用法共用。"""
+    for index, item in enumerate(argv):
+        if item == name and index + 1 < len(argv):
+            return argv[index + 1]
+        if isinstance(item, str) and item.startswith(name + "="):
+            return item.split("=", 1)[1]
+    return default
+
+
+def _run_serve(argv) -> int:
+    """不开界面，只跑本地翻译平台（给脚本 / 常驻服务用）。"""
+    import time
+
+    from app import paths
+    from app.config import load_config
+    from app.platform import Platform
+
+    paths.ensure_dirs()
+    _setup_logging()
+    config = load_config()
+    port = _arg_value(argv, "--port")
+    if port:
+        try:
+            config["platform_port"] = int(port)
+        except ValueError:
+            print("端口要是数字：%s" % port)
+            return 2
+    platform = Platform(config)
+    result = platform.start(config.get("platform_port"))
+    if not result.get("ok"):
+        print("本地平台启动失败：%s" % result.get("error"))
+        return 2
+    if result.get("note"):
+        print(result["note"])
+    print("本地翻译平台已启动：%s" % platform.url())
+    print("　令牌：%s" % platform.tokens.path)
+    print("　插件目录：%s" % platform.plugins.root)
+    print("　接口说明：docs/平台接口.md")
+    print("按 Ctrl+C 停止。")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n正在停止…")
+    finally:
+        platform.stop()
+    return 0
+
+
+def _run_translate(argv) -> int:
+    """命令行翻一条（和界面共用同一份术语表 / 记忆库 / 缓存）。"""
+    text = _arg_value(argv, "--translate")
+    if not text:
+        print('用法：python main.py --translate "文本" [--direction en2zh|zh2en|auto] [--json]')
+        return 2
+    direction = str(_arg_value(argv, "--direction", "auto") or "auto")
+    as_json = "--json" in argv
+
+    from app import paths
+    from app.config import load_config
+    from app.service import TranslatorService
+
+    paths.ensure_dirs()
+    service = TranslatorService(load_config())
+    result = service.translate(text, direction)
+    service.flush_cache()
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(result.get("zh") or "")
+        if not result.get("ok"):
+            print("（失败：%s）" % result.get("error"), file=sys.stderr)
+    return 0 if result.get("ok") else 1
+
+
 def main() -> int:
     # 自动升级：由旧版拉起来的"新版本 exe"走这条路 —— 只做文件替换，不开界面、
     # 不设 DPI/优先级，所以必须放在最前面拦下来。
@@ -161,6 +245,11 @@ def main() -> int:
         from app import update as update_module
 
         return update_module.apply_update_from_argv(sys.argv)
+    # 命令行用法：不装界面、不改优先级，直接干活
+    if "--serve" in sys.argv:
+        return _run_serve(sys.argv)
+    if "--translate" in sys.argv:
+        return _run_translate(sys.argv)
     dpi_state = _setup_environment()
     _setup_logging()
     try:

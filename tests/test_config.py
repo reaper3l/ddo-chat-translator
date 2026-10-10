@@ -38,6 +38,7 @@ def test_boolean_switches_used_by_settings_exist():
         "cn2en_auto_suggest", "cn2en_clear_after",
         "flatten_background", "ocr_det_cap",
         "public_dict_enabled", "contribute_enabled", "contribute_invite_done",
+        "platform_enabled",
         "contribute_auto_send",
         "check_update",
     )
@@ -50,7 +51,8 @@ def test_values_used_by_settings_widgets_exist():
     for key in ("interval_ms", "ocr_threads", "ocr_upscale", "dedup_ttl_seconds",
                 "context_turns", "timeout_seconds", "learn_min_count",
                 "candidate_min_count", "max_lines", "transparency_mode", "alpha",
-                "engine", "translate_mode", "capture_backend", "ui_scale"):
+                "engine", "translate_mode", "capture_backend", "ui_scale",
+                "platform_port", "platform_daily_quota", "platform_max_chars"):
         assert key in DEFAULT_CONFIG, "默认配置缺少设置项：%s" % key
 
 

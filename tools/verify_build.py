@@ -34,6 +34,9 @@ REQUIRED_INTERNAL = (
     "app_icon.ico",
     "rapidocr_onnxruntime/models/ch_PP-OCRv4_det_infer.onnx",
     "rapidocr_onnxruntime/models/ch_PP-OCRv4_rec_infer.onnx",
+    # 本地翻译平台的示例插件 / 接口文档（缺了插件生态就是空的，但不影响翻译本体）
+    "examples/plugins/guide-hanhua/manifest.json",
+    "docs/平台接口.md",
 )
 
 

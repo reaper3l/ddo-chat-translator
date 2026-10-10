@@ -45,6 +45,8 @@ MODULES = [
     "test_ocr_filter",
     "test_frame",
     "test_capture_similar",
+    "test_service",
+    "test_platform",
 ]
 
 

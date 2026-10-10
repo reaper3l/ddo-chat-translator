@@ -21,6 +21,9 @@ release_id.txt
 .ddo-release/
 *.key
 
+# 插件生成的产物（示例插件写出来的 Markdown 等）
+plugins/*/output/
+
 # 编辑器
 .vscode/
 .idea/

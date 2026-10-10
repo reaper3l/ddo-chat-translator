@@ -27,6 +27,12 @@ for package in ("rapidocr_onnxruntime", "onnxruntime", "PIL", "numpy",
 datas += [("assets", "assets")]
 datas += [("app_icon.ico", ".")]        # 窗口图标（运行时读取）
 
+# 示例插件和接口文档随包发出去：
+#   examples/plugins -> 打包版第一次跑会把它铺到 exe 旁边的 plugins\（用户能改、能加）
+#   docs             -> 「设置 → 平台 / 插件 → 打开接口说明」要读它
+datas += [("plugins", "examples/plugins")]
+datas += [("docs", "docs")]
+
 a = Analysis(
     ["main.py"],
     pathex=[],

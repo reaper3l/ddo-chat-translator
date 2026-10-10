@@ -170,6 +170,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # 新手教学：第一次用的时候自动走一遍（走完或点"跳过"都记上，以后不再自动弹；
     # 想重看：右键菜单 / 设置 → 关于 都有入口）
     "tour_done": False,
+    # 翻译平台（本地 HTTP 服务）：把翻译能力开放给插件 / 脚本 / 别的程序用。
+    # 只在 127.0.0.1 上监听（别的机器连不上）；默认**关**，用户明确打开才启动。
+    "platform_enabled": False,
+    "platform_port": 8765,
+    # 每个插件每天最多花多少次"真的调了接口"的翻译（本地命中 / 缓存不计数）。
+    # 防的是插件写错循环把 API 费用跑爆；配额用完只会拒绝，不会偷偷继续花钱。
+    "platform_daily_quota": 500,
+    # 插件一次请求最多多少字符（超了截断并回 truncated=true）
+    "platform_max_chars": 4000,
     # 高级
     "window_pos": None,
     "window_size": [520, 620],

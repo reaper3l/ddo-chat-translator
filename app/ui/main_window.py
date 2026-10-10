@@ -35,6 +35,9 @@ from .. import __version__                            # noqa: E402
 
 APP_TITLE = "DDO 翻译助手 v%s" % __version__
 
+# 插件动作最长跑多久（秒）。到点强杀 —— 界面绝不能因为插件卡住。
+PLUGIN_TIMEOUT = 600.0
+
 # 频道小灯上的短名：得能一眼区分（"公会"和"公共"不能都写"公"）
 # 频道刚来消息时，小灯亮白框的持续时间（秒）
 CHANNEL_PULSE_SECONDS = 2.0
@@ -87,6 +90,22 @@ class MainWindow:
         self.ui_queue: "queue.Queue[dict]" = queue.Queue()
         self.pipeline = Pipeline(self.config, self.memory, self.glossary, self.ui_queue)
 
+        # 本地翻译平台：给插件 / 脚本 / 其它程序调用同一套翻译能力。
+        # 和界面**共用**同一份术语表 / 记忆库 / 缓存（所以互相命中，不重复花钱）。
+        # 默认不监听端口，用户在「设置 → 平台 / 插件」里打开才会启动。
+        self.service = None
+        self.platform = None
+        self._plugin_result_window = None
+        try:
+            from ..platform import Platform as _Platform
+            from ..service import TranslatorService
+
+            self.service = TranslatorService(self.config, memory=self.memory,
+                                             glossary=self.glossary)
+            self.platform = _Platform(self.config, service=self.service)
+        except Exception:                          # noqa: BLE001
+            logging.exception("本地翻译平台初始化失败（界面其它功能不受影响）")
+
         self.records = []          # 已渲染的消息，用于纠错定位
         self._region_callback = None
         self._last_flush = time.time()
@@ -109,6 +128,8 @@ class MainWindow:
         self.root.after(100, self._poll)
         # 程序一开始先过"使用须知"这一关：同意了才提示怎么用、才去查更新
         self.root.after(200, self.startup_gate)
+        # 本地平台：用户之前打开过就把服务恢复起来（默认是关的，这里什么也不做）
+        self.root.after(1200, self._sync_platform)
 
     def _publish_screen_size(self) -> None:
         """把 Tk 的屏幕尺寸告知流水线（用于截图坐标换算）。"""
@@ -304,6 +325,8 @@ class MainWindow:
         self.menu.add_command(label="词典", command=self.open_dictionary)
         self.menu.add_command(label="学习中心", command=self.open_learning)
         self.menu.add_command(label="设置", command=self.open_settings)
+        self.plugin_menu = tk.Menu(self.menu, tearoff=0)
+        self.menu.add_cascade(label="插件（外部工具）", menu=self.plugin_menu)
         self.menu.add_separator()
         self.menu.add_command(label="反馈问题（自动带上日志/翻译记录）",
                               command=self.open_bug_report)
@@ -948,6 +971,7 @@ class MainWindow:
         # 右键位置那条消息的说话人：决定"过滤这个说话人"这一项怎么显示
         self._menu_speaker = self._speaker_at(event.x, event.y)
         self._refresh_mute_menu(self._menu_speaker)
+        self._refresh_plugin_menu()
         try:
             self.menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -1027,6 +1051,8 @@ class MainWindow:
                 self._on_public_dict(event)
             elif kind == "phrases":
                 self._on_phrase_mining(event)
+            elif kind == "plugin":
+                self._on_plugin_result(event)
 
         self._update_stats()
         self.memory.flush()
@@ -1327,6 +1353,7 @@ class MainWindow:
         self._setup_scaling()          # 界面缩放在保存后立即生效
         self.pipeline.apply_config()
         self.rebuild_glossary()
+        self._sync_platform()
         self._build_actions()
         self._apply_frameless()
         self._apply_toolbar_collapsed()
@@ -1346,6 +1373,173 @@ class MainWindow:
     def rebuild_glossary(self) -> None:
         self.glossary = build_glossary(self.config, self.memory)
         self.pipeline.reload_glossary(self.glossary)
+
+    # ------------------------------------------------------------ 本地平台
+    def _sync_platform(self) -> None:
+        """把配置 / 术语表同步给平台，并按 `platform_enabled` 把服务开到该有的状态。"""
+        if self.platform is None:
+            return
+        try:
+            if self.service is not None:
+                self.service.attach(self.config, self.glossary, self.memory)
+            self.platform.attach(self.config, self.service)
+            result = self.platform.apply_config()
+        except Exception as exc:                   # noqa: BLE001
+            logging.exception("本地平台同步失败")
+            self.set_status("本地平台启动失败：%s" % exc, "error")
+            return
+        try:
+            if result.get("ok") and result.get("running"):
+                note = ("　（%s）" % result["note"]) if result.get("note") else ""
+                self.set_status("本地翻译平台已启动：%s%s" % (self.platform.url(), note), "ok")
+            elif not result.get("ok"):
+                self.set_status("本地平台启动失败：%s" % result.get("error"), "error")
+        except Exception:                          # noqa: BLE001
+            pass
+
+    def open_platform_settings(self) -> None:
+        """直接打开 设置 → 平台 / 插件。"""
+        dialog = self.open_settings()
+        try:
+            dialog.open_category("平台 / 插件")
+        except Exception:                          # noqa: BLE001
+            pass
+
+    def _refresh_plugin_menu(self) -> None:
+        """右键菜单里的「插件」子菜单：只列**已启用**的插件和它们的动作。"""
+        menu = getattr(self, "plugin_menu", None)
+        if menu is None:
+            return
+        try:
+            menu.delete(0, "end")
+        except Exception:                          # noqa: BLE001
+            return
+        platform = getattr(self, "platform", None)
+        if platform is None:
+            menu.add_command(label="平台模块不可用", state="disabled")
+            return
+        try:
+            plugins = platform.plugins.scan(use_cache=False)
+        except Exception:                          # noqa: BLE001
+            plugins = []
+        enabled = [p for p in plugins if not p.error and platform.plugins.is_enabled(p.id)]
+        if not enabled:
+            menu.add_command(label="（还没有启用任何插件）", command=self.open_platform_settings)
+            menu.add_separator()
+            menu.add_command(label="打开 设置 → 平台 / 插件", command=self.open_platform_settings)
+            return
+        for plugin in enabled:
+            if not plugin.actions:
+                menu.add_command(label="%s（没有可用的动作）" % plugin.name, state="disabled")
+                continue
+            sub = tk.Menu(menu, tearoff=0)
+            for action in plugin.actions:
+                sub.add_command(
+                    label=action.get("name") or action.get("id"),
+                    command=lambda p=plugin, a=action: self.run_plugin_action(p.id, a["id"]))
+            menu.add_cascade(label=plugin.name, menu=sub)
+        menu.add_separator()
+        menu.add_command(label="打开 设置 → 平台 / 插件", command=self.open_platform_settings)
+
+    def run_plugin_action(self, plugin_id: str, action_id: str = "") -> None:
+        """跑一个插件动作。**在后台线程里跑**，界面绝不因为插件卡住。"""
+        platform = getattr(self, "platform", None)
+        if platform is None:
+            return
+        plugin = platform.plugins.get(plugin_id)
+        name = plugin.name if plugin is not None else plugin_id
+        label = "%s · %s" % (name, action_id or "默认动作")
+        if not platform.running:                   # 插件要调平台 → 服务得先起来
+            started = platform.start(platform.port)
+            if not started.get("ok"):
+                messagebox.showwarning(
+                    "插件跑不了",
+                    "本地平台没起来，插件就没法调用翻译：\n%s\n\n"
+                    "可以到「设置 → 平台 / 插件」里检查端口。" % started.get("error"),
+                    parent=self.root)
+                return
+            self.set_status("本地平台已启动：%s" % platform.url(), "ok")
+        self.set_status("正在运行插件：%s …" % label, "info")
+
+        def work() -> None:
+            try:
+                result = platform.plugins.run(plugin_id, action_id, payload={},
+                                              timeout=PLUGIN_TIMEOUT,
+                                              base_url=platform.url())
+            except Exception as exc:               # noqa: BLE001
+                result = {"ok": False, "error": "插件运行异常：%s" % exc}
+            self.ui_queue.put({"type": "plugin", "label": label, "result": result})
+
+        threading.Thread(target=work, daemon=True, name="ddo-plugin").start()
+
+    def _on_plugin_result(self, event: dict) -> None:
+        label = str(event.get("label") or "插件")
+        result = event.get("result") or {}
+        if result.get("ok"):
+            self.set_status("插件完成：%s" % label, "ok")
+        else:
+            self.set_status("插件失败：%s" % label, "error")
+        self._show_plugin_result(label, result)
+
+    def _show_plugin_result(self, label: str, result: dict) -> None:
+        """把插件的输出（消息 / 正文 / 生成的文件）显示出来。"""
+        pieces = []
+        if result.get("message"):
+            pieces.append(str(result["message"]))
+        if result.get("text"):
+            pieces.append(str(result["text"]))
+        if result.get("files"):
+            pieces.append("生成的文件：\n" + "\n".join(str(p) for p in result["files"]))
+        if result.get("error"):
+            pieces.append("错误：%s" % result["error"])
+        if result.get("stderr"):
+            tail = "\n".join(str(result["stderr"]).strip().splitlines()[-12:])
+            if tail:
+                pieces.append("插件日志（末尾）：\n" + tail)
+        body = "\n\n".join(pieces).strip() or "（插件没有输出内容）"
+        elapsed = result.get("elapsed_ms")
+        if elapsed:
+            body += "\n\n—— 用时 %.1f 秒" % (int(elapsed) / 1000.0)
+
+        try:
+            if self._plugin_result_window is not None and \
+                    self._plugin_result_window.winfo_exists():
+                self._plugin_result_window.destroy()
+        except Exception:                          # noqa: BLE001
+            pass
+
+        window = tk.Toplevel(self.root)
+        window.title("插件：%s" % label)
+        theme.prepare_window(window, self.config)
+        theme.frameless_dialog(window, "插件：%s" % label, size=(560, 420))
+        try:
+            window.attributes("-topmost", bool(self.config.get("always_on_top", True)))
+        except Exception:                          # noqa: BLE001
+            pass
+        theme.label(window, label, muted=True, anchor="w").pack(
+            fill="x", padx=14, pady=(12, 4))
+        holder = ttk.Frame(window)
+        holder.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        widget = theme.text_widget(holder, wrap="word", height=14)
+        widget.pack(fill="both", expand=True)
+        widget.insert("1.0", body)
+        widget.configure(state="disabled")
+
+        row = ttk.Frame(window)
+        row.pack(side="bottom", fill="x", padx=14, pady=(0, 12))
+
+        def copy() -> None:
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(body)
+                self.set_status("插件输出已复制到剪贴板", "ok")
+            except Exception:                      # noqa: BLE001
+                pass
+
+        ttk.Button(row, text="关闭", command=window.destroy).pack(side="right")
+        ttk.Button(row, text="复制内容", command=copy).pack(side="right", padx=(0, 6))
+        self._plugin_result_window = window
+        theme.place_near(window)
 
     # ------------------------------------------------------------------ 生命周期
     def _first_run_hint(self) -> None:
@@ -1799,6 +1993,11 @@ class MainWindow:
             pass
         # 参与改进：用户同意过的话，关程序前把这次新确认的内容发出去
         self.auto_send_contribution()
+        try:
+            if self.platform is not None:
+                self.platform.stop()
+        except Exception:                          # noqa: BLE001
+            pass
         try:
             self.pipeline.shutdown()
         except Exception:

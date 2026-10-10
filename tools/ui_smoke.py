@@ -135,6 +135,7 @@ def main() -> int:
         app = MainWindow()
         app.config["check_update"] = False      # 自检不联网（启动检查是后台请求）
         app.config["public_dict_enabled"] = False   # 也一样：自检不去拉公共词典
+        app.config["platform_enabled"] = False      # 本地平台也不要在自检里起监听端口
         # 使用须知已经同意过了：这一关单独用下面的步骤测（否则会弹出来挡住后面的步骤）
         app.config["agreement_version"] = disclaimer.DISCLAIMER_VERSION
         # 「第一次用会自动弹教学」是真实行为，而且教学一开就会把正在播的「演示一下」
@@ -278,6 +279,97 @@ def main() -> int:
         dialog.window.destroy()
 
     step("设置分类各自独立窗口且按钮可见", settings_buttons_visible)
+
+    def platform_page_and_plugin_menu():
+        """设置 → 平台 / 插件：开关/端口在、插件列表能渲染、启用后有令牌、右键菜单能列出来。
+
+        全程用临时目录 + 临时令牌文件，绝不碰用户的 data/platform.json 和 plugins\\。
+        """
+        import json as json_module
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        platform = getattr(app, "platform", None)
+        if platform is None:
+            raise AssertionError("主窗口没有建出本地平台对象（app.platform 是 None）")
+        folder = Path(tempfile.mkdtemp(prefix="ddo_plugin_smoke_"))
+        original_root = platform.plugins.root
+        original_token_path = platform.tokens.path
+        try:
+            platform.plugins.root = folder / "plugins"
+            platform.tokens.path = folder / "platform.json"
+            platform.tokens.load()
+
+            dialog = SettingsDialog(app)
+            page = dialog.open_category("平台 / 插件")
+            page.update_idletasks()
+            tab = dialog.platform_tab
+            if tab is None:
+                raise AssertionError("「平台 / 插件」页没有建出 PlatformTab")
+            for key in ("platform_enabled", "platform_port",
+                        "platform_daily_quota", "platform_max_chars"):
+                if key not in dialog.vars:
+                    raise AssertionError("平台设置页缺少控件：%s" % key)
+
+            plugin_dir = platform.plugins.root / "demo"
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "manifest.json").write_text(json_module.dumps({
+                "id": "demo", "name": "自检假插件", "entry": "plugin.py",
+                "actions": [{"id": "run", "name": "跑一下"}]}, ensure_ascii=False),
+                encoding="utf-8")
+            (plugin_dir / "plugin.py").write_text(
+                "import json\nprint(json.dumps({'ok': True, 'message': 'ok'}))\n",
+                encoding="utf-8")
+
+            tab.refresh()
+            page.update_idletasks()
+            if len(tab.rows) != 1:
+                raise AssertionError("插件列表没有渲染出那个假插件：%r" % tab.rows)
+            # 反复刷新不该越堆越多（说明行必须挂在每行的外层容器里，跟着一起销毁）
+            before = len(tab.list_frame.winfo_children())
+            for _ in range(3):
+                tab.refresh()
+            page.update_idletasks()
+            after = len(tab.list_frame.winfo_children())
+            if after != before:
+                raise AssertionError("刷新插件列表越堆越多：%d -> %d" % (before, after))
+            row = tab.rows[0]
+            row["enabled"].set(True)
+            tab._toggle(row["plugin"], row["enabled"])
+            if not platform.plugins.is_enabled("demo"):
+                raise AssertionError("勾上启用之后插件还是停用状态")
+            if not platform.tokens.token_for("demo"):
+                raise AssertionError("启用插件之后没有发令牌")
+
+            app._refresh_plugin_menu()
+            if app.plugin_menu.index("end") is None:
+                raise AssertionError("右键菜单里的「插件」子菜单是空的")
+            # 分隔线没有 -label 选项，得先看类型（不然 entrycget 会抛 unknown option）
+            labels = []
+            for index in range(app.plugin_menu.index("end") + 1):
+                if app.plugin_menu.type(index) == "separator":
+                    continue
+                labels.append(app.plugin_menu.entrycget(index, "label"))
+            if "自检假插件" not in labels:
+                raise AssertionError("插件子菜单里没有这个插件：%r" % labels)
+
+            # 停用 + 卸载：别把假插件留下
+            row["enabled"].set(False)
+            tab._toggle(row["plugin"], row["enabled"])
+            platform.plugins.uninstall("demo")
+            page.destroy()
+            dialog.window.destroy()
+        finally:
+            platform.plugins.root = original_root
+            platform.tokens.path = original_token_path
+            platform.tokens.load()
+            platform.plugins.refresh()
+            shutil.rmtree(folder, ignore_errors=True)
+            app._refresh_plugin_menu()
+
+    step("设置 → 平台 / 插件：列表 / 启用发令牌 / 右键插件菜单",
+         platform_page_and_plugin_menu)
 
     def appearance_preview_follows_channel_color():
         """频道颜色现在统一在「设置 → 频道」里改：改完外观页的预览要跟着变。"""

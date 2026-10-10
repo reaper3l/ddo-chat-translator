@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import colorchooser, messagebox, ttk
 
 from .appearance_tab import AppearanceTab
+from .platform_tab import PlatformTab
 from .. import channels as channels_module
 from .. import textutil
 from . import theme
@@ -20,6 +21,7 @@ class SettingsDialog:
         ("频道", "频道名、颜色、显示开关（可自定义增删）"),
         ("显示与学习", "窗口形态、显示项、学习阈值"),
         ("外观", "字体、字号、颜色、底色、边框"),
+        ("平台 / 插件", "本地服务开关、端口、插件权限与统计"),
         ("关于", "版本、数据位置、快捷键"),
     )
 
@@ -31,6 +33,7 @@ class SettingsDialog:
         self.channel_rows = []           # 「频道」页里的行（可增删）
         self.pages = {}                  # 分类名 -> 该分类的窗口
         self.appearance = None
+        self.platform_tab = None
         self.status = tk.StringVar(value="")
 
         self.window = tk.Toplevel(app.root)
@@ -133,6 +136,9 @@ class SettingsDialog:
                 self._build_display_tab(None)
             elif title == "外观":
                 self.appearance = AppearanceTab(scrollable.inner, self.config,
+                                                dialog=self)
+            elif title == "平台 / 插件":
+                self.platform_tab = PlatformTab(scrollable.inner, self.config,
                                                 dialog=self)
             elif title == "关于":
                 self._build_about_tab(scrollable.inner)
@@ -569,6 +575,8 @@ class SettingsDialog:
                 channels_module.sync(self.config, items)
         if self.appearance is not None:
             self.appearance.save()
+        if self.platform_tab is not None:
+            self.platform_tab.refresh()
         # 「外观」页改的东西和频道表最后并一次（频道表是颜色的唯一来源）
         channels_module.apply_legacy(self.config)
         self.app.apply_settings()

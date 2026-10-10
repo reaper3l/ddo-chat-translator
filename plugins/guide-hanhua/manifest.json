@@ -1,0 +1,15 @@
+{
+  "id": "guide-hanhua",
+  "name": "DDO 网站攻略汉化",
+  "version": "0.1.0",
+  "description": "抓一页英文攻略（或剪贴板里的英文），调用本机翻译平台，生成中英对照的 Markdown",
+  "author": "DDO 翻译助手 · 示例插件",
+  "entry": "plugin.py",
+  "scopes": ["translate", "batch"],
+  "actions": [
+    {"id": "translate-clipboard", "name": "汉化剪贴板里的英文", "desc": "先 Ctrl+C 复制一段英文攻略，再点这里"},
+    {"id": "translate-url", "name": "汉化一个攻略网址", "desc": "网址从剪贴板取"},
+    {"id": "translate-file", "name": "汉化 input.txt", "desc": "翻译插件目录下的 input.txt"}
+  ],
+  "readme": "README.md"
+}
